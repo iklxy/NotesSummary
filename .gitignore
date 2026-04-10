@@ -1,0 +1,13 @@
+.env
+
+# 忽略文档与数据目录
+documents/
+audio/
+
+# Python 编译缓存
+__pycache__/
+*/__pycache__/
+
+# macOS 系统文件
+.DS_Store
+
