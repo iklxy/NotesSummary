@@ -153,3 +153,115 @@ class ModelClient:
         if "term_corrections" not in result:
             result["term_corrections"] = []
         return result
+
+    def generate_notes_for_question(
+        self,
+        question_text: str,
+        segments: List[Dict[str, Any]],
+        intent_name: Optional[str] = None,
+        question_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        使用大模型针对单个问题生成结构化 Notes。
+
+        参数:
+            question_text: 问题原文。
+            segments:      RAG 检索到的相关片段列表，每个元素至少包含:
+                           - summary_id
+                           - speaker
+                           - text
+                           - score
+            intent_name:   可选，问题所属意图名称，用于提示模型关注的方向。
+            question_type: 可选，问题类型标签，用于给模型提供额外背景。
+
+        返回:
+            一个字典，包含生成的 Notes 结果，约定结构为:
+            {
+                "summary": "简要总结",
+                "analysis": "详细分析说明",
+                "evidence": [
+                    {
+                        "summary_id": int,
+                        "speaker": "speaker1",
+                        "text": "引用的原文片段"
+                    }
+                ],
+                "confidence": 0.0
+            }
+        """
+        context_lines: List[str] = []
+        for idx, seg in enumerate(segments, start=1):
+            sid = seg.get("summary_id", "")
+            speaker = seg.get("speaker", "")
+            text = str(seg.get("text", "")).replace("\n", " ")
+            score = seg.get("score", 0.0)
+            context_lines.append(
+                f"[{idx}] summary_id={sid} speaker={speaker} score={score:.4f}\n{text}"
+            )
+        context_block = "\n\n".join(context_lines) if context_lines else "（当前没有检索到相关片段）"
+
+        intent_part = intent_name or "未指定"
+        qtype_part = question_type or "未指定"
+
+        system_prompt = (
+            "你是一名医学与药学领域的访谈分析专家，负责根据给定的访谈片段，"
+            "针对指定问题生成结构化的研究 Notes。你必须严格基于提供的片段，不要编造事实。"
+        )
+
+        user_prompt = (
+            "下面是一道研究问题及其相关的访谈片段，请你基于这些信息生成结构化的 Notes。\n\n"
+            f"【问题类型】{qtype_part}\n"
+            f"【问题意图】{intent_part}\n"
+            f"【问题原文】{question_text}\n\n"
+            "【相关访谈片段】\n"
+            f"{context_block}\n\n"
+            "请遵循以下要求完成任务:\n"
+            "1. 只使用上述片段中的信息，不要引入任何未在片段中出现的事实。\n"
+            "2. 如果信息不足以回答问题，请在 summary 和 analysis 中明确说明“当前访谈中信息不足”。\n"
+            "3. 请给出一个 0 到 1 之间的置信度 confidence，用于表示你对答案可靠性的主观判断。\n"
+            "4. 输出时只返回 JSON，不要包含额外说明，也不要使用 ``` 包裹。\n"
+            "JSON 结构如下:\n"
+            "{\n"
+            '  "summary": "一句话或几句话的高度概括",\n'
+            '  "analysis": "更详细的分析和解释，适合写入研究笔记",\n'
+            '  "evidence": [\n'
+            '    {"summary_id": 0, "speaker": "speaker1", "text": "与结论直接相关的原文片段"}\n'
+            "  ],\n"
+            '  "confidence": 0.0\n'
+            "}\n"
+        )
+
+        content = self.generate(system_prompt, user_prompt)
+        try:
+            content_stripped = content.strip()
+            if content_stripped.startswith("```"):
+                lines = content_stripped.splitlines()
+                inner_lines = [line for line in lines if not line.strip().startswith("```")]
+                content_stripped = "\n".join(inner_lines).strip()
+            try:
+                result = json.loads(content_stripped)
+            except json.JSONDecodeError:
+                start = content_stripped.find("{")
+                end = content_stripped.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    core = content_stripped[start : end + 1]
+                    result = json.loads(core)
+                else:
+                    raise
+        except json.JSONDecodeError:
+            result = {
+                "summary": "",
+                "analysis": "",
+                "evidence": [],
+                "confidence": 0.0,
+                "llm_raw_output": content,
+            }
+        if "summary" not in result:
+            result["summary"] = ""
+        if "analysis" not in result:
+            result["analysis"] = ""
+        if "evidence" not in result:
+            result["evidence"] = []
+        if "confidence" not in result:
+            result["confidence"] = 0.0
+        return result
