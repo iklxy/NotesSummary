@@ -4,7 +4,7 @@ import json
 import dotenv
 
 from VolcUpload import build_object_key, get_tos_client, bucket_name, TOS_URL_EXPIRE_SECONDS, tos
-from DbAccess import get_interview_by_id, update_interview_file_content
+from DbAccess import DbAccess
 from VolcengineConversion import run_asr
 
 
@@ -104,7 +104,7 @@ def test_transcribe_for_interview() -> None:
         print(f"TEST_INTERVIEW_ID 非法: {interview_id_str}")
         return
 
-    interview = get_interview_by_id(interview_id)
+    interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
         print(f"找不到访谈记录，id={interview_id}")
         return
@@ -143,21 +143,21 @@ def test_transcribe_for_interview() -> None:
         for seg in speakers:
             print(f"speaker_{seg['speaker_id']}: {seg['speaker_content']}")
 
-    file_content_json = build_file_content_json(
-        project_id=project_id,
-        interview_id=interview_id,
-        object_key=object_key,
-        audio_url=audio_url,
-        file_name=file_name,
-        full_text=full_text,
-        speakers=speakers,
-    )
+    # file_content_json = build_file_content_json(
+    #     project_id=project_id,
+    #     interview_id=interview_id,
+    #     object_key=object_key,
+    #     audio_url=audio_url,
+    #     file_name=file_name,
+    #     full_text=full_text,
+    #     speakers=speakers,
+    # )
 
-    try:
-        update_interview_file_content(interview_id, file_content_json)
-        print("已将转写结果 JSON 写入 bh_project_interview.file_content")
-    except Exception as e:
-        print(f"写入 file_content 失败: {e}")
+    # try:
+    #     update_interview_file_content(interview_id, file_content_json)
+    #     print("已将转写结果 JSON 写入 bh_project_interview.file_content")
+    # except Exception as e:
+    #     print(f"写入 file_content 失败: {e}")
 
 
 if __name__ == "__main__":

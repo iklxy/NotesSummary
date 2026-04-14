@@ -13,7 +13,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from DbAccess import get_connection
+from DbAccess import DbAccess
 from EmbeddingClient import embed_texts
 
 
@@ -27,41 +27,28 @@ class RagSearcher:
     2) 根据问题在指定访谈范围内检索最相关的 summary 片段。
     """
 
-    def __init__(
-        self,
-        host: str | None = None,
-        port: int | None = None,
-        collection_name: str | None = None,
-    ) -> None:
-        """
-        初始化 RagSearcher 实例。
+    _client: QdrantClient | None = None
+    _base_url: str | None = None
+    _collection_name: str | None = None
 
-        参数:
-            host: Qdrant 服务主机名或 IP，如果为 None 则从环境变量 QDRANT_HOST 读取，默认 "localhost"。
-            port: Qdrant 服务端口，如果为 None 则从环境变量 QDRANT_PORT 读取，默认 6333。
-            collection_name: 用于存放 summary 向量的集合名称，如果为 None 则从环境变量 QDRANT_COLLECTION_SUMMARY 读取，默认 "interview_summary"。
-
-        返回:
-            无返回值，内部会创建 QdrantClient 客户端并记录基础配置。
-        """
-        host_env = host or os.getenv("QDRANT_HOST", "localhost")
-        port_env = port or int(os.getenv("QDRANT_PORT", "6333"))
-        collection_env = collection_name or os.getenv(
-            "QDRANT_COLLECTION_SUMMARY", "interview_summary"
-        )
-
-        self.host = host_env
-        self.port = port_env
-        self.collection_name = collection_env
+    @classmethod
+    def _ensure_client(cls) -> None:
+        if cls._client is not None and cls._collection_name and cls._base_url:
+            return
+        host_env = os.getenv("QDRANT_HOST", "localhost")
+        port_env = int(os.getenv("QDRANT_PORT", "6333"))
+        collection_env = os.getenv("QDRANT_COLLECTION_SUMMARY", "interview_summary")
 
         if host_env.startswith("http://") or host_env.startswith("https://"):
-            self.base_url = host_env
+            cls._base_url = host_env
         else:
-            self.base_url = f"http://{host_env}:{port_env}"
+            cls._base_url = f"http://{host_env}:{port_env}"
 
-        self.client = QdrantClient(host=host_env, port=port_env)
+        cls._client = QdrantClient(host=host_env, port=port_env)
+        cls._collection_name = collection_env
 
-    def fetch_summary_rows(self, interview_id: int) -> List[Dict[str, Any]]:
+    @classmethod
+    def fetch_summary_rows(cls, interview_id: int) -> List[Dict[str, Any]]:
         """
         根据访谈 ID 查询 bh_project_interview_summary 表中的明细记录。
 
@@ -82,7 +69,7 @@ class RagSearcher:
             WHERE project_interview_id = %s
             ORDER BY id ASC
         """
-        conn = get_connection()
+        conn = DbAccess.get_connection()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, (interview_id,))
@@ -91,7 +78,8 @@ class RagSearcher:
         finally:
             conn.close()
 
-    def ensure_collection(self, vector_size: int) -> None:
+    @classmethod
+    def ensure_collection(cls, vector_size: int) -> None:
         """
         确保用于存放 summary 向量的 Qdrant collection 已创建。
 
@@ -101,14 +89,16 @@ class RagSearcher:
         返回:
             无返回值，如果 collection 不存在则会创建，已存在则直接返回。
         """
-        if self.client.collection_exists(self.collection_name):
+        cls._ensure_client()
+        if cls._client.collection_exists(cls._collection_name):
             return
-        self.client.create_collection(
-            collection_name=self.collection_name,
+        cls._client.create_collection(
+            collection_name=cls._collection_name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
 
-    def index_interview_summary(self, interview_id: int) -> int:
+    @classmethod
+    def index_interview_summary(cls, interview_id: int) -> int:
         """
         将指定访谈的 summary 文本嵌入为向量并写入 Qdrant。
 
@@ -120,7 +110,7 @@ class RagSearcher:
         """
         print(f"[RAG] 开始为访谈 {interview_id} 构建向量索引")
 
-        rows = self.fetch_summary_rows(interview_id)
+        rows = cls.fetch_summary_rows(interview_id)
         if not rows:
             print(f"[RAG] 访谈 {interview_id} 在 bh_project_interview_summary 中没有任何记录")
             return 0
@@ -136,8 +126,8 @@ class RagSearcher:
         vector_size = len(vectors[0])
         print(f"[RAG] 向量维度为 {vector_size}")
 
-        print(f"[RAG] 连接 Qdrant 成功，准备检查/创建集合 {self.collection_name}")
-        self.ensure_collection(vector_size)
+        print(f"[RAG] 连接 Qdrant 成功，准备检查/创建集合 {cls._collection_name}")
+        cls.ensure_collection(vector_size)
 
         points = []
         for row, vec in zip(rows, vectors):
@@ -155,12 +145,13 @@ class RagSearcher:
                 )
             )
 
-        self.client.upsert(collection_name=self.collection_name, points=points)
-        print(f"[RAG] 已写入或更新 {len(points)} 条向量到集合 {self.collection_name}")
+        cls._client.upsert(collection_name=cls._collection_name, points=points)
+        print(f"[RAG] 已写入或更新 {len(points)} 条向量到集合 {cls._collection_name}")
         return len(points)
 
+    @classmethod
     def retrieve_segments_for_question(
-        self,
+        cls,
         interview_id: int,
         question_text: str,
         top_k: int = 5,
@@ -187,8 +178,8 @@ class RagSearcher:
             return []
 
         query_vector = vectors[0]
-
-        url = f"{self.base_url}/collections/{self.collection_name}/points/search"
+        cls._ensure_client()
+        url = f"{cls._base_url}/collections/{cls._collection_name}/points/search"
         body = {
             "vector": query_vector,
             "limit": top_k,
@@ -227,12 +218,9 @@ class RagSearcher:
         return segments
 
 
-_default_searcher = RagSearcher()
-
-
 def index_interview_summary(interview_id: int) -> int:
     """
-    便捷函数，使用默认 RagSearcher 实例为指定访谈构建向量索引。
+    便捷函数，使用 RagSearcher 类为指定访谈构建向量索引。
 
     参数:
         interview_id: 访谈主键 ID，对应 bh_project_interview.id。
@@ -240,7 +228,7 @@ def index_interview_summary(interview_id: int) -> int:
     返回:
         实际写入或更新到 Qdrant 的向量点数量。
     """
-    return _default_searcher.index_interview_summary(interview_id)
+    return RagSearcher.index_interview_summary(interview_id)
 
 
 def retrieve_segments_for_question(
@@ -259,7 +247,7 @@ def retrieve_segments_for_question(
     返回:
         检索结果列表，每个元素为字典，字段意义与 RagSearcher.retrieve_segments_for_question 一致。
     """
-    return _default_searcher.retrieve_segments_for_question(
+    return RagSearcher.retrieve_segments_for_question(
         interview_id=interview_id,
         question_text=question_text,
         top_k=top_k,

@@ -9,12 +9,10 @@ import dotenv
 from VolcUpload import upload_local_file, build_object_key, build_local_file_path, get_tos_client, bucket_name, TOS_URL_EXPIRE_SECONDS, tos
 from VolcengineConversion import run_asr
 from CleanConversion import clean_file_content_json
-from DbAccess import (
-    get_interview_by_id,
-    update_interview_after_upload,
-    update_interview_file_content,
-    insert_summary_from_cleaned_speakers,
-)
+from Model import ModelClient
+from RagIndex import index_interview_summary, retrieve_segments_for_question
+from Fewshot import select_fewshot_samples
+from DbAccess import DbAccess
 
 dotenv.load_dotenv()
 
@@ -24,7 +22,7 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
     步骤 1：本地上云，返回 {object_key, audio_url}。
     如果 bh_project_interview 已存在 file_path，则直接用它作为 object_key 并生成预签名 URL。
     """
-    row = get_interview_by_id(interview_id)
+    row = DbAccess.get_interview_by_id(interview_id)
     if not row:
         return {"success": False, "message": f"interview {interview_id} not found"}
 
@@ -40,7 +38,7 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
             return {"success": False, "message": "upload failed", "detail": upload_result}
         audio_url = upload_result["data"]["audio_url"]
         try:
-            update_interview_after_upload(
+            DbAccess.update_interview_after_upload(
                 interview_id=interview_id,
                 object_key=object_key,
                 status=1,
@@ -74,7 +72,7 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
     """
     将 ASR 结果组装为 file_content JSON 并写入 bh_project_interview.file_content。
     """
-    row = get_interview_by_id(interview_id)
+    row = DbAccess.get_interview_by_id(interview_id)
     project_id = row.get("parse_project_id")
     file_name = row.get("file_name") or f"{interview_id}.wav"
 
@@ -93,7 +91,7 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
         },
     }
     try:
-        update_interview_file_content(interview_id, json.dumps(payload, ensure_ascii=False))
+        DbAccess.update_interview_file_content(interview_id, json.dumps(payload, ensure_ascii=False))
     except Exception as e:
         return {"success": False, "message": f"write file_content failed: {e}"}
     return {"success": True, "file_content": payload}
@@ -133,11 +131,257 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
         return {"success": False, "message": "no speakers in cleaned json"}
 
     try:
-        inserted = insert_summary_from_cleaned_speakers(interview_id, speakers)
+        inserted = DbAccess.insert_summary_from_cleaned_speakers(interview_id, speakers)
     except Exception as e:
         return {"success": False, "message": f"write summary failed: {e}"}
 
     return {"success": True, "inserted": inserted}
+
+
+def step_fetch_questions(interview_id: int) -> Dict[str, Any]:
+    """
+    步骤 6：根据访谈 ID 从 bh_project_question 中读取题目列表。
+
+    返回结构:
+        {
+            "success": True/False,
+            "questions": [ {id, project_interview_id, question_order, question_text, question_type, intent_id}, ... ],
+            "message":  可选的错误说明
+        }
+    """
+    sql = """
+        SELECT
+            id,
+            project_interview_id,
+            question_order,
+            question_text,
+            question_type,
+            research_phase,
+            intent_id
+        FROM bh_project_question
+        WHERE project_interview_id = %s
+        ORDER BY question_order ASC, id ASC
+    """
+    conn = DbAccess.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
+            rows: List[Dict[str, Any]] = cursor.fetchall()
+    except Exception as e:
+        return {"success": False, "questions": [], "message": f"fetch questions failed: {e}"}
+    finally:
+        conn.close()
+
+    if not rows:
+        return {
+            "success": False,
+            "questions": [],
+            "message": f"no questions found for interview {interview_id}",
+        }
+
+    return {"success": True, "questions": rows}
+
+
+def step_generate_notes(
+    project_id: int,
+    interview_id: int,
+    questions: List[Dict[str, Any]],
+    top_k: int = 10,
+) -> Dict[str, Any]:
+    """
+    步骤 7：针对题目列表执行 RAG 检索并调用 LLM 生成 Notes（仅返回内存结果，不落库）。
+
+    参数:
+        project_id:   项目 ID。
+        interview_id: 访谈 ID。
+        questions:    步骤 6 返回的题目列表，需包含 research_phase 字段。
+        top_k:        每道题目 RAG 检索返回的片段数量上限。
+
+    返回结构:
+        {
+            "success": True/False,
+            "project_id": ...,
+            "interview_id": ...,
+            "total_questions": N,
+            "results": [
+                {
+                    "project_id": ...,
+                    "project_interview_id": ...,
+                    "question_id": ...,
+                    "intent_id": ...,
+                    "question_text": "...",
+                    "question_type": "...",
+                    "segments": [...],   # RAG 检索片段
+                    "notes": {...},      # LLM 生成的 Notes JSON
+                },
+                ...
+            ]
+        }
+    """
+    if not questions:
+        return {
+            "success": False,
+            "project_id": project_id,
+            "interview_id": interview_id,
+            "total_questions": 0,
+            "results": [],
+            "message": "no questions to generate notes for",
+        }
+
+    print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
+    index_interview_summary(interview_id)
+
+    intent_ids = [row.get("intent_id") for row in questions if row.get("intent_id") is not None]
+    intent_desc_map: Dict[int, str] = {}
+    if intent_ids:
+        placeholders = ",".join(["%s"] * len(intent_ids))
+        sql = f"""
+            SELECT id, description
+            FROM bh_question_intent
+            WHERE id IN ({placeholders})
+        """
+        conn = DbAccess.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, intent_ids)
+                rows = cursor.fetchall()
+                for r in rows:
+                    iid = r.get("id")
+                    desc = r.get("description") or ""
+                    if iid is not None:
+                        intent_desc_map[int(iid)] = desc
+        finally:
+            conn.close()
+
+    model_client = ModelClient()
+    results: List[Dict[str, Any]] = []
+
+    print(f"[NOTES] 共 {len(questions)} 条题目，开始生成 Notes")
+
+    for row in questions:
+        question_id = row.get("id")
+        question_text = row.get("question_text", "")
+        question_type = row.get("question_type")
+        intent_id = row.get("intent_id")
+        intent_desc = intent_desc_map.get(intent_id) if intent_id is not None else None
+
+        print(f"[NOTES] 开始为问题 {question_id} 生成 Notes")
+
+        segments = retrieve_segments_for_question(
+            interview_id=interview_id,
+            question_text=question_text,
+            top_k=top_k,
+        )
+        print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
+
+        fewshot_samples = select_fewshot_samples(
+            project_id=project_id,
+            question_id=question_id,
+            question_type=question_type or "",
+            research_phase=row.get("research_phase"),
+            intent_id=intent_id if intent_id is not None else 0,
+            limit=2,
+        )
+
+        print(f"[NOTES] 问题 {question_id} 选出 few-shot 样本数量: {len(fewshot_samples)}")
+
+        notes = model_client.generate_notes_for_question_with_fewshot(
+            question_text=question_text,
+            segments=segments,
+            intent_name=intent_desc,
+            question_type=question_type,
+            fewshot_samples=fewshot_samples,
+        )
+
+        results.append(
+            {
+                "project_id": project_id,
+                "project_interview_id": interview_id,
+                "question_id": question_id,
+                "intent_id": intent_id,
+                "question_text": question_text,
+                "question_type": question_type,
+                "segments": segments,
+                 "fewshot_count": len(fewshot_samples),
+                 "fewshot_sample_ids": [s.get("id") for s in fewshot_samples],
+                "notes": notes,
+            }
+        )
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "interview_id": interview_id,
+        "total_questions": len(questions),
+        "results": results,
+    }
+
+
+def step_write_notes_results(notes_block: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    步骤 8：将步骤 7 生成的 Notes 结果写入 bh_project_nterview_notes 表。
+
+    参数:
+        notes_block: step_generate_notes 的返回结果。
+
+    返回:
+        {
+            "success": True/False,
+            "inserted": 实际插入的记录数,
+            "errors":   [可选的错误信息列表]
+        }
+    """
+    results = notes_block.get("results") or []
+    if not results:
+        return {"success": False, "inserted": 0, "errors": ["no notes results to write"]}
+
+    inserted = 0
+    errors: List[str] = []
+
+    for item in results:
+        project_id = item.get("project_id")
+        interview_id = item.get("project_interview_id")
+        question_id = item.get("question_id")
+        intent_id = item.get("intent_id")
+        notes = item.get("notes") or {}
+
+        if not isinstance(notes, dict):
+            errors.append(f"question_id={question_id}: notes is not dict")
+            continue
+        if project_id is None or interview_id is None or question_id is None or intent_id is None:
+            errors.append(f"question_id={question_id}: missing ids for insert")
+            continue
+
+        note_json_str = json.dumps(notes, ensure_ascii=False)
+        confidence_raw = notes.get("confidence", 0.0)
+        try:
+            confidence = float(confidence_raw)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        if "llm_raw_output" in notes:
+            status = 4
+            error_message = "llm_raw_output present; please inspect note_json"
+        else:
+            status = 0
+            error_message = None
+
+        try:
+            new_id = DbAccess.insert_notes_result(
+                project_id=project_id,
+                interview_id=interview_id,
+                question_id=question_id,
+                intent_id=intent_id,
+                note_json_str=note_json_str,
+                confidence=confidence,
+                status=status,
+                error_message=error_message,
+            )
+            inserted += 1
+        except Exception as e:
+            errors.append(f"question_id={question_id}: insert failed: {e}")
+
+    return {"success": True, "inserted": inserted, "errors": errors}
 
 
 def run_workflow(interview_id: int) -> Dict[str, Any]:
@@ -148,6 +392,8 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         3) 组装并写入 file_content
         4) LLM 清洗
         5) 将清洗后的结果落库到 bh_project_interview_summary
+        6) 从 bh_project_question 读取题目列表
+        7) 使用 RAG + LLM 为每个题目生成 Notes（仅返回，不落库）
     """
     # 1. 本地上云 / 预签名 URL
     up = step_upload_interview_audio(interview_id)
@@ -180,6 +426,32 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
     if not ws.get("success"):
         return {"success": False, "stage": "write_summary", "detail": ws}
 
+    row = DbAccess.get_interview_by_id(interview_id)
+    project_id = row.get("parse_project_id") if row else None
+
+    fq = step_fetch_questions(interview_id)
+    if not fq.get("success"):
+        notes_block = {
+            "success": False,
+            "stage": "fetch_questions",
+            "message": fq.get("message", ""),
+            "total_questions": 0,
+            "results": [],
+        }
+        notes_write = {"success": False, "inserted": 0, "errors": ["fetch_questions failed"]}
+    else:
+        gn = step_generate_notes(
+            project_id=project_id or 0,
+            interview_id=interview_id,
+            questions=fq["questions"],
+            top_k=10,
+        )
+        notes_block = gn
+        if gn.get("success"):
+            notes_write = step_write_notes_results(gn)
+        else:
+            notes_write = {"success": False, "inserted": 0, "errors": ["generate_notes failed"]}
+
     return {
         "success": True,
         "object_key": object_key,
@@ -189,6 +461,8 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             "speakers_count": len(asr_result.get("speakers", [])),
         },
         "summary_inserted": ws.get("inserted", 0),
+        "notes": notes_block,
+        "notes_db": notes_write,
     }
 
 

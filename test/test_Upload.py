@@ -11,10 +11,7 @@ from VolcUpload import (
     build_local_file_path,
     build_object_key,
 )
-from DbAccess import (
-    get_interview_by_id,
-    update_interview_after_upload,
-)   
+from DbAccess import DbAccess
 
 
 dotenv.load_dotenv()
@@ -40,7 +37,7 @@ def test_upload_for_interview() -> None:
         print(f"TEST_INTERVIEW_ID 非法: {interview_id_str}")
         return
 
-    interview = get_interview_by_id(interview_id)
+    interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
         print(f"找不到访谈记录，id={interview_id}")
         return
@@ -70,7 +67,7 @@ def test_upload_for_interview() -> None:
     audio_url = result.get("data", {}).get("audio_url")
 
     try:
-        update_interview_after_upload(
+        DbAccess.update_interview_after_upload(
             interview_id=interview_id,
             object_key=object_key,
             status=1,
@@ -82,11 +79,10 @@ def test_upload_for_interview() -> None:
         print(f"数据库更新失败: {e}")
         return
 
-    updated = get_interview_by_id(interview_id)
+    updated = DbAccess.get_interview_by_id(interview_id)
     print("更新后的访谈记录：")
     print(json.dumps(updated, ensure_ascii=False, indent=2, default=str))
 
 
 if __name__ == "__main__":
     test_upload_for_interview()
-

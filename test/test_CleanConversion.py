@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from DbAccess import get_interview_by_id
+from DbAccess import DbAccess
 from CleanConversion import clean_file_content_json
 
 
@@ -39,7 +39,7 @@ def test_clean_conversion_for_interview() -> None:
         print(f"TEST_INTERVIEW_ID 非法: {interview_id_str}")
         return
 
-    interview = get_interview_by_id(interview_id)
+    interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
         print(f"找不到访谈记录，id={interview_id}")
         return

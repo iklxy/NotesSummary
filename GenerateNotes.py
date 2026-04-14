@@ -6,8 +6,7 @@ import json
 from typing import Any, Dict, List
 
 import dotenv
-
-from DbAccess import get_connection
+from DbAccess import DbAccess
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 
@@ -43,7 +42,7 @@ def fetch_questions_for_interview(interview_id: int) -> List[Dict[str, Any]]:
         WHERE project_interview_id = %s
         ORDER BY question_order ASC, id ASC
     """
-    conn = get_connection()
+    conn = DbAccess.get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(sql, (interview_id,))
@@ -170,4 +169,3 @@ if __name__ == "__main__":
     interview_id = int(interview_id_str)
     all_results = run_generate_notes_for_interview(interview_id=interview_id, top_k=10)
     pretty_print_notes_results(all_results)
-
