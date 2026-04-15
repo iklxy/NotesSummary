@@ -1,0 +1,380 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "SummaryNotes Interviews API",
+    "version": "1.0.0",
+    "description": "对外 /api/interviews 相关接口定义，供 Apifox 导入使用。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:9000",
+      "description": "本地开发环境"
+    }
+  ],
+  "paths": {
+    "/api/interviews/{interview_id}/run": {
+      "post": {
+        "tags": ["interviews"],
+        "summary": "执行访谈工作流",
+        "description": "对指定访谈 ID 执行完整工作流，包括上云、ASR、清洗、RAG 及 Notes 生成与落库。",
+        "parameters": [
+          {
+            "name": "interview_id",
+            "in": "path",
+            "required": true,
+            "description": "访谈主键 ID，对应 bh_project_interview.id。",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "执行成功或失败的结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInterviewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "访谈不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "内部引擎服务不可用或执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/interviews/{interview_id}/notes": {
+      "get": {
+        "tags": ["interviews"],
+        "summary": "获取访谈 Notes",
+        "description": "按题目维度获取指定访谈的 Notes 列表。",
+        "parameters": [
+          {
+            "name": "interview_id",
+            "in": "path",
+            "required": true,
+            "description": "访谈主键 ID，对应 bh_project_interview.id。",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "访谈 Notes 列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterviewNotesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "访谈不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "内部引擎服务不可用或执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/interviews/{interview_id}/questions": {
+      "get": {
+        "tags": ["interviews"],
+        "summary": "获取访谈题目列表",
+        "description": "获取指定访谈下配置的题目列表。",
+        "parameters": [
+          {
+            "name": "interview_id",
+            "in": "path",
+            "required": true,
+            "description": "访谈主键 ID，对应 bh_project_interview.id。",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "访谈题目列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterviewQuestionsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到对应题目或访谈不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "内部引擎服务不可用或执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RunInterviewResponse": {
+        "type": "object",
+        "description": "/api/interviews/{interview_id}/run 接口的返回结果。",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "工作流是否整体执行成功。"
+          },
+          "summary_inserted": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "写入 bh_project_interview_summary 的记录数。"
+          },
+          "notes_inserted": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "写入 bh_project_interview_notes 的记录数。"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true,
+            "description": "失败或部分失败时的人类可读错误信息。"
+          }
+        },
+        "required": ["success"]
+      },
+      "NoteItem": {
+        "type": "object",
+        "description": "单条 Notes 结果结构。",
+        "properties": {
+          "notes_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Notes 主键 ID，对应 bh_project_interview_notes.id。"
+          },
+          "intent_id": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "本条 Notes 对应的意图 ID。"
+          },
+          "note_json": {
+            "description": "LLM 生成的 Notes JSON 内容，结构由引擎服务定义。"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "float",
+            "nullable": true,
+            "description": "模型置信度，0–1 之间的小数。"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "Notes 状态，例如 0 自动生成、1 已通过、4 错误等。"
+          }
+        },
+        "required": ["notes_id", "note_json"]
+      },
+      "QuestionWithNotes": {
+        "type": "object",
+        "description": "带有 Notes 列表的题目结构。",
+        "properties": {
+          "question_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "题目主键 ID，对应 bh_project_question.id。"
+          },
+          "question_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "题目在访谈中的顺序。"
+          },
+          "question_text": {
+            "type": "string",
+            "description": "题目内容。"
+          },
+          "question_type": {
+            "type": "string",
+            "nullable": true,
+            "description": "题目类型，例如 OPEN 等。"
+          },
+          "intent_id": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "题目对应的意图 ID。"
+          },
+          "research_phase": {
+            "type": "string",
+            "nullable": true,
+            "description": "研究阶段或子场景标记。"
+          },
+          "notes": {
+            "type": "array",
+            "description": "该题目下的 Notes 列表。",
+            "items": {
+              "$ref": "#/components/schemas/NoteItem"
+            }
+          }
+        },
+        "required": ["question_id", "question_order", "question_text", "notes"]
+      },
+      "InterviewNotesResponse": {
+        "type": "object",
+        "description": "/api/interviews/{interview_id}/notes 接口的返回结果。",
+        "properties": {
+          "interview_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "访谈主键 ID，对应 bh_project_interview.id。"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "所属项目 ID，对应 bh_project.id。"
+          },
+          "questions": {
+            "type": "array",
+            "description": "题目及其 Notes 列表。",
+            "items": {
+              "$ref": "#/components/schemas/QuestionWithNotes"
+            }
+          }
+        },
+        "required": ["interview_id", "questions"]
+      },
+      "QuestionItem": {
+        "type": "object",
+        "description": "单条题目结构。",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "题目主键 ID，对应 bh_project_question.id。"
+          },
+          "project_interview_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "所属访谈 ID，对应 bh_project_interview.id。"
+          },
+          "question_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "题目顺序。"
+          },
+          "question_text": {
+            "type": "string",
+            "description": "题目内容。"
+          },
+          "question_type": {
+            "type": "string",
+            "nullable": true,
+            "description": "题目类型，例如 OPEN 等。"
+          },
+          "research_phase": {
+            "type": "string",
+            "nullable": true,
+            "description": "研究阶段或子场景标记。"
+          },
+          "intent_id": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "题目对应的意图 ID。"
+          }
+        },
+        "required": [
+          "id",
+          "project_interview_id",
+          "question_order",
+          "question_text"
+        ]
+      },
+      "InterviewQuestionsResponse": {
+        "type": "object",
+        "description": "/api/interviews/{interview_id}/questions 接口的返回结果。",
+        "properties": {
+          "interview_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "访谈主键 ID。"
+          },
+          "questions": {
+            "type": "array",
+            "description": "该访谈下的题目列表。",
+            "items": {
+              "$ref": "#/components/schemas/QuestionItem"
+            }
+          }
+        },
+        "required": ["interview_id", "questions"]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "错误响应的统一结构。",
+        "properties": {
+          "detail": {
+            "description": "错误详情，可以是字符串或对象。",
+            "nullable": true
+          }
+        }
+      }
+    }
+  }
+}
+
