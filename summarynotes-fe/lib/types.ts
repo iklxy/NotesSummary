@@ -5,6 +5,26 @@ export interface RunInterviewResponse {
   message?: string | null;
 }
 
+export interface InterviewStatusResponse {
+  interview_id: number;
+  status?: number | null;
+}
+
+export interface DeleteInterviewResponse {
+  success: boolean;
+  interview_id: number;
+  audio_deleted?: boolean;
+}
+
+export interface QuestionIntentItem {
+  id: number;
+  code: string;
+  name?: string | null;
+  description?: string | null;
+  schema_name?: string | null;
+  status?: number | null;
+}
+
 export interface NoteItem {
   notes_id: number;
   intent_id?: number | null;

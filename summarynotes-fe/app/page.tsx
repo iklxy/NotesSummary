@@ -2,13 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, Col, Form, Input, Layout, List, Modal, Row, Space, Typography, message } from "antd";
+import { Button, Card, Col, Form, Input, Layout, List, Modal, Row, Select, Space, Typography, message } from "antd";
 import { DatePicker, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { DownOutlined } from "@ant-design/icons";
+import { DownOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Project } from "../lib/types";
 import { createProject, getProjects } from "../lib/projectsApi";
-import { createInterview, getProjectInterviews } from "../lib/interviewsApi";
+import {
+  deleteInterview,
+  createInterview,
+  getProjectInterviews,
+  getQuestionIntents,
+} from "../lib/interviewsApi";
+import type { QuestionIntentItem } from "../lib/types";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -22,6 +28,8 @@ export default function Home() {
   const [currentProjectForInterview, setCurrentProjectForInterview] = useState<Project | null>(
     null,
   );
+  const [questionIntents, setQuestionIntents] = useState<QuestionIntentItem[]>([]);
+  const [questionIntentsLoading, setQuestionIntentsLoading] = useState(false);
   const [form] = Form.useForm();
   const [interviewForm] = Form.useForm();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -47,6 +55,26 @@ export default function Home() {
       }
     };
     loadProjects();
+  }, []);
+
+  useEffect(() => {
+    const loadQuestionIntents = async () => {
+      try {
+        setQuestionIntentsLoading(true);
+        const data = await getQuestionIntents();
+        setQuestionIntents(data);
+      } catch (e) {
+        if (e instanceof Error) {
+          message.error(e.message);
+        } else {
+          message.error("加载问题类型失败");
+        }
+      } finally {
+        setQuestionIntentsLoading(false);
+      }
+    };
+
+    void loadQuestionIntents();
   }, []);
 
   const openEditProject = (project: Project) => {
@@ -101,8 +129,25 @@ export default function Home() {
   };
 
   const openCreateInterview = (project: Project) => {
+    if (questionIntentsLoading) {
+      message.info("正在加载问题类型，请稍候");
+      return;
+    }
+    if (questionIntents.length === 0) {
+      message.error("问题类型为空，无法新建访谈");
+      return;
+    }
     setCurrentProjectForInterview(project);
     interviewForm.resetFields();
+    interviewForm.setFieldsValue({
+      questions: [
+        {
+          question_text: "",
+          question_type: "OPEN",
+          intent_id: questionIntents[0]?.id,
+        },
+      ],
+    });
     setFileList([]);
     setInterviewModalVisible(true);
   };
@@ -124,11 +169,42 @@ export default function Home() {
       if (dateValue && typeof (dateValue as { format?: unknown }).format === "function") {
         dateText = (dateValue as { format: (fmt: string) => string }).format("YYYY-MM-DD");
       }
+      const questions = Array.isArray(values.questions) ? values.questions : [];
+      const normalizedQuestions = questions.map(
+        (item: { question_text?: string; question_type?: string; intent_id?: number } | undefined) => ({
+          question_text: (item?.question_text ?? "").trim(),
+          question_type: (item?.question_type ?? "OPEN").trim().toUpperCase(),
+          intent_id: item?.intent_id,
+        }),
+      ) as Array<{ question_text: string; question_type: string; intent_id?: number }>;
+
+      if (normalizedQuestions.length === 0) {
+        message.error("请至少填写一个需总结的问题");
+        return;
+      }
+
+      const missingQuestion = normalizedQuestions.some(
+        (item: { question_text: string }) => !item.question_text,
+      );
+      if (missingQuestion) {
+        message.error("请先补全所有需总结的问题");
+        return;
+      }
+
+      const missingIntent = normalizedQuestions.some(
+        (item: { intent_id?: number }) => !item.intent_id,
+      );
+      if (missingIntent) {
+        message.error("请先为每个问题选择 intent");
+        return;
+      }
+
       const formData = new FormData();
       formData.append("name", values.interview_name as string);
       if (dateText) {
         formData.append("interview_date", dateText);
       }
+      formData.append("questions_json", JSON.stringify(normalizedQuestions));
       const file = fileList[0];
       if (!file || !file.originFileObj) {
         message.error("请先选择音频文件");
@@ -160,6 +236,7 @@ export default function Home() {
       );
       message.success("访谈信息已填写");
       setInterviewModalVisible(false);
+      router.push(`/interviews/${created.id}/processing`);
     } catch (e) {
       if (e instanceof Error) {
         message.error(e.message);
@@ -199,18 +276,36 @@ export default function Home() {
     );
   };
 
-  const handleDeleteInterview = (projectId: number, interviewId: number) => {
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === projectId
-          ? {
-            ...p,
-            interviews: (p.interviews ?? []).filter((it) => it.id !== interviewId),
+  const handleDeleteInterview = (projectId: number, interviewId: number, interviewName: string) => {
+    Modal.confirm({
+      title: "确认删除访谈",
+      content: `确定要删除访谈「${interviewName}」吗？该操作会同时删除数据库中的访谈、题目和原文数据。`,
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await deleteInterview(interviewId);
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    interviews: (p.interviews ?? []).filter((it) => it.id !== interviewId),
+                  }
+                : p,
+            ),
+          );
+          message.success("访谈已删除");
+        } catch (e) {
+          if (e instanceof Error) {
+            message.error(e.message);
+          } else {
+            message.error("删除访谈失败");
           }
-          : p,
-      ),
-    );
-    message.success("访谈已删除");
+        }
+      },
+    });
   };
 
   return (
@@ -299,17 +394,21 @@ export default function Home() {
                                         >
                                           详情
                                         </Button>,
-                                        <Button
-                                          key="delete"
-                                          type="link"
-                                          size="small"
-                                          danger
-                                          onClick={() =>
-                                            handleDeleteInterview(project.id, interview.id)
-                                          }
-                                        >
-                                          删除
-                                        </Button>,
+                                          <Button
+                                            key="delete"
+                                            type="link"
+                                            size="small"
+                                            danger
+                                            onClick={() =>
+                                              handleDeleteInterview(
+                                                project.id,
+                                                interview.id,
+                                                interview.name,
+                                              )
+                                            }
+                                          >
+                                            删除
+                                          </Button>,
                                       ]}
                                     >
                                       <Space direction="vertical" size={0}>
@@ -394,8 +493,8 @@ export default function Home() {
             <Form.Item label="访谈时间" name="interview_date">
               <DatePicker style={{ width: "100%" }} placeholder="请选择访谈时间" />
             </Form.Item>
-            <Form.Item label="录音文件上传" name="audio_file">
-              <>
+            <Form.Item label="录音文件上传">
+              <div>
                 <Upload
                   beforeUpload={() => false}
                   maxCount={1}
@@ -408,8 +507,95 @@ export default function Home() {
                 <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
                   支持上传wav、mp3、m4a格式音频文件，单次仅支持上传一个文件，文件大小不超过1G。
                 </Text>
-              </>
+              </div>
             </Form.Item>
+            <Form.List name="questions">
+              {(fields, { add, remove }) => (
+                <div style={{ marginBottom: 16 }}>
+                  <Space className="justify-between w-full" style={{ marginBottom: 8 }}>
+                    <Text strong>需总结的问题</Text>
+                    <Button
+                      type="dashed"
+                      icon={<PlusOutlined />}
+                      onClick={() =>
+                        add({
+                          question_text: "",
+                          question_type: "OPEN",
+                          intent_id: questionIntents[0]?.id,
+                        })
+                      }
+                    >
+                      添加问题
+                    </Button>
+                  </Space>
+                  <Space direction="vertical" style={{ width: "100%" }} size="middle">
+                    {fields.map((field, index) => (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        styles={{ body: { padding: 12 } }}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                          <Form.Item
+                            label={index === 0 ? "问题内容" : undefined}
+                            name={[field.name, "question_text"]}
+                            rules={[{ required: true, message: "请输入需总结的问题" }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Input.TextArea rows={2} placeholder="请输入需总结的问题" />
+                          </Form.Item>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 12,
+                              alignItems: "flex-start",
+                            }}
+                          >
+                            <Form.Item
+                              label={index === 0 ? "问题类型" : undefined}
+                              name={[field.name, "question_type"]}
+                              rules={[{ required: true, message: "请选择问题类型" }]}
+                              initialValue="OPEN"
+                              style={{ flex: 0.8, marginBottom: 0 }}
+                            >
+                              <Select
+                                options={[
+                                  { label: "OPEN", value: "OPEN" },
+                                  { label: "SUMMARY", value: "SUMMARY" },
+                                  { label: "QUERY", value: "QUERY" },
+                                ]}
+                              />
+                            </Form.Item>
+                            <Form.Item
+                              label={index === 0 ? "Intent" : undefined}
+                              name={[field.name, "intent_id"]}
+                              rules={[{ required: true, message: "请选择 intent" }]}
+                              style={{ flex: 1.2, marginBottom: 0 }}
+                            >
+                              <Select
+                                placeholder="请选择 intent"
+                                options={questionIntents.map((intent) => ({
+                                  label: `${intent.id} - ${intent.code}`,
+                                  value: intent.id,
+                                }))}
+                              />
+                            </Form.Item>
+                            <Button
+                              danger
+                              type="text"
+                              icon={<MinusCircleOutlined />}
+                              disabled={fields.length === 1}
+                              onClick={() => remove(field.name)}
+                              style={{ marginTop: index === 0 ? 28 : 0 }}
+                            />
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </Space>
+                </div>
+              )}
+            </Form.List>
           </Form>
         ) : (
           <Paragraph>请选择一个项目后再新建访谈。</Paragraph>

@@ -1,7 +1,10 @@
 import { request } from "./apiClient";
 import {
+  DeleteInterviewResponse,
   InterviewNotesResponse,
   InterviewQuestionsResponse,
+  InterviewStatusResponse,
+  QuestionIntentItem,
   RunInterviewResponse,
 } from "./types";
 
@@ -18,6 +21,20 @@ export function runInterview(interviewId: number): Promise<RunInterviewResponse>
   return request<RunInterviewResponse>(`/api/interviews/${interviewId}/run`, {
     method: "POST",
   });
+}
+
+export function getInterviewStatus(interviewId: number): Promise<InterviewStatusResponse> {
+  return request<InterviewStatusResponse>(`/api/interviews/${interviewId}/status`);
+}
+
+export function deleteInterview(interviewId: number): Promise<DeleteInterviewResponse> {
+  return request<DeleteInterviewResponse>(`/api/interviews/${interviewId}`, {
+    method: "DELETE",
+  });
+}
+
+export function getQuestionIntents(): Promise<QuestionIntentItem[]> {
+  return request<QuestionIntentItem[]>("/api/question-intents");
 }
 
 export function getInterviewNotes(interviewId: number): Promise<InterviewNotesResponse> {
@@ -89,4 +106,3 @@ export function getProjectInterviews(projectId: number): Promise<ProjectIntervie
 export function getInterviewSummary(interviewId: number): Promise<InterviewSummaryResponse> {
   return request<InterviewSummaryResponse>(`/api/interviews/${interviewId}/summary`);
 }
-

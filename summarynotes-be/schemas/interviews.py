@@ -26,6 +26,41 @@ class RunInterviewResponse(BaseModel):
     message: Optional[str] = None
 
 
+class QuestionIntentItem(BaseModel):
+    """
+    单条 question intent 结构。
+    """
+    id: int
+    code: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    schema_name: Optional[str] = None
+    status: Optional[int] = None
+
+
+class InterviewStatusResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/status 接口的返回结果模型。
+
+    字段:
+        interview_id:
+            访谈主键 ID。
+        status:
+            当前处理状态，对应 bh_project_interview.status。
+    """
+    interview_id: int
+    status: Optional[int] = None
+
+
+class DeleteInterviewResponse(BaseModel):
+    """
+    /api/interviews/{interview_id} 删除接口返回值。
+    """
+    success: bool
+    interview_id: int
+    audio_deleted: bool = False
+
+
 class NoteItem(BaseModel):
     """
     单条 Notes 结果的结构。

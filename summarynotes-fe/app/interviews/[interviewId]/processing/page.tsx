@@ -1,4 +1,4 @@
-import InterviewDetailClient from "./client";
+import InterviewProcessingClient from "./client";
 
 interface Props {
   params: Promise<{
@@ -6,9 +6,9 @@ interface Props {
   }>;
 }
 
-export default async function InterviewDetailPage({ params }: Props) {
+export default async function InterviewProcessingPage({ params }: Props) {
   const { interviewId } = await params;
   const id = Number(interviewId);
   const safeId = Number.isFinite(id) && id > 0 ? id : -1;
-  return <InterviewDetailClient interviewId={safeId} />;
+  return <InterviewProcessingClient interviewId={safeId} />;
 }

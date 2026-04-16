@@ -395,36 +395,49 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         6) 从 bh_project_question 读取题目列表
         7) 使用 RAG + LLM 为每个题目生成 Notes（仅返回，不落库）
     """
+    def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
+        try:
+            DbAccess.update_interview_status(interview_id, 3)
+        except Exception:
+            pass
+        return {"success": False, "stage": stage, "detail": detail}
+
+    try:
+        DbAccess.update_interview_status(interview_id, 1)
+    except Exception:
+        # 状态更新失败不影响主流程。
+        pass
+
     # 1. 本地上云 / 预签名 URL
     up = step_upload_interview_audio(interview_id)
     if not up.get("success"):
-        return {"success": False, "stage": "upload", "detail": up}
+        return fail("upload", up)
     object_key = up["object_key"]
     audio_url = up["audio_url"]
 
     # 2. ASR
     tr = step_transcribe(audio_url)
     if not tr.get("success"):
-        return {"success": False, "stage": "transcribe", "detail": tr}
+        return fail("transcribe", tr)
     asr_result = tr["asr_result"]
 
     # 3. 写 file_content
     st = step_store_file_content(interview_id, object_key, audio_url, asr_result)
     if not st.get("success"):
-        return {"success": False, "stage": "store_file_content", "detail": st}
+        return fail("store_file_content", st)
     file_content_obj = st["file_content"]
     file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
 
     # 4. LLM 清洗
     cl = step_clean_with_llm(file_content_json)
     if not cl.get("success"):
-        return {"success": False, "stage": "clean_llm", "detail": cl}
+        return fail("clean_llm", cl)
     cleaned_json = cl["cleaned_json"]
 
     # 5. 写 summary
     ws = step_write_summary(interview_id, cleaned_json)
     if not ws.get("success"):
-        return {"success": False, "stage": "write_summary", "detail": ws}
+        return fail("write_summary", ws)
 
     row = DbAccess.get_interview_by_id(interview_id)
     project_id = row.get("parse_project_id") if row else None
@@ -451,6 +464,11 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             notes_write = step_write_notes_results(gn)
         else:
             notes_write = {"success": False, "inserted": 0, "errors": ["generate_notes failed"]}
+
+    try:
+        DbAccess.update_interview_status(interview_id, 2)
+    except Exception:
+        pass
 
     return {
         "success": True,

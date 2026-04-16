@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from api.interviews import router as interviews_router
 from api.projects import router as projects_router
 from api.project_interviews import router as project_interviews_router
+from api.question_intents import router as question_intents_router
 from middleware.cors import setup_cors
 
 
@@ -15,6 +16,7 @@ setup_cors(app)
 
 app.include_router(projects_router)
 app.include_router(project_interviews_router)
+app.include_router(question_intents_router)
 app.include_router(interviews_router)
 
 

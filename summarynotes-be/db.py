@@ -101,6 +101,31 @@ def fetch_projects() -> list[dict]:
     return rows
 
 
+def fetch_question_intents() -> list[dict]:
+    """
+    查询所有可用的 question intent。
+    """
+    sql = """
+        SELECT
+            id,
+            code,
+            name,
+            description,
+            schema_name,
+            status
+        FROM bh_question_intent
+        ORDER BY id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
 def insert_interview(
     parse_project_id: int,
     name: str,
@@ -135,6 +160,177 @@ def insert_interview(
     finally:
         conn.close()
     return new_id
+
+
+def update_interview_status(interview_id: int, status: int) -> None:
+    """
+    更新访谈处理状态。
+
+    参数:
+        interview_id: 访谈 ID，对应 bh_project_interview.id。
+        status:       处理状态，0/1/2/3 等。
+    """
+    sql = """
+        UPDATE bh_project_interview
+        SET status = %s
+        WHERE id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (status, interview_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def fetch_interview_by_id(interview_id: int) -> dict | None:
+    """
+    根据访谈 ID 查询访谈基础信息。
+
+    返回字段至少包括:
+        - id
+        - parse_project_id
+        - name
+        - interview_date
+        - file_name
+        - status
+    """
+    sql = """
+        SELECT
+            id,
+            parse_project_id,
+            name,
+            interview_date,
+            file_name,
+            status
+        FROM bh_project_interview
+        WHERE id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def delete_interview_graph(interview_id: int) -> dict | None:
+    """
+    删除指定访谈及其关联数据。
+
+    会删除：
+        - bh_project_interview_notes
+        - bh_project_interview_summary
+        - bh_project_question
+        - bh_project_interview
+
+    返回：
+        删除前的访谈记录，用于后续清理本地音频目录。
+    """
+    row = fetch_interview_by_id(interview_id)
+    if not row:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM bh_project_interview_notes WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_interview_summary WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_question WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_interview WHERE id = %s",
+                (interview_id,),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return row
+
+
+def insert_questions_for_interview(
+    project_interview_id: int,
+    questions: list[dict],
+) -> int:
+    """
+    为指定访谈批量插入题目。
+
+    参数:
+        project_interview_id: 访谈 ID，对应 bh_project_question.project_interview_id。
+        questions: 题目列表，每项至少包含:
+            - question_order
+            - question_text
+            - question_type
+
+    返回:
+        实际插入条数。
+    """
+    if not questions:
+        return 0
+
+    sql = """
+        INSERT INTO bh_project_question
+            (project_interview_id, question_order, question_text, question_type, research_phase, intent_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+
+    conn = get_connection()
+    inserted = 0
+    try:
+        with conn.cursor() as cursor:
+            for item in questions:
+                question_order = item.get("question_order")
+                question_text = (item.get("question_text") or "").strip()
+                question_type = (item.get("question_type") or "OPEN").strip().upper()
+                research_phase = item.get("research_phase")
+                intent_id = item.get("intent_id")
+
+                if question_order is None:
+                    raise ValueError("question_order is required")
+                if not question_text:
+                    raise ValueError("question_text is required")
+                if intent_id is None:
+                    raise ValueError("intent_id is required")
+
+                cursor.execute(
+                    sql,
+                    (
+                        project_interview_id,
+                        int(question_order),
+                        question_text,
+                        question_type,
+                        research_phase,
+                        intent_id,
+                    ),
+                )
+                inserted += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return inserted
 
 
 def fetch_interviews_by_project(parse_project_id: int) -> list[dict]:
@@ -207,4 +403,3 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
     finally:
         conn.close()
     return rows
-

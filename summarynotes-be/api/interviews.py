@@ -1,13 +1,17 @@
+from pathlib import Path
+import shutil
 from typing import Any, Dict, List
 
 import os
 import requests
 from fastapi import APIRouter, HTTPException
 
-from db import fetch_interview_summary
+from db import delete_interview_graph, fetch_interview_by_id, fetch_interview_summary
 from schemas.interviews import (
+    DeleteInterviewResponse,
     InterviewNotesResponse,
     InterviewQuestionsResponse,
+    InterviewStatusResponse,
     RunInterviewResponse,
 )
 
@@ -28,6 +32,12 @@ def _get_internal_base() -> str:
     """
     base = os.getenv("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000")
     return base.rstrip("/")
+
+
+def _get_audio_root() -> Path:
+    api_dir = Path(__file__).resolve().parent
+    project_root = api_dir.parent.parent
+    return project_root / "audio"
 
 
 @router.post("/{interview_id}/run", response_model=RunInterviewResponse)
@@ -88,6 +98,48 @@ def run_interview_workflow(interview_id: int) -> RunInterviewResponse:
         summary_inserted=summary_inserted,
         notes_inserted=notes_inserted,
         message=message,
+    )
+
+
+@router.get("/{interview_id}/status", response_model=InterviewStatusResponse)
+def get_interview_status(interview_id: int) -> InterviewStatusResponse:
+    """
+    查询访谈当前处理状态。
+
+    返回:
+        - interview_id
+        - status: bh_project_interview.status
+    """
+    row = fetch_interview_by_id(interview_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="interview not found")
+    return InterviewStatusResponse(
+        interview_id=interview_id,
+        status=row.get("status"),
+    )
+
+
+@router.delete("/{interview_id}", response_model=DeleteInterviewResponse)
+def delete_interview(interview_id: int) -> DeleteInterviewResponse:
+    """
+    删除访谈及其关联数据。
+    """
+    row = delete_interview_graph(interview_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    project_id = row.get("parse_project_id")
+    audio_deleted = False
+    if project_id is not None:
+        target_dir = _get_audio_root() / f"project_{project_id}" / f"interview_{interview_id}"
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+            audio_deleted = True
+
+    return DeleteInterviewResponse(
+        success=True,
+        interview_id=interview_id,
+        audio_deleted=audio_deleted,
     )
 
 

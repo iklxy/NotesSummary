@@ -131,6 +131,28 @@ class DbAccess:
             conn.close()
 
     @classmethod
+    def update_interview_status(cls, interview_id: int, status: int) -> None:
+        """
+        仅更新访谈状态字段。
+        """
+        sql = """
+            UPDATE bh_project_interview
+            SET status = %s
+            WHERE id = %s
+        """
+
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, (status, interview_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @classmethod
     def update_interview_file_content(
         cls,
         interview_id: int,
