@@ -3,7 +3,7 @@
 
 from typing import Any, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RunInterviewResponse(BaseModel):
@@ -13,6 +13,8 @@ class RunInterviewResponse(BaseModel):
     字段:
         success:
             布尔值，表示工作流是否整体执行成功。
+        queued:
+            可选，表示任务已提交到线程池，正在后台执行。
         summary_inserted:
             可选，写入 bh_project_interview_summary 的记录数。
         notes_inserted:
@@ -21,8 +23,24 @@ class RunInterviewResponse(BaseModel):
             可选，在失败或部分失败时的人类可读错误信息。
     """
     success: bool
+    queued: bool = False
     summary_inserted: Optional[int] = None
     notes_inserted: Optional[int] = None
+    message: Optional[str] = None
+
+
+class GenerateNotesResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/questions/{question_id}/generate-notes 接口返回值。
+    """
+    success: bool
+    interview_id: int
+    question_id: Optional[int] = None
+    project_id: Optional[int] = None
+    total_questions: int = 0
+    generated: int = 0
+    inserted: int = 0
+    warnings: List[str] = Field(default_factory=list)
     message: Optional[str] = None
 
 
@@ -58,7 +76,12 @@ class DeleteInterviewResponse(BaseModel):
     """
     success: bool
     interview_id: int
+    db_deleted: bool = False
     audio_deleted: bool = False
+    local_audio_deleted: bool = False
+    cloud_audio_deleted: bool = False
+    qdrant_deleted: bool = False
+    message: Optional[str] = None
 
 
 class NoteItem(BaseModel):
@@ -171,3 +194,155 @@ class InterviewQuestionsResponse(BaseModel):
     """
     interview_id: int
     questions: List[QuestionItem]
+
+
+class QuestionCreateItem(BaseModel):
+    """
+    新建题目时使用的单条输入结构。
+    """
+    question_text: str
+    question_type: Optional[str] = "OPEN"
+    intent_id: int
+    research_phase: Optional[str] = None
+
+
+class QuestionCreateRequest(BaseModel):
+    """
+    /api/interviews/{interview_id}/questions 创建题目接口的请求体。
+    """
+    questions: List[QuestionCreateItem]
+
+
+class QuestionCreateResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/questions 创建题目接口的返回值。
+    """
+    success: bool
+    interview_id: int
+    inserted: int
+
+
+class QuestionDeleteResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/questions/{question_id} 删除接口返回值。
+    """
+    success: bool
+    interview_id: int
+    question_id: int
+    question_deleted: bool = False
+    fewshot_deleted: int = 0
+    notes_deleted: int = 0
+    message: Optional[str] = None
+
+
+class FewshotEvidenceItem(BaseModel):
+    """
+    few-shot 样本中的单条 evidence。
+    """
+    summary_id: int
+    speaker: Optional[str] = None
+    text: str
+
+
+class FewshotSampleCreateRequest(BaseModel):
+    """
+    创建 few-shot 冷启动种子的请求体。
+    """
+    intent_id: int
+    summary: str
+    analysis: str
+    evidence: List[FewshotEvidenceItem]
+    confidence: Optional[float] = 0.95
+    quality_score: Optional[int] = 95
+    source_kind: Optional[str] = "seed"
+    notes_result_id: Optional[int] = None
+
+
+class FewshotSampleCreateResponse(BaseModel):
+    """
+    创建 few-shot 冷启动种子的返回值。
+    """
+    success: bool
+    interview_id: int
+    question_id: int
+    sample_id: int
+
+
+class FewshotSampleItem(BaseModel):
+    """
+    few-shot 样本条目。
+    """
+    id: int
+    project_id: int
+    project_interview_id: int
+    question_id: int
+    question_order: Optional[int] = None
+    question_text: Optional[str] = None
+    question_type: Optional[str] = None
+    research_phase: Optional[str] = None
+    intent_id: int
+    notes_result_id: Optional[int] = None
+    sample_json: Any
+    sample_summary: Optional[str] = None
+    sample_analysis: Optional[str] = None
+    evidence_count: int = 0
+    quality_score: Optional[int] = None
+    source_kind: Optional[str] = None
+    created_time: Optional[str] = None
+
+
+class InterviewFewshotSamplesResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/fewshot-samples 接口返回值。
+    """
+    interview_id: int
+    samples: List[FewshotSampleItem]
+
+
+class FewshotSampleDeleteResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/fewshot-samples/{sample_id} 删除接口返回值。
+    """
+    success: bool
+    interview_id: int
+    sample_id: int
+    question_id: Optional[int] = None
+    deleted: bool = False
+    message: Optional[str] = None
+
+
+class InterviewSummaryItem(BaseModel):
+    """
+    单条 summary 结构，用于前端展示与编辑回填。
+    """
+    id: int
+    project_interview_id: int
+    timestamp: Optional[str] = None
+    speaker: Optional[str] = None
+    text: Optional[str] = None
+
+
+class InterviewSummaryResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/summary 接口的返回结果模型。
+    """
+    interview_id: int
+    items: List[InterviewSummaryItem]
+
+
+class SummaryUpdateRequest(BaseModel):
+    """
+    更新单条 summary 的请求体。
+    """
+    text: str
+
+
+class SummaryUpdateResponse(BaseModel):
+    """
+    更新单条 summary 的返回结果。
+    """
+    success: bool
+    summary: Optional[InterviewSummaryItem] = None
+    reindex_succeeded: bool = False
+    reindex_indexed: Optional[int] = None
+    reindex_warning: Optional[str] = None

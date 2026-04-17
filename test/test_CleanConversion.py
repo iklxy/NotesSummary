@@ -28,7 +28,7 @@ def test_clean_conversion_for_interview() -> None:
     配置约定:
         - TEST_INTERVIEW_ID: 需要测试的 bh_project_interview.id。
     """
-    interview_id_str = os.getenv("TEST_INTERVIEW_ID")
+    interview_id_str = "2"
     if not interview_id_str:
         print("请先在环境变量或 .env 中配置 TEST_INTERVIEW_ID")
         return

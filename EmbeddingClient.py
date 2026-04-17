@@ -2,14 +2,21 @@
 "@author:lixinyang"
 
 import ollama
-import os
-import dotenv
 
-dotenv.load_dotenv()
+from config import config
 
-client = ollama.Client(host="http://localhost:11434")
 
-MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "bge-m3:latest")  # 可替换为ollama的其他embedding模型名
+_client: ollama.Client | None = None
+_client_host: str | None = None
+
+
+def _ensure_client() -> ollama.Client:
+    global _client, _client_host
+    host = config.OLLAMA_HOST
+    if _client is None or _client_host != host:
+        _client = ollama.Client(host=host)
+        _client_host = host
+    return _client
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """
@@ -20,7 +27,8 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         向量列表，对应每条文本的 embedding
     """
     embeddings = []
+    client = _ensure_client()
     for t in texts:
-        resp = client.embeddings(model=MODEL_NAME, prompt=t)
+        resp = client.embeddings(model=config.OLLAMA_MODEL_NAME, prompt=t)
         embeddings.append(resp["embedding"])
     return embeddings

@@ -1,0 +1,22 @@
+INFO:     Started server process [53126]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [53126]
+/var/folders/qq/fkpm23s16d378wmgpsf87mgr0000gn/T/tmpb8fwov1k: line 3: 53126 Terminated: 15          python -m uvicorn Api:app --host 0.0.0.0 --port 8000
+
+ERROR conda.cli.main_run:execute(127): `conda run python -m uvicorn Api:app --host 0.0.0.0 --port 8000` failed. (See above for error)
+INFO:     Started server process [53448]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [53448]
+/var/folders/qq/fkpm23s16d378wmgpsf87mgr0000gn/T/tmp0k8y2q62: line 3: 53448 Terminated: 15          python -m uvicorn Api:app --host 0.0.0.0 --port 8000
+
+ERROR conda.cli.main_run:execute(127): `conda run python -m uvicorn Api:app --host 0.0.0.0 --port 8000` failed. (See above for error)

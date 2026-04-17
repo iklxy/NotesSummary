@@ -1,9 +1,17 @@
 import { request } from "./apiClient";
 import {
   DeleteInterviewResponse,
+  DeleteQuestionResponse,
+  FewshotSampleCreateRequest,
+  FewshotSampleCreateResponse,
+  FewshotSampleDeleteResponse,
+  InterviewFewshotSamplesResponse,
+  GenerateNotesResponse,
   InterviewNotesResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
+  QuestionCreateItem,
+  QuestionCreateResponse,
   QuestionIntentItem,
   RunInterviewResponse,
 } from "./types";
@@ -47,6 +55,72 @@ export function getInterviewQuestions(
   return request<InterviewQuestionsResponse>(`/api/interviews/${interviewId}/questions`);
 }
 
+export function createInterviewQuestions(
+  interviewId: number,
+  questions: QuestionCreateItem[],
+): Promise<QuestionCreateResponse> {
+  return request<QuestionCreateResponse>(`/api/interviews/${interviewId}/questions`, {
+    method: "POST",
+    body: JSON.stringify({ questions }),
+  });
+}
+
+export function generateQuestionNotes(
+  interviewId: number,
+  questionId: number,
+): Promise<GenerateNotesResponse> {
+  return request<GenerateNotesResponse>(
+    `/api/interviews/${interviewId}/questions/${questionId}/generate-notes`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function deleteQuestion(
+  interviewId: number,
+  questionId: number,
+): Promise<DeleteQuestionResponse> {
+  return request<DeleteQuestionResponse>(
+    `/api/interviews/${interviewId}/questions/${questionId}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export function getInterviewFewshotSamples(
+  interviewId: number,
+): Promise<InterviewFewshotSamplesResponse> {
+  return request<InterviewFewshotSamplesResponse>(`/api/interviews/${interviewId}/fewshot-samples`);
+}
+
+export function createQuestionFewshotSample(
+  interviewId: number,
+  questionId: number,
+  payload: FewshotSampleCreateRequest,
+): Promise<FewshotSampleCreateResponse> {
+  return request<FewshotSampleCreateResponse>(
+    `/api/interviews/${interviewId}/questions/${questionId}/fewshot-samples`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function deleteQuestionFewshotSample(
+  interviewId: number,
+  sampleId: number,
+): Promise<FewshotSampleDeleteResponse> {
+  return request<FewshotSampleDeleteResponse>(
+    `/api/interviews/${interviewId}/fewshot-samples/${sampleId}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
 export interface CreatedInterview {
   id: number;
   project_id: number;
@@ -77,6 +151,14 @@ export interface InterviewSummaryResponse {
   items: InterviewSummaryItem[];
 }
 
+export interface UpdateSummaryResponse {
+  success: boolean;
+  summary?: InterviewSummaryItem | null;
+  reindex_succeeded?: boolean;
+  reindex_indexed?: number | null;
+  reindex_warning?: string | null;
+}
+
 export async function createInterview(
   projectId: number,
   formData: FormData,
@@ -105,4 +187,15 @@ export function getProjectInterviews(projectId: number): Promise<ProjectIntervie
 
 export function getInterviewSummary(interviewId: number): Promise<InterviewSummaryResponse> {
   return request<InterviewSummaryResponse>(`/api/interviews/${interviewId}/summary`);
+}
+
+export function updateInterviewSummary(
+  interviewId: number,
+  summaryId: number,
+  text: string,
+): Promise<UpdateSummaryResponse> {
+  return request<UpdateSummaryResponse>(`/api/interviews/${interviewId}/summary/${summaryId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ text }),
+  });
 }

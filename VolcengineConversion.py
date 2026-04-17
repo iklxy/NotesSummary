@@ -5,17 +5,12 @@ import requests
 import uuid
 import json
 import time
-import os
-import dotenv
-# 加载环境变量
-dotenv.load_dotenv()
 
-appid = os.getenv("ASR_APP_KEY")
-token = os.getenv("ASR_ACCESS_KEY")
-cluster = os.getenv('VOLCANO_CLUSTER')
+from config import config
 
-service_url = os.getenv("VOLCANO_SERVICE_URL")
-headers = {'Authorization': 'Bearer; {}'.format(token)}
+
+def _build_headers() -> dict[str, str]:
+    return {"Authorization": "Bearer; {}".format(config.ASR_ACCESS_KEY)}
 
 
 def submit_task(audio_url: str):
@@ -33,9 +28,9 @@ def submit_task(audio_url: str):
     """
     request_body = {
         "app": {
-            "appid": appid,
-            "token": token,
-            "cluster": cluster,
+            "appid": config.ASR_APP_KEY,
+            "token": config.ASR_ACCESS_KEY,
+            "cluster": config.VOLCANO_CLUSTER,
         },
         "user": {
             "uid": "388808087185088_demo",
@@ -49,7 +44,7 @@ def submit_task(audio_url: str):
         },
     }
 
-    resp = requests.post(service_url + '/submit', data=json.dumps(request_body), headers=headers)
+    resp = requests.post(config.VOLCANO_SERVICE_URL + '/submit', data=json.dumps(request_body), headers=_build_headers())
     try:
         resp_dic = resp.json()
     except Exception:
@@ -66,15 +61,15 @@ def submit_task(audio_url: str):
 
 def query_task(task_id):
     query_dic = {
-        "appid": appid,
-        "token": token,
+        "appid": config.ASR_APP_KEY,
+        "token": config.ASR_ACCESS_KEY,
         "id": task_id,
-        "cluster": cluster,
+        "cluster": config.VOLCANO_CLUSTER,
     }
 
     query_req = json.dumps(query_dic)
     print("查询请求体：", query_req)
-    resp = requests.post(service_url + '/query', data=query_req, headers=headers)
+    resp = requests.post(config.VOLCANO_SERVICE_URL + '/query', data=query_req, headers=_build_headers())
 
     try:
         resp_dic = resp.json()

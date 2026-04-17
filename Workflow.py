@@ -1,20 +1,18 @@
 "@Date:2026-04-10"
 "@Author:lixinyang"
 
-import os
 import json
+import traceback
 from typing import Any, Dict, List, Optional
-import dotenv
 
-from VolcUpload import upload_local_file, build_object_key, build_local_file_path, get_tos_client, bucket_name, TOS_URL_EXPIRE_SECONDS, tos
+from VolcUpload import upload_local_file, build_object_key, build_local_file_path, get_tos_client, tos
 from VolcengineConversion import run_asr
 from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 from Fewshot import select_fewshot_samples
 from DbAccess import DbAccess
-
-dotenv.load_dotenv()
+from config import config
 
 
 def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
@@ -22,49 +20,55 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
     步骤 1：本地上云，返回 {object_key, audio_url}。
     如果 bh_project_interview 已存在 file_path，则直接用它作为 object_key 并生成预签名 URL。
     """
-    row = DbAccess.get_interview_by_id(interview_id)
-    if not row:
-        return {"success": False, "message": f"interview {interview_id} not found"}
+    try:
+        row = DbAccess.get_interview_by_id(interview_id)
+        if not row:
+            return {"success": False, "message": f"interview {interview_id} not found"}
 
-    project_id = row.get("parse_project_id")
-    file_name = row.get("file_name") or f"{interview_id}.wav"
-    object_key = row.get("file_path")
+        project_id = row.get("parse_project_id")
+        file_name = row.get("file_name") or f"{interview_id}.wav"
+        object_key = row.get("file_path")
 
-    if not object_key:
-        local_path = build_local_file_path(project_id, interview_id, file_name)
-        object_key = build_object_key(project_id, interview_id, file_name)
-        upload_result = upload_local_file(local_path, object_key)
-        if not upload_result.get("success"):
-            return {"success": False, "message": "upload failed", "detail": upload_result}
-        audio_url = upload_result["data"]["audio_url"]
-        try:
-            DbAccess.update_interview_after_upload(
-                interview_id=interview_id,
-                object_key=object_key,
-                status=1,
-                file_id=object_key,
-                audio_url=audio_url,
+        if not object_key:
+            local_path = build_local_file_path(project_id, interview_id, file_name)
+            object_key = build_object_key(project_id, interview_id, file_name)
+            upload_result = upload_local_file(local_path, object_key)
+            if not upload_result.get("success"):
+                return {"success": False, "message": "upload failed", "detail": upload_result}
+            audio_url = upload_result["data"]["audio_url"]
+            try:
+                DbAccess.update_interview_after_upload(
+                    interview_id=interview_id,
+                    object_key=object_key,
+                    status=1,
+                    file_id=object_key,
+                    audio_url=audio_url,
+                )
+            except Exception as e:
+                return {"success": False, "message": f"update after upload failed: {e}"}
+            return {"success": True, "object_key": object_key, "audio_url": audio_url}
+        else:
+            client = get_tos_client()
+            pre = client.pre_signed_url(
+                tos.HttpMethodType.Http_Method_Get,
+                bucket=config.TOS_BUCKET_NAME,
+                key=object_key,
+                expires=config.TOS_URL_EXPIRE_SECONDS,
             )
-        except Exception as e:
-            return {"success": False, "message": f"update after upload failed: {e}"}
-        return {"success": True, "object_key": object_key, "audio_url": audio_url}
-    else:
-        client = get_tos_client()
-        pre = client.pre_signed_url(
-            tos.HttpMethodType.Http_Method_Get,
-            bucket=bucket_name,
-            key=object_key,
-            expires=TOS_URL_EXPIRE_SECONDS,
-        )
-        audio_url = pre.signed_url
-        return {"success": True, "object_key": object_key, "audio_url": audio_url}
+            audio_url = pre.signed_url
+            return {"success": True, "object_key": object_key, "audio_url": audio_url}
+    except Exception as e:
+        return {"success": False, "message": f"upload step unexpected error: {e}"}
 
 
 def step_transcribe(audio_url: str) -> Dict[str, Any]:
     """
     步骤 2：调用 ASR，将云上音频转写为 {full_text, speakers[]} 结构。
     """
-    asr_result = run_asr(audio_url) or {}
+    try:
+        asr_result = run_asr(audio_url) or {}
+    except Exception as e:
+        return {"success": False, "message": f"transcribe failed: {e}"}
     return {"success": True, "asr_result": asr_result}
 
 
@@ -72,25 +76,27 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
     """
     将 ASR 结果组装为 file_content JSON 并写入 bh_project_interview.file_content。
     """
-    row = DbAccess.get_interview_by_id(interview_id)
-    project_id = row.get("parse_project_id")
-    file_name = row.get("file_name") or f"{interview_id}.wav"
-
-    payload = {
-        "audio": {
-            "project_id": project_id,
-            "interview_id": interview_id,
-            "object_key": object_key,
-            "bucket_name": bucket_name,
-            "url": audio_url,
-            "format": file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "wav",
-        },
-        "result": {
-            "full_text": asr_result.get("full_text", ""),
-            "speakers": asr_result.get("speakers", []),
-        },
-    }
     try:
+        row = DbAccess.get_interview_by_id(interview_id)
+        if not row:
+            return {"success": False, "message": f"interview {interview_id} not found"}
+        project_id = row.get("parse_project_id")
+        file_name = row.get("file_name") or f"{interview_id}.wav"
+
+        payload = {
+            "audio": {
+                "project_id": project_id,
+                "interview_id": interview_id,
+                "object_key": object_key,
+                "bucket_name": config.TOS_BUCKET_NAME,
+                "url": audio_url,
+                "format": file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "wav",
+            },
+            "result": {
+                "full_text": asr_result.get("full_text", ""),
+                "speakers": asr_result.get("speakers", []),
+            },
+        }
         DbAccess.update_interview_file_content(interview_id, json.dumps(payload, ensure_ascii=False))
     except Exception as e:
         return {"success": False, "message": f"write file_content failed: {e}"}
@@ -125,12 +131,11 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
         - text: speaker_content_clean
         - modify: 0
     """
-    obj = json.loads(cleaned_json)
-    speakers = obj.get("result", {}).get("speakers") or []
-    if not speakers:
-        return {"success": False, "message": "no speakers in cleaned json"}
-
     try:
+        obj = json.loads(cleaned_json)
+        speakers = obj.get("result", {}).get("speakers") or []
+        if not speakers:
+            return {"success": False, "message": "no speakers in cleaned json"}
         inserted = DbAccess.insert_summary_from_cleaned_speakers(interview_id, speakers)
     except Exception as e:
         return {"success": False, "message": f"write summary failed: {e}"}
@@ -182,6 +187,38 @@ def step_fetch_questions(interview_id: int) -> Dict[str, Any]:
     return {"success": True, "questions": rows}
 
 
+def step_fetch_intent_names(intent_ids: List[int]) -> Dict[str, Any]:
+    """
+    根据 intent_id 列表读取意图名称，用于构造更强约束的 RAG query。
+    """
+    if not intent_ids:
+        return {"success": True, "intent_name_map": {}}
+
+    placeholders = ",".join(["%s"] * len(intent_ids))
+    sql = f"""
+        SELECT id, name, code
+        FROM bh_question_intent
+        WHERE id IN ({placeholders})
+    """
+    conn = DbAccess.get_connection()
+    intent_name_map: Dict[int, str] = {}
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, intent_ids)
+            rows = cursor.fetchall()
+            for r in rows:
+                iid = r.get("id")
+                name = (r.get("name") or r.get("code") or "").strip()
+                if iid is not None:
+                    intent_name_map[int(iid)] = name
+    except Exception as e:
+        return {"success": False, "intent_name_map": {}, "message": f"fetch intents failed: {e}"}
+    finally:
+        conn.close()
+
+    return {"success": True, "intent_name_map": intent_name_map}
+
+
 def step_generate_notes(
     project_id: int,
     interview_id: int,
@@ -228,32 +265,30 @@ def step_generate_notes(
             "message": "no questions to generate notes for",
         }
 
-    print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
-    index_interview_summary(interview_id)
+    index_warning = None
+    try:
+        print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
+        index_interview_summary(interview_id)
+    except Exception as e:
+        index_warning = f"index summary failed: {e}"
+        print(f"[NOTES] {index_warning}，将降级为不依赖向量索引继续生成 Notes")
 
     intent_ids = [row.get("intent_id") for row in questions if row.get("intent_id") is not None]
-    intent_desc_map: Dict[int, str] = {}
+    intent_name_map: Dict[int, str] = {}
     if intent_ids:
-        placeholders = ",".join(["%s"] * len(intent_ids))
-        sql = f"""
-            SELECT id, description
-            FROM bh_question_intent
-            WHERE id IN ({placeholders})
-        """
-        conn = DbAccess.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, intent_ids)
-                rows = cursor.fetchall()
-                for r in rows:
-                    iid = r.get("id")
-                    desc = r.get("description") or ""
-                    if iid is not None:
-                        intent_desc_map[int(iid)] = desc
-        finally:
-            conn.close()
+        fi = step_fetch_intent_names([int(i) for i in intent_ids if i is not None])
+        if fi.get("success"):
+            intent_name_map = fi.get("intent_name_map") or {}
+        else:
+            print(f"[NOTES] 读取 intent 名称失败：{fi.get('message')}")
 
-    model_client = ModelClient()
+    model_client: ModelClient | None = None
+    model_client_error: str | None = None
+    try:
+        model_client = ModelClient()
+    except Exception as e:
+        model_client_error = f"init model client failed: {e}"
+        print(f"[NOTES] {model_client_error}，将写入降级 Notes")
     results: List[Dict[str, Any]] = []
 
     print(f"[NOTES] 共 {len(questions)} 条题目，开始生成 Notes")
@@ -263,35 +298,64 @@ def step_generate_notes(
         question_text = row.get("question_text", "")
         question_type = row.get("question_type")
         intent_id = row.get("intent_id")
-        intent_desc = intent_desc_map.get(intent_id) if intent_id is not None else None
+        intent_name = intent_name_map.get(intent_id) if intent_id is not None else None
 
         print(f"[NOTES] 开始为问题 {question_id} 生成 Notes")
+        try:
+            segments = retrieve_segments_for_question(
+                interview_id=interview_id,
+                question_text=question_text,
+                top_k=top_k,
+                question_type=question_type or None,
+                intent_name=intent_name,
+            )
+            print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
 
-        segments = retrieve_segments_for_question(
-            interview_id=interview_id,
-            question_text=question_text,
-            top_k=top_k,
-        )
-        print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
+            fewshot_samples = select_fewshot_samples(
+                project_id=project_id,
+                question_id=question_id,
+                question_type=question_type or "",
+                research_phase=row.get("research_phase"),
+                intent_id=intent_id if intent_id is not None else 0,
+                limit=2,
+            )
 
-        fewshot_samples = select_fewshot_samples(
-            project_id=project_id,
-            question_id=question_id,
-            question_type=question_type or "",
-            research_phase=row.get("research_phase"),
-            intent_id=intent_id if intent_id is not None else 0,
-            limit=2,
-        )
+            print(f"[NOTES] 问题 {question_id} 选出 few-shot 样本数量: {len(fewshot_samples)}")
 
-        print(f"[NOTES] 问题 {question_id} 选出 few-shot 样本数量: {len(fewshot_samples)}")
-
-        notes = model_client.generate_notes_for_question_with_fewshot(
-            question_text=question_text,
-            segments=segments,
-            intent_name=intent_desc,
-            question_type=question_type,
-            fewshot_samples=fewshot_samples,
-        )
+            if model_client is None:
+                notes = {
+                    "summary": "Notes 生成失败",
+                    "analysis": model_client_error or "model client not available",
+                    "confidence": 0.0,
+                    "error": model_client_error or "model client not available",
+                }
+            else:
+                notes = model_client.generate_notes_for_question_with_fewshot(
+                    question_text=question_text,
+                    segments=segments,
+                    intent_name=intent_name,
+                    question_type=question_type,
+                    fewshot_samples=fewshot_samples,
+                )
+        except Exception as e:
+            results.append(
+                {
+                    "project_id": project_id,
+                    "project_interview_id": interview_id,
+                    "question_id": question_id,
+                    "intent_id": intent_id,
+                    "question_text": question_text,
+                    "question_type": question_type,
+                    "segments": [],
+                    "fewshot_count": 0,
+                    "fewshot_sample_ids": [],
+                    "notes": {
+                        "error": f"generate notes failed: {e}",
+                        "llm_raw_output": traceback.format_exc(),
+                    },
+                }
+            )
+            continue
 
         results.append(
             {
@@ -314,6 +378,7 @@ def step_generate_notes(
         "interview_id": interview_id,
         "total_questions": len(questions),
         "results": results,
+        "warnings": [w for w in [index_warning, model_client_error] if w],
     }
 
 
@@ -386,14 +451,9 @@ def step_write_notes_results(notes_block: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_workflow(interview_id: int) -> Dict[str, Any]:
     """
-    总工作流：
-        1) 本地上云（或直接生成预签名 URL）
-        2) 云上音频转文字（ASR）
-        3) 组装并写入 file_content
-        4) LLM 清洗
-        5) 将清洗后的结果落库到 bh_project_interview_summary
-        6) 从 bh_project_question 读取题目列表
-        7) 使用 RAG + LLM 为每个题目生成 Notes（仅返回，不落库）
+    只负责“转录 -> 清洗 -> 写 summary”的工作流。
+
+    旧版工作流中的 Notes 生成已拆分出去，后续由独立接口按题目触发。
     """
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
         try:
@@ -403,84 +463,147 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         return {"success": False, "stage": stage, "detail": detail}
 
     try:
-        DbAccess.update_interview_status(interview_id, 1)
-    except Exception:
-        # 状态更新失败不影响主流程。
-        pass
+        try:
+            DbAccess.update_interview_status(interview_id, 1)
+        except Exception:
+            # 状态更新失败不影响主流程。
+            pass
 
-    # 1. 本地上云 / 预签名 URL
-    up = step_upload_interview_audio(interview_id)
-    if not up.get("success"):
-        return fail("upload", up)
-    object_key = up["object_key"]
-    audio_url = up["audio_url"]
+        # 1. 本地上云 / 预签名 URL
+        up = step_upload_interview_audio(interview_id)
+        if not up.get("success"):
+            return fail("upload", up)
+        object_key = up["object_key"]
+        audio_url = up["audio_url"]
 
-    # 2. ASR
-    tr = step_transcribe(audio_url)
-    if not tr.get("success"):
-        return fail("transcribe", tr)
-    asr_result = tr["asr_result"]
+        # 2. ASR
+        tr = step_transcribe(audio_url)
+        if not tr.get("success"):
+            return fail("transcribe", tr)
+        asr_result = tr["asr_result"]
 
-    # 3. 写 file_content
-    st = step_store_file_content(interview_id, object_key, audio_url, asr_result)
-    if not st.get("success"):
-        return fail("store_file_content", st)
-    file_content_obj = st["file_content"]
-    file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
+        # 3. 写 file_content
+        st = step_store_file_content(interview_id, object_key, audio_url, asr_result)
+        if not st.get("success"):
+            return fail("store_file_content", st)
+        file_content_obj = st["file_content"]
+        file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
 
-    # 4. LLM 清洗
-    cl = step_clean_with_llm(file_content_json)
-    if not cl.get("success"):
-        return fail("clean_llm", cl)
-    cleaned_json = cl["cleaned_json"]
+        # 4. LLM 清洗
+        cl = step_clean_with_llm(file_content_json)
+        if not cl.get("success"):
+            return fail("clean_llm", cl)
+        cleaned_json = cl["cleaned_json"]
 
-    # 5. 写 summary
-    ws = step_write_summary(interview_id, cleaned_json)
-    if not ws.get("success"):
-        return fail("write_summary", ws)
+        # 5. 写 summary
+        ws = step_write_summary(interview_id, cleaned_json)
+        if not ws.get("success"):
+            return fail("write_summary", ws)
 
+        row = DbAccess.get_interview_by_id(interview_id)
+
+        try:
+            DbAccess.update_interview_status(interview_id, 2)
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "object_key": object_key,
+            "audio_url": audio_url,
+            "asr_result_preview": {
+                "full_text_len": len(asr_result.get("full_text", "")),
+                "speakers_count": len(asr_result.get("speakers", [])),
+            },
+            "summary_inserted": ws.get("inserted", 0),
+        }
+    except Exception as e:
+        return fail("unexpected", {
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+        })
+
+
+def run_notes_generation_for_interview(
+    interview_id: int,
+    question_id: Optional[int] = None,
+    top_k: int = 10,
+) -> Dict[str, Any]:
+    """
+    针对指定访谈的题目，执行 RAG + LLM 生成 Notes 并落库。
+
+    参数:
+        interview_id: 访谈主键 ID。
+        question_id:   可选，只为单个题目生成 Notes；不传则为该访谈下全部题目生成。
+        top_k:         每道题目检索返回的片段数量上限。
+    """
     row = DbAccess.get_interview_by_id(interview_id)
-    project_id = row.get("parse_project_id") if row else None
+    if not row:
+        return {
+            "success": False,
+            "stage": "fetch_interview",
+            "detail": {"message": f"interview {interview_id} not found"},
+        }
 
+    project_id = row.get("parse_project_id") or 0
     fq = step_fetch_questions(interview_id)
     if not fq.get("success"):
-        notes_block = {
+        return {
             "success": False,
             "stage": "fetch_questions",
-            "message": fq.get("message", ""),
+            "detail": fq,
+            "project_id": project_id,
+            "interview_id": interview_id,
             "total_questions": 0,
             "results": [],
         }
-        notes_write = {"success": False, "inserted": 0, "errors": ["fetch_questions failed"]}
-    else:
-        gn = step_generate_notes(
-            project_id=project_id or 0,
-            interview_id=interview_id,
-            questions=fq["questions"],
-            top_k=10,
-        )
-        notes_block = gn
-        if gn.get("success"):
-            notes_write = step_write_notes_results(gn)
-        else:
-            notes_write = {"success": False, "inserted": 0, "errors": ["generate_notes failed"]}
 
-    try:
-        DbAccess.update_interview_status(interview_id, 2)
-    except Exception:
-        pass
+    questions: List[Dict[str, Any]] = fq.get("questions") or []
+    if question_id is not None:
+        try:
+            target_question_id = int(question_id)
+        except (TypeError, ValueError):
+            return {
+                "success": False,
+                "stage": "validate_question_id",
+                "detail": {"message": f"invalid question_id: {question_id}"},
+                "project_id": project_id,
+                "interview_id": interview_id,
+                "total_questions": 0,
+                "results": [],
+            }
+        questions = [row for row in questions if int(row.get("id") or 0) == target_question_id]
+        if not questions:
+            return {
+                "success": False,
+                "stage": "filter_question",
+                "detail": {"message": f"question {target_question_id} not found"},
+                "project_id": project_id,
+                "interview_id": interview_id,
+                "total_questions": 0,
+                "results": [],
+            }
 
+    gn = step_generate_notes(
+        project_id=project_id,
+        interview_id=interview_id,
+        questions=questions,
+        top_k=top_k,
+    )
+    if not gn.get("success"):
+        return gn
+
+    notes_write = step_write_notes_results(gn)
     return {
         "success": True,
-        "object_key": object_key,
-        "audio_url": audio_url,
-        "asr_result_preview": {
-            "full_text_len": len(asr_result.get("full_text", "")),
-            "speakers_count": len(asr_result.get("speakers", [])),
-        },
-        "summary_inserted": ws.get("inserted", 0),
-        "notes": notes_block,
-        "notes_db": notes_write,
+        "project_id": project_id,
+        "interview_id": interview_id,
+        "question_id": question_id,
+        "total_questions": gn.get("total_questions", 0),
+        "generated": len(gn.get("results") or []),
+        "inserted": notes_write.get("inserted", 0),
+        "results": gn.get("results") or [],
+        "warnings": [w for w in gn.get("warnings", []) if w] + [e for e in notes_write.get("errors", []) if e],
     }
 
 
@@ -490,7 +613,7 @@ if __name__ == "__main__":
         1. 在 .env 中设置 TEST_INTERVIEW_ID
         2. 运行本文件
     """
-    iid = os.getenv("TEST_INTERVIEW_ID")
+    iid = config.TEST_INTERVIEW_ID
     if not iid:
         print("请在 .env 中配置 TEST_INTERVIEW_ID")
         raise SystemExit(1)

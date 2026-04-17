@@ -1,12 +1,10 @@
 "@Date:2026-04-10"
 "@author:lixinyang"
 
-import os
 from typing import Any, Dict, Optional
-import dotenv
 import pymysql
 
-dotenv.load_dotenv()
+from config import config
 
 class DbAccess:
     @classmethod
@@ -25,11 +23,11 @@ class DbAccess:
         返回:
             已建立连接的 pymysql Connection 实例。
         """
-        host = os.getenv("DB_HOST", "127.0.0.1")
-        port = int(os.getenv("DB_PORT", "3306"))
-        user = os.getenv("DB_USER")
-        password = os.getenv("DB_PASSWORD")
-        db_name = os.getenv("DB_NAME")
+        host = config.DB_HOST
+        port = config.DB_PORT
+        user = config.DB_USER
+        password = config.DB_PASSWORD
+        db_name = config.DB_NAME
 
         connection = pymysql.connect(
             host=host,

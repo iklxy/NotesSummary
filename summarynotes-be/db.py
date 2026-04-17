@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Optional
 
@@ -197,6 +198,7 @@ def fetch_interview_by_id(interview_id: int) -> dict | None:
         - name
         - interview_date
         - file_name
+        - file_path
         - status
     """
     sql = """
@@ -206,6 +208,7 @@ def fetch_interview_by_id(interview_id: int) -> dict | None:
             name,
             interview_date,
             file_name,
+            file_path,
             status
         FROM bh_project_interview
         WHERE id = %s
@@ -226,6 +229,7 @@ def delete_interview_graph(interview_id: int) -> dict | None:
     删除指定访谈及其关联数据。
 
     会删除：
+        - bh_project_fewshot_sample
         - bh_project_interview_notes
         - bh_project_interview_summary
         - bh_project_question
@@ -241,6 +245,10 @@ def delete_interview_graph(interview_id: int) -> dict | None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM bh_project_fewshot_sample WHERE project_interview_id = %s",
+                (interview_id,),
+            )
             cursor.execute(
                 "DELETE FROM bh_project_interview_notes WHERE project_interview_id = %s",
                 (interview_id,),
@@ -333,6 +341,247 @@ def insert_questions_for_interview(
     return inserted
 
 
+def delete_question_and_notes(
+    project_interview_id: int,
+    question_id: int,
+) -> dict | None:
+    """
+    删除指定访谈下的一条题目及其对应 Notes。
+
+    删除顺序：
+        1) bh_project_fewshot_sample
+        2) bh_project_interview_notes
+        3) bh_project_question
+
+    返回：
+        - 删除成功：{"question_deleted": True, "notes_deleted": <int>}
+        - 题目不存在：None
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM bh_project_fewshot_sample
+                WHERE project_interview_id = %s AND question_id = %s
+                """,
+                (project_interview_id, question_id),
+            )
+            fewshot_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM bh_project_interview_notes
+                WHERE project_interview_id = %s AND question_id = %s
+                """,
+                (project_interview_id, question_id),
+            )
+            notes_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM bh_project_question
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (question_id, project_interview_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "question_deleted": True,
+        "fewshot_deleted": fewshot_deleted,
+        "notes_deleted": notes_deleted,
+    }
+
+
+def fetch_question_by_id(project_interview_id: int, question_id: int) -> dict | None:
+    """
+    根据访谈 ID 和题目 ID 查询单条题目。
+    """
+    sql = """
+        SELECT
+            id,
+            project_interview_id,
+            question_order,
+            question_text,
+            question_type,
+            research_phase,
+            intent_id
+        FROM bh_project_question
+        WHERE project_interview_id = %s
+          AND id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_interview_id, question_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def insert_fewshot_sample(
+    project_id: int,
+    project_interview_id: int,
+    question_id: int,
+    intent_id: int,
+    sample_json: dict | list | str,
+    quality_score: int = 95,
+    source_kind: str = "seed",
+    notes_result_id: Optional[int] = None,
+) -> int:
+    """
+    插入一条 few-shot 冷启动样本。
+    """
+    if isinstance(sample_json, (dict, list)):
+        sample_json_str = json.dumps(sample_json, ensure_ascii=False)
+    else:
+        sample_json_str = str(sample_json)
+
+    sql = """
+        INSERT INTO bh_project_fewshot_sample
+            (project_id, project_interview_id, question_id, intent_id, notes_result_id,
+             sample_json, quality_score, source_kind, created_time)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    project_interview_id,
+                    question_id,
+                    intent_id,
+                    notes_result_id,
+                    sample_json_str,
+                    quality_score,
+                    source_kind,
+                ),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return new_id
+
+
+def fetch_fewshot_sample_by_id(project_interview_id: int, sample_id: int) -> dict | None:
+    """
+    根据访谈 ID 和 sample ID 查询单条 few-shot 样本。
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            project_interview_id,
+            question_id,
+            intent_id,
+            notes_result_id,
+            sample_json,
+            quality_score,
+            source_kind,
+            created_time
+        FROM bh_project_fewshot_sample
+        WHERE project_interview_id = %s
+          AND id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_interview_id, sample_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_fewshot_samples_by_interview(project_interview_id: int) -> list[dict]:
+    """
+    根据访谈 ID 查询该访谈下所有 few-shot 样本。
+    """
+    sql = """
+        SELECT
+            s.id,
+            s.project_id,
+            s.project_interview_id,
+            s.question_id,
+            s.intent_id,
+            s.notes_result_id,
+            s.sample_json,
+            s.quality_score,
+            s.source_kind,
+            s.created_time,
+            q.question_order,
+            q.question_text,
+            q.question_type,
+            q.research_phase
+        FROM bh_project_fewshot_sample s
+        LEFT JOIN bh_project_question q
+          ON q.id = s.question_id
+         AND q.project_interview_id = s.project_interview_id
+        WHERE s.project_interview_id = %s
+        ORDER BY q.question_order ASC, s.quality_score DESC, s.created_time DESC, s.id DESC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_interview_id,))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def delete_fewshot_sample(
+    project_interview_id: int,
+    sample_id: int,
+) -> dict | None:
+    """
+    删除指定访谈下的一条 few-shot 样本。
+    """
+    row = fetch_fewshot_sample_by_id(project_interview_id, sample_id)
+    if not row:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM bh_project_fewshot_sample
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (sample_id, project_interview_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return row
+
+
 def fetch_interviews_by_project(parse_project_id: int) -> list[dict]:
     """
     根据项目 ID 查询该项目下的所有访谈记录。
@@ -399,6 +648,137 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
     try:
         with conn.cursor() as cursor:
             cursor.execute(sql, (project_interview_id,))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def update_interview_summary_text(
+    summary_id: int,
+    project_interview_id: int,
+    text: str,
+) -> dict | None:
+    """
+    更新某条 summary 的文本内容，并返回更新后的记录。
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE bh_project_interview_summary
+                SET text = %s
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (text, summary_id, project_interview_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_interview_id,
+                    timestamp,
+                    speaker,
+                    text
+                FROM bh_project_interview_summary
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (summary_id, project_interview_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_questions_by_interview(project_interview_id: int) -> list[dict]:
+    """
+    根据访谈 ID 查询该访谈下配置的题目。
+
+    返回:
+        题目记录字典列表，字段至少包括:
+            - id
+            - project_interview_id
+            - question_order
+            - question_text
+            - question_type
+            - research_phase
+            - intent_id
+    """
+    sql = """
+        SELECT
+            id,
+            project_interview_id,
+            question_order,
+            question_text,
+            question_type,
+            research_phase,
+            intent_id
+        FROM bh_project_question
+        WHERE project_interview_id = %s
+        ORDER BY question_order ASC, id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_interview_id,))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def fetch_notes_rows_by_interview(interview_id: int) -> list[dict]:
+    """
+    根据访谈 ID 查询该访谈对应的 Notes 原始行。
+
+    返回:
+        原始联表结果字典列表，字段至少包括:
+            - question_id
+            - question_order
+            - question_text
+            - question_type
+            - question_intent_id
+            - research_phase
+            - notes_id
+            - notes_intent_id
+            - note_json
+            - confidence
+            - status
+    """
+    sql = """
+        SELECT
+            q.id AS question_id,
+            q.question_order,
+            q.question_text,
+            q.question_type,
+            q.intent_id AS question_intent_id,
+            q.research_phase,
+            n.id AS notes_id,
+            n.intent_id AS notes_intent_id,
+            n.note_json,
+            n.confidence,
+            n.status
+        FROM bh_project_question q
+        LEFT JOIN bh_project_interview_notes n
+          ON n.project_interview_id = q.project_interview_id
+         AND n.question_id = q.id
+        WHERE q.project_interview_id = %s
+        ORDER BY q.question_order ASC, q.id ASC, n.id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()

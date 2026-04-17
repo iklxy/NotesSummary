@@ -1,17 +1,13 @@
 "@Date:2026-04-13"
 "@author:lixinyang"
 
-import os
 import json
 from typing import Any, Dict, List
 
-import dotenv
 from DbAccess import DbAccess
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
-
-
-dotenv.load_dotenv()
+from config import config
 
 
 def fetch_questions_for_interview(interview_id: int) -> List[Dict[str, Any]]:
@@ -52,6 +48,36 @@ def fetch_questions_for_interview(interview_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def fetch_intent_names(intent_ids: List[int]) -> Dict[int, str]:
+    """
+    根据 intent_id 列表查询意图名称。
+    """
+    if not intent_ids:
+        return {}
+
+    placeholders = ",".join(["%s"] * len(intent_ids))
+    sql = f"""
+        SELECT id, name, code
+        FROM bh_question_intent
+        WHERE id IN ({placeholders})
+    """
+    conn = DbAccess.get_connection()
+    intent_name_map: Dict[int, str] = {}
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, intent_ids)
+            rows = cursor.fetchall()
+            for row in rows:
+                iid = row.get("id")
+                name = (row.get("name") or row.get("code") or "").strip()
+                if iid is not None:
+                    intent_name_map[int(iid)] = name
+    finally:
+        conn.close()
+
+    return intent_name_map
+
+
 def generate_notes_for_question_with_rag(
     interview_id: int,
     question_row: Dict[str, Any],
@@ -78,6 +104,9 @@ def generate_notes_for_question_with_rag(
     question_text = question_row.get("question_text", "")
     question_type = question_row.get("question_type")
     intent_id = question_row.get("intent_id")
+    intent_name = None
+    if intent_id is not None:
+        intent_name = fetch_intent_names([int(intent_id)]).get(int(intent_id))
 
     print(f"[NOTES] 开始为问题 {question_id} 生成 Notes")
 
@@ -85,6 +114,8 @@ def generate_notes_for_question_with_rag(
         interview_id=interview_id,
         question_text=question_text,
         top_k=top_k,
+        question_type=question_type or None,
+        intent_name=intent_name,
     )
     print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
 
@@ -92,7 +123,7 @@ def generate_notes_for_question_with_rag(
     notes = model_client.generate_notes_for_question(
         question_text=question_text,
         segments=segments,
-        intent_name=None,
+        intent_name=intent_name,
         question_type=question_type,
     )
 
@@ -163,7 +194,7 @@ def pretty_print_notes_results(results: List[Dict[str, Any]]) -> None:
 
 
 if __name__ == "__main__":
-    interview_id_str = os.getenv("TEST_INTERVIEW_ID")
+    interview_id_str = config.TEST_INTERVIEW_ID
     if not interview_id_str:
         raise RuntimeError("未在环境变量中找到 TEST_INTERVIEW_ID")
     interview_id = int(interview_id_str)

@@ -5,20 +5,9 @@ import os
 import time
 import json
 
-import dotenv
 import tos
-#加载环境变量
-dotenv.load_dotenv()
 
-ak = os.getenv("TOS_ACCESS_KEY")
-sk = os.getenv("TOS_SECRET_KEY")
-endpoint = os.getenv("TOS_ENDPOINT", "https://tos-cn-shanghai.volces.com")
-region = os.getenv("TOS_REGION", "cn-shanghai")
-bucket_name = os.getenv("TOS_BUCKET_NAME", "benhealth")
-
-LOCAL_AUDIO_ROOT = os.getenv("LOCAL_AUDIO_ROOT", ".")
-TOS_AUDIO_PREFIX = os.getenv("TOS_AUDIO_PREFIX", "audio")
-TOS_URL_EXPIRE_SECONDS = int(os.getenv("TOS_URL_EXPIRE_SECONDS", "3600"))
+from config import config
 
 # JSON错误码约定
 CODE_SUCCESS = 0  # 调用成功
@@ -80,11 +69,16 @@ def get_tos_client() -> tos.TosClientV2:
         在创建客户端之前会对 AK/SK 和 endpoint/region 做最小校验，
         如果缺失或非法会直接抛出 ValueError。
     """
-    if not ak or not sk:
+    if not config.TOS_ACCESS_KEY or not config.TOS_SECRET_KEY:
         raise ValueError("TOS credentials missing")
-    if not endpoint or not region:
+    if not config.TOS_ENDPOINT or not config.TOS_REGION:
         raise ValueError("TOS endpoint/region config invalid")
-    client = tos.TosClientV2(ak, sk, endpoint, region)
+    client = tos.TosClientV2(
+        config.TOS_ACCESS_KEY,
+        config.TOS_SECRET_KEY,
+        config.TOS_ENDPOINT,
+        config.TOS_REGION,
+    )
     return client
 
 
@@ -105,7 +99,7 @@ def build_local_file_path(project_id: int, interview_id: int, file_name: str) ->
         LOCAL_AUDIO_ROOT/project_{project_id}/interview_{interview_id}/{file_name}
     """
     return os.path.join(
-        LOCAL_AUDIO_ROOT,
+        config.LOCAL_AUDIO_ROOT,
         f"project_{project_id}",
         f"interview_{interview_id}",
         file_name,
@@ -130,7 +124,7 @@ def build_object_key(project_id: int, interview_id: int, file_name: str) -> str:
     """
     return "/".join(
         [
-            TOS_AUDIO_PREFIX.rstrip("/"),
+            config.TOS_AUDIO_PREFIX.rstrip("/"),
             f"project_{project_id}",
             f"interview_{interview_id}",
             file_name,
@@ -179,7 +173,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             {"local_file_path": os.path.abspath(local_file_path)},
         )
 
-    if not bucket_name:
+    if not config.TOS_BUCKET_NAME:
         return make_response(
             False,
             CODE_TOS_BUCKET_ACCESS_DENIED,
@@ -187,7 +181,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             {},
         )
 
-    if not ak or not sk:
+    if not config.TOS_ACCESS_KEY or not config.TOS_SECRET_KEY:
         return make_response(
             False,
             CODE_TOS_CREDENTIALS_MISSING,
@@ -208,7 +202,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
     start_time = time.time()
     try:
         # 上传本地文件到 TOS，对象名为 object_key
-        resp = client.put_object_from_file(bucket_name, object_key, local_file_path)
+        resp = client.put_object_from_file(config.TOS_BUCKET_NAME, object_key, local_file_path)
     except tos.exceptions.TosClientError as e:
         # 客户端异常：如网络错误、签名错误等
         return make_response(
@@ -216,7 +210,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             CODE_TOS_UPLOAD_CLIENT_ERROR,
             "tos upload client error",
             {
-                "bucket_name": bucket_name,
+                "bucket_name": config.TOS_BUCKET_NAME,
                 "object_key": object_key,
                 "local_file_path": os.path.abspath(local_file_path),
                 "tos_error_type": "TosClientError",
@@ -230,7 +224,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             CODE_TOS_UPLOAD_SERVER_ERROR,
             "tos upload server error",
             {
-                "bucket_name": bucket_name,
+                "bucket_name": config.TOS_BUCKET_NAME,
                 "object_key": object_key,
                 "local_file_path": os.path.abspath(local_file_path),
                 "tos_status_code": getattr(e, "status_code", None),
@@ -245,7 +239,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             CODE_INTERNAL_UNKNOWN_ERROR,
             "internal unknown error when uploading to tos",
             {
-                "bucket_name": bucket_name,
+                "bucket_name": config.TOS_BUCKET_NAME,
                 "object_key": object_key,
                 "local_file_path": os.path.abspath(local_file_path),
                 "detail": str(e),
@@ -259,7 +253,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             CODE_TOS_UPLOAD_SERVER_ERROR,
             "tos upload server error: non-2xx status code",
             {
-                "bucket_name": bucket_name,
+                "bucket_name": config.TOS_BUCKET_NAME,
                 "object_key": object_key,
                 "local_file_path": os.path.abspath(local_file_path),
                 "tos_status_code": getattr(resp, "status_code", None),
@@ -270,9 +264,9 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
         # 生成音频访问的预签名 URL，供后续 ASR 使用
         pre = client.pre_signed_url(
             tos.HttpMethodType.Http_Method_Get,
-            bucket=bucket_name,
+            bucket=config.TOS_BUCKET_NAME,
             key=object_key,
-            expires=TOS_URL_EXPIRE_SECONDS,
+            expires=config.TOS_URL_EXPIRE_SECONDS,
         )
         audio_url = pre.signed_url
     except Exception as e:
@@ -282,7 +276,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
             CODE_TOS_PRESIGNED_URL_ERROR,
             "failed to generate presigned url",
             {
-                "bucket_name": bucket_name,
+                "bucket_name": config.TOS_BUCKET_NAME,
                 "object_key": object_key,
                 "detail": str(e),
             },
@@ -294,7 +288,7 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
         "interview_id": None,
         "file_name": os.path.basename(local_file_path),
         "object_key": object_key,
-        "bucket_name": bucket_name,
+        "bucket_name": config.TOS_BUCKET_NAME,
         "audio_url": audio_url,
         "status": "uploaded",
         "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -302,3 +296,89 @@ def upload_local_file(local_file_path: str, object_key: str) -> dict:
     }
 
     return make_response(True, CODE_SUCCESS, "upload success", data)
+
+
+def delete_remote_object(object_key: str) -> dict:
+    """
+    删除 TOS 上的单个音频对象。
+
+    参数:
+        object_key: TOS 对象 key，例如 audio/project_1/interview_2/xxx.wav。
+
+    返回:
+        统一 JSON 结构，success=True 表示删除成功或对象已不存在。
+    """
+    if not object_key:
+        return make_response(True, CODE_SUCCESS, "object key empty, skip delete", {})
+
+    if not config.TOS_BUCKET_NAME:
+        return make_response(
+            False,
+            CODE_TOS_BUCKET_ACCESS_DENIED,
+            "tos bucket_name is not configured",
+            {"object_key": object_key},
+        )
+
+    if not config.TOS_ACCESS_KEY or not config.TOS_SECRET_KEY:
+        return make_response(
+            False,
+            CODE_TOS_CREDENTIALS_MISSING,
+            "tos credentials missing",
+            {"object_key": object_key},
+        )
+
+    try:
+        client = get_tos_client()
+    except ValueError as e:
+        return make_response(
+            False,
+            CODE_TOS_CONFIG_INVALID,
+            "tos config invalid",
+            {"object_key": object_key, "detail": str(e)},
+        )
+
+    try:
+        client.delete_object(config.TOS_BUCKET_NAME, object_key)
+    except tos.exceptions.TosClientError as e:
+        return make_response(
+            False,
+            CODE_TOS_UPLOAD_CLIENT_ERROR,
+            "tos delete client error",
+            {
+                "bucket_name": config.TOS_BUCKET_NAME,
+                "object_key": object_key,
+                "tos_error_type": "TosClientError",
+                "tos_error_message": getattr(e, "message", str(e)),
+            },
+        )
+    except tos.exceptions.TosServerError as e:
+        return make_response(
+            False,
+            CODE_TOS_UPLOAD_SERVER_ERROR,
+            "tos delete server error",
+            {
+                "bucket_name": config.TOS_BUCKET_NAME,
+                "object_key": object_key,
+                "tos_status_code": getattr(e, "status_code", None),
+                "tos_error_code": getattr(e, "code", None),
+                "tos_error_message": getattr(e, "message", str(e)),
+            },
+        )
+    except Exception as e:
+        return make_response(
+            False,
+            CODE_INTERNAL_UNKNOWN_ERROR,
+            "internal unknown error when deleting from tos",
+            {
+                "bucket_name": config.TOS_BUCKET_NAME,
+                "object_key": object_key,
+                "detail": str(e),
+            },
+        )
+
+    return make_response(
+        True,
+        CODE_SUCCESS,
+        "delete success",
+        {"bucket_name": config.TOS_BUCKET_NAME, "object_key": object_key},
+    )

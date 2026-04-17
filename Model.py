@@ -1,58 +1,57 @@
 "@Date: 2026-04-10"
 "@Author: lixinyang"
 
-import os
 import json
 from typing import Any, Dict, List, Optional
-import dotenv
 from anthropic import Anthropic
+from google import genai
+from google.genai import types
+from volcenginesdkarkruntime import Ark
 from Fewshot import build_fewshot_prompt_block
+from config import config
 
-dotenv.load_dotenv()
 
-
-class ModelClient:
+class BaseLLMProvider:
     """
-    大模型调用封装类，用于对接 Anthropic Claude，并提供上层任务接口。
+    统一的大模型适配接口。
 
-    配置约定（从环境变量读取）:
-        - LLM_API_KEY: 模型访问的 API Key。
-        - LLM_BASE_URL: 模型 API 基础 URL。（如果使用Claude的官方API则无需配置该参数）
-        - LLM_MODEL_NAME:    模型名称或版本标识。
+    目前实现 Claude / Anthropic、Gemini、豆包 / 火山方舟 provider，后续可继续按这个协议扩展。
     """
 
-    _client: Optional[Anthropic] = None
-    _model_name: Optional[str] = None
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        raise NotImplementedError
 
-    @classmethod
-    def _ensure_client(cls) -> None:
-        if cls._client is not None and cls._model_name:
-            return
-        api_key = os.getenv("LLM_API_KEY")
-        base_url = os.getenv("LLM_BASE_URL")
-        model_name = os.getenv("LLM_MODEL_NAME")
-        if not api_key or not model_name:
-            raise RuntimeError("LLM_API_KEY / LLM_MODEL_NAME 未正确配置")
-        cls._client = Anthropic(api_key=api_key, base_url=base_url)
-        cls._model_name = model_name
 
-    @classmethod
-    def generate(cls, system_prompt: str, user_prompt: str) -> str:
-        """
-        调用 Anthropic Claude，返回文本形式的回复内容。
+class AnthropicProvider(BaseLLMProvider):
+    """
+    Anthropic Claude provider 适配层。
+    """
 
-        参数:
-            system_prompt: 系统提示，用于约束整体角色和输出规范。
-            user_prompt:   用户输入内容，描述当前具体任务。
+    def __init__(self, api_key: str, base_url: Optional[str] = None) -> None:
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = Anthropic(**client_kwargs)
 
-        返回:
-            模型返回的文本内容（假定为单段字符串）。
-        """
-        cls._ensure_client()
-        resp = cls._client.messages.create(
-            model=cls._model_name,
-            max_tokens=2048,
-            temperature=0.2,
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        resp = self._client.messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
             system=system_prompt,
             messages=[
                 {
@@ -79,6 +78,219 @@ class ModelClient:
             return json.dumps(resp.model_dump(), ensure_ascii=False)
         except Exception:
             return str(resp)
+
+
+class GeminiProvider(BaseLLMProvider):
+    """
+    Gemini provider 适配层，基于 Google 官方 google-genai SDK。
+    """
+
+    def __init__(self, api_key: str, base_url: Optional[str] = None) -> None:
+        self._client = genai.Client(
+            api_key="sk-pkEHC9t8l1UNg73KBxKPUk1m2VfMTe9MWqoKWVhB2Mcp3UZu",
+            vertexai=True,
+            http_options={
+                "base_url": "https://api.openai-proxy.org/google"
+                #base_url_resource_scope=types.ResourceScope.COLLECTION,
+         },
+        )
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        response = self._client.models.generate_content(
+            model=model_name,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+            ),
+        )
+
+        text = getattr(response, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text
+
+        candidates = getattr(response, "candidates", None)
+        if not candidates:
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            parts: List[str] = []
+            for part in getattr(content, "parts", []) or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+
+class DoubaoProvider(BaseLLMProvider):
+    """
+    豆包 / 火山方舟 provider 适配层，基于官方 volcengine-python-sdk[ark]。
+    """
+
+    def __init__(self, api_key: str, base_url: Optional[str] = None) -> None:
+        ark_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            ark_kwargs["base_url"] = base_url
+        self._client = Ark(**ark_kwargs)
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=False,
+        )
+
+        if not getattr(response, "choices", None):
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+
+class ModelClient:
+    """
+    大模型调用封装类，内部通过 provider 适配不同官方模型。
+
+    配置约定（从环境变量读取）:
+        - LLM_PROVIDER:  provider 名称，默认 anthropic。
+        - LLM_API_KEY: 模型访问的 API Key。
+        - LLM_BASE_URL: 模型 API 基础 URL。
+        - LLM_MODEL_NAME:    模型名称或版本标识。
+    """
+
+    _provider: Optional[BaseLLMProvider] = None
+    _provider_name: Optional[str] = None
+    _model_name: Optional[str] = None
+    _api_key: Optional[str] = None
+    _base_url: Optional[str] = None
+    _config_revision: int = -1
+
+    @classmethod
+    def _resolve_provider_name(cls) -> str:
+        provider_name = (config.LLM_PROVIDER or "anthropic").strip().lower()
+        return provider_name or "anthropic"
+
+    @classmethod
+    def _build_provider(
+        cls,
+        provider_name: str,
+        api_key: str,
+        base_url: Optional[str],
+    ) -> BaseLLMProvider:
+        effective_base_url = cls._resolve_provider_base_url(provider_name, base_url)
+        if provider_name == "anthropic":
+            return AnthropicProvider(api_key=api_key, base_url=effective_base_url)
+        if provider_name in {"gemini", "google", "google-genai"}:
+            return GeminiProvider(api_key=api_key, base_url=effective_base_url)
+        if provider_name in {"doubao", "ark", "volcengine", "volcano"}:
+            return DoubaoProvider(api_key=api_key, base_url=effective_base_url)
+        raise RuntimeError(f"暂不支持的 LLM_PROVIDER: {provider_name}")
+
+    @classmethod
+    def _resolve_provider_base_url(
+        cls,
+        provider_name: str,
+        base_url: Optional[str],
+    ) -> Optional[str]:
+        if not base_url:
+            return None
+        if provider_name in {"gemini", "google", "google-genai"}:
+            return None
+        if provider_name in {"doubao", "ark", "volcengine", "volcano"}:
+            lowered = base_url.lower()
+            if "ark.cn" in lowered or "volces.com" in lowered:
+                return base_url
+            return None
+        return base_url
+
+    @classmethod
+    def _ensure_client(cls) -> None:
+        provider_name = cls._resolve_provider_name()
+        api_key = config.LLM_API_KEY
+        base_url = config.LLM_BASE_URL
+        model_name = config.LLM_MODEL_NAME
+        if (
+            cls._provider is not None
+            and cls._provider_name == provider_name
+            and cls._model_name == model_name
+            and cls._api_key == api_key
+            and cls._base_url == base_url
+            and cls._config_revision == config.revision
+        ):
+            return
+        if not api_key or not model_name:
+            raise RuntimeError("LLM_PROVIDER / LLM_API_KEY / LLM_MODEL_NAME 未正确配置")
+        cls._provider = cls._build_provider(provider_name, api_key, base_url)
+        cls._provider_name = provider_name
+        cls._model_name = model_name
+        cls._api_key = api_key
+        cls._base_url = base_url
+        cls._config_revision = config.revision
+
+    @classmethod
+    def generate(cls, system_prompt: str, user_prompt: str) -> str:
+        """
+        调用当前配置的 LLM provider，返回文本形式的回复内容。
+
+        参数:
+            system_prompt: 系统提示，用于约束整体角色和输出规范。
+            user_prompt:   用户输入内容，描述当前具体任务。
+
+        返回:
+            模型返回的文本内容（假定为单段字符串）。
+        """
+        cls._ensure_client()
+        if cls._provider is None or cls._model_name is None:
+            raise RuntimeError("LLM provider 未正确初始化")
+        return cls._provider.generate(system_prompt, user_prompt, cls._model_name)
 
     @classmethod
     def clean_speaker_utterance(

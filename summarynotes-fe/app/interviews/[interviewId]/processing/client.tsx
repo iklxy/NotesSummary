@@ -103,6 +103,9 @@ export default function InterviewProcessingClient({ interviewId }: Props) {
             <Paragraph type="secondary" style={{ marginBottom: 8 }}>
               {statusText}
             </Paragraph>
+            <Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              处理时间可能较长，通常需要 10 分钟左右，请耐心等待。
+            </Paragraph>
             <Text type="secondary">
               访谈 ID: {interviewId}
               {status !== null ? ` · 当前状态: ${status}` : ""}

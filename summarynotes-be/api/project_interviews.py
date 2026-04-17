@@ -1,5 +1,4 @@
 import os
-import json
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -9,9 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 
 from db import (
     fetch_interviews_by_project,
-    fetch_question_intents,
     insert_interview,
-    insert_questions_for_interview,
     update_interview_status,
 )
 
@@ -83,71 +80,17 @@ def _trigger_workflow_background(interview_id: int) -> None:
         # 状态更新失败不阻止后续触发，避免因为状态字段写入失败导致 workflow 无法执行。
         pass
 
-    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/run-workflow"
+    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/transcribe"
     try:
         resp = requests.post(url, timeout=600)
         if resp.status_code >= 400:
             update_interview_status(interview_id, 3)
             return
-
-        data = resp.json()
-        if not data.get("success", False):
-            update_interview_status(interview_id, 3)
-            return
-
-        update_interview_status(interview_id, 2)
     except Exception:
         try:
             update_interview_status(interview_id, 3)
         except Exception:
             pass
-
-
-def _parse_questions_payload(questions_json: Optional[str]) -> list[dict]:
-    if not questions_json:
-        return []
-    try:
-        data = json.loads(questions_json)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"questions_json 格式错误: {e}")
-
-    if not isinstance(data, list):
-        raise HTTPException(status_code=400, detail="questions_json 必须是数组")
-
-    valid_intent_ids = {
-        row.get("id")
-        for row in fetch_question_intents()
-        if row.get("id") is not None
-    }
-
-    cleaned: list[dict] = []
-    for index, item in enumerate(data, start=1):
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=400, detail=f"第 {index} 条问题格式错误")
-        question_text = (item.get("question_text") or "").strip()
-        question_type = (item.get("question_type") or "OPEN").strip().upper()
-        intent_id_raw = item.get("intent_id")
-        try:
-            intent_id = int(intent_id_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=f"第 {index} 条问题的 intent_id 非法")
-        if not question_text:
-            raise HTTPException(status_code=400, detail=f"第 {index} 条问题不能为空")
-        if intent_id not in valid_intent_ids:
-            raise HTTPException(status_code=400, detail=f"第 {index} 条问题的 intent_id 不存在")
-        cleaned.append(
-            {
-                "question_order": index,
-                "question_text": question_text,
-                "question_type": question_type,
-                "intent_id": intent_id,
-            }
-        )
-
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="请至少填写一个需总结的问题")
-
-    return cleaned
 
 
 @router.post("/{project_id}/interviews", response_model=Dict[str, Any])
@@ -156,7 +99,6 @@ async def create_interview(
     background_tasks: BackgroundTasks,
     name: str = Form(...),
     interview_date: Optional[str] = Form(None),
-    questions_json: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
     """
@@ -167,7 +109,6 @@ async def create_interview(
         name:           访谈名称，对应 bh_project_interview.name。
         interview_date: 访谈时间字符串（如 '2026-04-15'），写入 bh_project_interview.interview_date。
         file:           单个音频文件，文件名写入 bh_project_interview.file_name。
-        questions_json: 需总结的问题列表 JSON 字符串。
 
     返回:
         {
@@ -187,8 +128,6 @@ async def create_interview(
     if not original_name:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
 
-    questions = _parse_questions_payload(questions_json)
-
     try:
         interview_id = insert_interview(
             parse_project_id=project_id,
@@ -200,14 +139,6 @@ async def create_interview(
         raise HTTPException(status_code=500, detail=f"insert interview failed: {e}")
 
     local_path = _save_uploaded_audio_file(project_id, interview_id, file)
-
-    try:
-        insert_questions_for_interview(
-            project_interview_id=interview_id,
-            questions=questions,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"insert questions failed: {e}")
 
     background_tasks.add_task(_trigger_workflow_background, interview_id)
 
