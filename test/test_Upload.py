@@ -26,17 +26,8 @@ def test_upload_for_interview() -> None:
         - LOCAL_AUDIO_ROOT: 本地文件根目录，默认 ./audio。
         - TOS_AUDIO_PREFIX: TOS 对象前缀，例如 audio。
     """
-    interview_id_str = os.getenv("TEST_INTERVIEW_ID")
-    if not interview_id_str:
-        print("请先在环境变量或 .env 中配置 TEST_INTERVIEW_ID")
-        return
 
-    try:
-        interview_id = int(interview_id_str)
-    except ValueError:
-        print(f"TEST_INTERVIEW_ID 非法: {interview_id_str}")
-        return
-
+    interview_id = 2
     interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
         print(f"找不到访谈记录，id={interview_id}")

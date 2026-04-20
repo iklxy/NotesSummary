@@ -23,6 +23,7 @@ class RuntimeConfig:
 
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL_NAME: str = "bge-m3:latest"
+    TERM_HINTS_FILE: str | None = None
 
     ASR_APP_KEY: str | None = None
     ASR_ACCESS_KEY: str | None = None
@@ -61,6 +62,7 @@ class RuntimeConfig:
 
         self.OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "bge-m3:latest")
+        self.TERM_HINTS_FILE = os.getenv("TERM_HINTS_FILE")
 
         self.ASR_APP_KEY = os.getenv("ASR_APP_KEY")
         self.ASR_ACCESS_KEY = os.getenv("ASR_ACCESS_KEY")

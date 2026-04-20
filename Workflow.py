@@ -11,6 +11,7 @@ from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 from Fewshot import select_fewshot_samples
+from Hotword import load_term_hints_from_file
 from DbAccess import DbAccess
 from config import config
 
@@ -109,7 +110,7 @@ def step_clean_with_llm(file_content_json: str) -> Dict[str, Any]:
     """
     # 可选：根据项目实际构建 speaker_roles / term_hints
     speaker_roles = {"1": "interviewer", "2": "interviewee"}
-    term_hints: List[str] = []
+    term_hints: List[str] = load_term_hints_from_file(config.TERM_HINTS_FILE)
     try:
         updated_json = clean_file_content_json(
             file_content_json=file_content_json,

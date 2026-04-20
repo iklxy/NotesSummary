@@ -23,6 +23,7 @@ def _print_selected_config() -> None:
     print("[CONFIG] QDRANT_COLLECTION_SUMMARY =", config.QDRANT_COLLECTION_SUMMARY)
     print("[CONFIG] TOS_BUCKET_NAME =", config.TOS_BUCKET_NAME)
     print("[CONFIG] OLLAMA_MODEL_NAME =", config.OLLAMA_MODEL_NAME)
+    print("[CONFIG] TERM_HINTS_FILE =", config.TERM_HINTS_FILE)
     print("[CONFIG] INTERNAL_SERVICE_BASE =", config.INTERNAL_SERVICE_BASE)
 
 

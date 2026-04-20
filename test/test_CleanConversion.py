@@ -15,6 +15,8 @@ if PROJECT_ROOT not in sys.path:
 
 from DbAccess import DbAccess
 from CleanConversion import clean_file_content_json
+from Hotword import load_term_hints_from_file
+from config import config
 
 
 dotenv.load_dotenv()
@@ -57,8 +59,8 @@ def test_clean_conversion_for_interview() -> None:
         "2": "interviewee",
     }
 
-    # term_hints 可以根据项目实际从配置或数据库中加载，这里仅作为示例保留空列表
-    term_hints = []
+    # 热词文件优先从配置项 TERM_HINTS_FILE 读取
+    term_hints = load_term_hints_from_file(config.TERM_HINTS_FILE)
 
     try:
         updated_json = clean_file_content_json(

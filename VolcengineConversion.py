@@ -39,6 +39,9 @@ def submit_task(audio_url: str):
             "format": "wav",
             "url": audio_url,
         },
+        "request": {
+            "boosting_table_name":"45e58261-236b-43f5-933f-9a90ab5781f0"
+        },
         "additions": {
             "with_speaker_info": "True",
         },

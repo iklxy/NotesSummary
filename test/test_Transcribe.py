@@ -3,10 +3,12 @@ import json
 
 import dotenv
 
-from VolcUpload import build_object_key, get_tos_client, bucket_name, TOS_URL_EXPIRE_SECONDS, tos
+from VolcUpload import build_object_key, get_tos_client, tos
 from DbAccess import DbAccess
 from VolcengineConversion import run_asr
 
+bucket_name = os.getenv("TOS_BUCKET_NAME")
+TOS_URL_EXPIRE_SECONDS = 3600
 
 dotenv.load_dotenv()
 
@@ -94,12 +96,9 @@ def test_transcribe_for_interview() -> None:
         - TEST_INTERVIEW_ID: 需要测试的 bh_project_interview.id。
     """
     interview_id_str = os.getenv("TEST_INTERVIEW_ID")
-    if not interview_id_str:
-        print("请先在环境变量或 .env 中配置 TEST_INTERVIEW_ID")
-        return
 
     try:
-        interview_id = int(interview_id_str)
+        interview_id = 2
     except ValueError:
         print(f"TEST_INTERVIEW_ID 非法: {interview_id_str}")
         return

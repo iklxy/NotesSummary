@@ -1,0 +1,118 @@
+erDiagram
+
+  bh_project {
+    bigint id PK
+    varchar name
+    text keywords
+    text core_problem
+  }
+
+  bh_project_interview {
+    bigint id PK
+    bigint project_id FK
+    varchar name
+    text keywords
+    text core_problem
+    datetime interview_date
+    varchar file_id
+    text file_path
+    text file_name
+    longtext file_content
+    longtext note_content
+    tinyint status
+    json problem_answer
+  }
+
+  bh_project_interview_script {
+    bigint id PK
+    bigint project_interview_id FK
+    varchar timestamp
+    varchar speaker
+    longtext text
+    tinyint modify
+  }
+
+  bh_project_question_intent {
+    bigint id PK
+    varchar code
+    varchar name
+    text description
+    varchar schema_name
+    tinyint status
+  }
+
+  bh_project_question {
+    bigint id PK
+    bigint project_interview_id FK
+    int question_order
+    text question_text
+    varchar question_type
+    varchar research_phase
+    bigint intent_id FK
+    json meta
+  }
+
+  bh_project_interview_notes {
+    bigint id PK
+    bigint project_id FK
+    bigint project_interview_id FK
+    bigint question_id FK
+    bigint intent_id FK
+    json note_json
+    decimal confidence
+    tinyint status
+    varchar error_message
+  }
+
+  bh_project_notes_edit_log {
+    bigint id PK
+    bigint notes_result_id FK
+    bigint editor_id
+    varchar action
+    json before_json
+    json after_json
+    tinyint quality_score
+    text comment
+  }
+
+  fewshot_sample {
+    bigint id PK
+    json sample_json
+    tinyint quality_score
+    varchar source_kind
+    bigint project_id
+    bigint project_interview_id
+    bigint question_id
+    bigint notes_id
+  }
+
+  bh_project_notes_stats_daily {
+    bigint id PK
+    date stat_date
+    bigint project_id FK
+    bigint question_id FK
+    bigint intent_id FK
+    int total_count
+    int edited_count
+    int rejected_count
+    decimal avg_quality_score
+  }
+
+  %% 关系定义（修正版）
+  bh_project ||--o{ bh_project_interview : "1-N 访谈"
+  bh_project_interview ||--o{ bh_project_interview_script : "1-N 明细"
+
+  %% 题目挂在访谈上
+  bh_project_interview ||--o{ bh_project_question : "1-N 题目"
+  bh_project_question_intent ||--o{ bh_project_question : "1-N 题目意图"
+
+  bh_project ||--o{ bh_project_interview_notes : "1-N Notes"
+  bh_project_interview ||--o{ bh_project_interview_notes : "1-N Notes"
+  bh_project_question ||--o{ bh_project_interview_notes : "1-N Notes"
+  bh_project_question_intent ||--o{ bh_project_interview_notes : "1-N Notes"
+
+  bh_project_interview_notes ||--o{ bh_project_notes_edit_log : "1-N 编辑记录"
+
+  bh_project ||--o{ bh_project_notes_stats_daily : "1-N 统计"
+  bh_project_question ||--o{ bh_project_notes_stats_daily : "1-N 题目统计"
+  bh_project_question_intent ||--o{ bh_project_notes_stats_daily : "1-N 意图统计"

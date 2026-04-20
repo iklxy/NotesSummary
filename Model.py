@@ -15,7 +15,7 @@ class BaseLLMProvider:
     """
     统一的大模型适配接口。
 
-    目前实现 Claude / Anthropic、Gemini、豆包 / 火山方舟 provider，后续可继续按这个协议扩展。
+    目前实现 Claude / Anthropic、Gemini、豆包 / 火山方舟、OpenAI provider，后续可继续按这个协议扩展。
     """
 
     def generate(
@@ -195,6 +195,67 @@ class DoubaoProvider(BaseLLMProvider):
             return str(response)
 
 
+class OpenAIProvider(BaseLLMProvider):
+    """
+    OpenAI provider 适配层，支持官方 OpenAI API 或 OpenAI 兼容接口。
+    """
+
+    def __init__(self, api_key: str, base_url: Optional[str] = None) -> None:
+        try:
+            from openai import OpenAI  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "openai package 未安装，请先执行 `pip install openai` 后再使用 LLM_PROVIDER=openai"
+            ) from exc
+
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = OpenAI(**client_kwargs)
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_completion_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        if not getattr(response, "choices", None):
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+
 class ModelClient:
     """
     大模型调用封装类，内部通过 provider 适配不同官方模型。
@@ -230,6 +291,8 @@ class ModelClient:
             return AnthropicProvider(api_key=api_key, base_url=effective_base_url)
         if provider_name in {"gemini", "google", "google-genai"}:
             return GeminiProvider(api_key=api_key, base_url=effective_base_url)
+        if provider_name in {"openai", "gpt", "chatgpt"}:
+            return OpenAIProvider(api_key=api_key, base_url=effective_base_url)
         if provider_name in {"doubao", "ark", "volcengine", "volcano"}:
             return DoubaoProvider(api_key=api_key, base_url=effective_base_url)
         raise RuntimeError(f"暂不支持的 LLM_PROVIDER: {provider_name}")
@@ -244,6 +307,8 @@ class ModelClient:
             return None
         if provider_name in {"gemini", "google", "google-genai"}:
             return None
+        if provider_name in {"openai", "gpt", "chatgpt"}:
+            return base_url
         if provider_name in {"doubao", "ark", "volcengine", "volcano"}:
             lowered = base_url.lower()
             if "ark.cn" in lowered or "volces.com" in lowered:
