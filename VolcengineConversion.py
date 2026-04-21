@@ -83,6 +83,69 @@ def query_task(task_id):
     return resp_dic
 
 
+def _extract_int(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_utterance_bounds(utt):
+    """
+    从单条 utterance 中提取起止时间。
+
+    优先使用 utterance 级别的 start_time / end_time；
+    如果缺失，则退化到 words 级别的最小/最大时间。
+    """
+    if not isinstance(utt, dict):
+        return None, None
+
+    start_time = _extract_int(utt.get("start_time"))
+    end_time = _extract_int(utt.get("end_time"))
+
+    if start_time is not None or end_time is not None:
+        return start_time, end_time
+
+    words = utt.get("words")
+    if not isinstance(words, list):
+        return None, None
+
+    word_starts = []
+    word_ends = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        word_start = _extract_int(word.get("start_time"))
+        word_end = _extract_int(word.get("end_time"))
+        if word_start is not None:
+            word_starts.append(word_start)
+        if word_end is not None:
+            word_ends.append(word_end)
+
+    return (
+        min(word_starts) if word_starts else None,
+        max(word_ends) if word_ends else None,
+    )
+
+
+def _normalize_bounds(start_time, end_time):
+    if start_time is None and end_time is None:
+        return None, None
+    if start_time is None:
+        start_time = end_time
+    if end_time is None:
+        end_time = start_time
+    if start_time is None or end_time is None:
+        return None, None
+    if end_time < start_time:
+        start_time, end_time = end_time, start_time
+    return start_time, end_time
+
+
 def run_asr(audio_url: str):
     """
     基于给定的音频 URL 执行异步语音识别流程。
@@ -118,7 +181,7 @@ def run_asr(audio_url: str):
         code = resp_obj.get("code")
 
         if code == 1000:
-            text = resp_obj.get("text")
+            text = resp_obj.get("text") or ""
             utterances = resp_obj.get("utterances") or []
             if not text:
                 parts = []
@@ -136,6 +199,8 @@ def run_asr(audio_url: str):
             segments: list[dict] = []
             current_speaker_id: str | None = None
             current_content = ""
+            current_start_time: int | None = None
+            current_end_time: int | None = None
             segment_id = 0
 
             for utt in utterances:
@@ -155,9 +220,13 @@ def run_asr(audio_url: str):
                 if not utt_text:
                     continue
 
+                utt_start_time, utt_end_time = _normalize_bounds(*_extract_utterance_bounds(utt))
+
                 if current_speaker_id is None:
                     current_speaker_id = speaker_id
                     current_content = utt_text
+                    current_start_time = utt_start_time
+                    current_end_time = utt_end_time
                     continue
 
                 if speaker_id == current_speaker_id:
@@ -165,38 +234,49 @@ def run_asr(audio_url: str):
                         current_content = f"{current_content} {utt_text}"
                     else:
                         current_content = utt_text
+                    if current_start_time is None:
+                        current_start_time = utt_start_time
+                    elif utt_start_time is not None:
+                        current_start_time = min(current_start_time, utt_start_time)
+                    if current_end_time is None:
+                        current_end_time = utt_end_time
+                    elif utt_end_time is not None:
+                        current_end_time = max(current_end_time, utt_end_time)
                 else:
+                    seg_start_time, seg_end_time = _normalize_bounds(current_start_time, current_end_time)
                     segment_id += 1
                     segments.append(
                         {
                             "id": segment_id,
                             "speaker_id": current_speaker_id,
                             "speaker_content": current_content,
+                            "start_time": seg_start_time,
+                            "end_time": seg_end_time,
                         }
                     )
                     current_speaker_id = speaker_id
                     current_content = utt_text
+                    current_start_time = utt_start_time
+                    current_end_time = utt_end_time
 
             if current_speaker_id is not None and current_content:
+                seg_start_time, seg_end_time = _normalize_bounds(current_start_time, current_end_time)
                 segment_id += 1
                 segments.append(
                     {
                         "id": segment_id,
                         "speaker_id": current_speaker_id,
                         "speaker_content": current_content,
+                        "start_time": seg_start_time,
+                        "end_time": seg_end_time,
                     }
                 )
 
-            print("识别成功，转写文本：")
+            print("识别成功")
             if text:
-                print(text)
+                print("识别到整场文本内容")
             else:
                 print("未在返回结果中找到文本内容")
-
-            if segments:
-                print("按说话轮次聚合后的内容：")
-                for seg in segments:
-                    print(f"[{seg['id']}] speaker_{seg['speaker_id']}: {seg['speaker_content']}")
 
             return {
                 "full_text": text or "",

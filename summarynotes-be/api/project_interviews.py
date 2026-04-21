@@ -38,6 +38,9 @@ def _save_uploaded_audio_file(
 
     保存规则:
         audio/project_{project_id}/interview_{interview_id}/{文件名}
+
+    返回:
+        保存后的相对路径，供数据库记录和后续工作流使用。
     """
     original_name = upload_file.filename or ""
     if not original_name:
@@ -64,6 +67,11 @@ def _save_uploaded_audio_file(
 
 
 def _get_internal_base() -> str:
+    """
+    获取内部引擎服务的基地址。
+
+    优先读取 INTERNAL_SERVICE_BASE 环境变量，未设置时回退到本机默认地址。
+    """
     base = os.getenv("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000")
     return base.rstrip("/")
 
@@ -73,6 +81,7 @@ def _trigger_workflow_background(interview_id: int) -> None:
     在后台触发内部引擎工作流。
 
     这里不把长耗时工作放进创建访谈请求里，避免前端上传接口阻塞。
+    如果工作流失败，这里只负责更新状态，不向上抛出异常影响上传接口。
     """
     try:
         update_interview_status(interview_id, 1)
@@ -119,6 +128,9 @@ async def create_interview(
             "file_name": 原始文件名,
             "local_path": "project_{project_id}/interview_{interview_id}/{文件名}"
         }
+
+    说明:
+        上传完成后会异步触发转录工作流；该接口只负责创建记录和保存音频。
     """
     clean_name = name.strip()
     if not clean_name:
@@ -161,7 +173,7 @@ def list_project_interviews(project_id: int) -> list[Dict[str, Any]]:
         project_id: 项目 ID，对应 bh_project.id，映射为 bh_project_interview.parse_project_id。
 
     返回:
-        访谈记录字典列表。
+        访谈记录字典列表，每项至少包含 id、name、interview_date、file_name。
     """
     rows = fetch_interviews_by_project(parse_project_id=project_id)
     return rows

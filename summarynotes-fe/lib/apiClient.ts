@@ -1,6 +1,6 @@
 const defaultBaseUrl = "http://127.0.0.1:9000";
 
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
   if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) {
     return process.env.NEXT_PUBLIC_API_BASE_URL;
   }

@@ -1,4 +1,5 @@
 from pathlib import Path
+import mimetypes
 import shutil
 import json
 from typing import Any, Dict, List
@@ -6,6 +7,7 @@ from typing import Any, Dict, List
 import os
 import requests
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from db import (
     delete_interview_graph,
@@ -66,6 +68,33 @@ def _get_audio_root() -> Path:
     api_dir = Path(__file__).resolve().parent
     project_root = api_dir.parent.parent
     return project_root / "audio"
+
+
+def _resolve_audio_file(interview_id: int) -> tuple[Path, str]:
+    """
+    根据访谈 ID 定位本地音频文件。
+
+    该函数会先查访谈记录，读取项目 ID 和原始文件名，再拼出本地 audio 目录下的真实路径。
+    """
+    row = fetch_interview_by_id(interview_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    project_id = row.get("parse_project_id")
+    file_name = row.get("file_name")
+    if project_id is None or not file_name:
+        raise HTTPException(status_code=404, detail="audio file not found")
+
+    audio_path = (
+        _get_audio_root()
+        / f"project_{project_id}"
+        / f"interview_{interview_id}"
+        / str(file_name)
+    )
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="audio file not found")
+
+    return audio_path, str(file_name)
 
 
 def _get_qdrant_base_url() -> str:
@@ -299,6 +328,23 @@ def get_interview_status(interview_id: int) -> InterviewStatusResponse:
     return InterviewStatusResponse(
         interview_id=interview_id,
         status=row.get("status"),
+    )
+
+
+@router.get("/{interview_id}/audio")
+def get_interview_audio(interview_id: int) -> FileResponse:
+    """
+    返回该访谈对应的本地音频文件，供前端播放器直接播放。
+
+    该接口返回的是文件流响应，而不是预先读取到内存的完整二进制内容，
+    方便浏览器按需缓存和 seek。
+    """
+    audio_path, file_name = _resolve_audio_file(interview_id)
+    media_type, _ = mimetypes.guess_type(str(audio_path))
+    return FileResponse(
+        path=str(audio_path),
+        filename=file_name,
+        media_type=media_type or "application/octet-stream",
     )
 
 

@@ -7,6 +7,41 @@ import pymysql
 from config import config
 
 class DbAccess:
+    @staticmethod
+    def _format_summary_timestamp(seg: dict) -> str:
+        """
+        将 ASR 段的时间范围格式化为 summary 表可存储的字符串。
+
+        统一使用毫秒级区间格式：start_ms-end_ms。
+        如果只有一端时间可用，则退化为单点时间 start_ms-start_ms。
+        """
+        raw_timestamp = seg.get("timestamp")
+        if isinstance(raw_timestamp, str) and raw_timestamp.strip():
+            return raw_timestamp.strip()
+
+        start_time = seg.get("start_time")
+        end_time = seg.get("end_time")
+        try:
+            start_ms = int(start_time) if start_time is not None else None
+        except (TypeError, ValueError):
+            start_ms = None
+        try:
+            end_ms = int(end_time) if end_time is not None else None
+        except (TypeError, ValueError):
+            end_ms = None
+
+        if start_ms is None and end_ms is None:
+            return ""
+        if start_ms is None:
+            start_ms = end_ms
+        if end_ms is None:
+            end_ms = start_ms
+        if start_ms is None or end_ms is None:
+            return ""
+        if end_ms < start_ms:
+            start_ms, end_ms = end_ms, start_ms
+        return f"{start_ms}-{end_ms}"
+
     @classmethod
     def get_connection(cls) -> pymysql.connections.Connection:
         """
@@ -75,6 +110,42 @@ class DbAccess:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, (interview_id,))
+                row = cursor.fetchone()
+                return row
+        finally:
+            conn.close()
+
+    @classmethod
+    def get_project_by_id(cls, project_id: int) -> Optional[Dict[str, Any]]:
+        """
+        根据项目 ID 查询 bh_project 表中的单条记录。
+
+        参数:
+            project_id: 项目主键 ID，对应 bh_project.id。
+
+        返回字段至少包含:
+            - id
+            - name
+            - keywords
+            - core_problem
+
+        返回:
+            如果存在则返回项目记录字典，否则返回 None。
+        """
+        sql = """
+            SELECT
+                id,
+                name,
+                keywords,
+                core_problem
+            FROM bh_project
+            WHERE id = %s
+            LIMIT 1
+        """
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, (project_id,))
                 row = cursor.fetchone()
                 return row
         finally:
@@ -197,6 +268,8 @@ class DbAccess:
             speakers:     清洗后的说话轮次列表，每个元素至少包含:
                           - speaker_id: 说话人 ID
                           - speaker_content_clean: 清洗后的文本内容
+                          - start_time/end_time: 可选，ASR 原始分段时间（毫秒）
+                          - timestamp: 可选，若已预先格式化可直接使用
 
         返回:
             实际插入的记录条数。
@@ -219,7 +292,8 @@ class DbAccess:
                     clean_text = seg.get("speaker_content_clean", "")
                     if not clean_text:
                         continue
-                    cursor.execute(sql, (interview_id, "", speaker_id, clean_text, 0))
+                    timestamp = cls._format_summary_timestamp(seg)
+                    cursor.execute(sql, (interview_id, timestamp, speaker_id, clean_text, 0))
                     inserted += 1
             conn.commit()
         except Exception:

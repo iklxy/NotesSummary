@@ -14,6 +14,7 @@ def clean_speakers(
     speakers: List[Dict[str, Any]],
     speaker_roles: Optional[Dict[str, str]] = None,
     term_hints: Optional[List[str]] = None,
+    project_context: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     对按说话轮次切分后的 speakers 列表进行逐段纠错与清洗。
@@ -28,6 +29,8 @@ def clean_speakers(
         speaker_roles: 可选，将 speaker_id 映射为角色标签的字典，
                        例如 {"1": "interviewer", "2": "interviewee"}。
         term_hints:    可选，专业热词提示列表，用于增强术语纠错能力。
+        project_context: 可选，项目背景说明块，会被注入到清洗模型的提示词中，
+                         用于帮助模型理解本次访谈的业务场景和术语偏好。
 
     返回:
         清洗后的轮次列表，每个元素扩展为:
@@ -60,6 +63,7 @@ def clean_speakers(
             speaker_text=raw_text,
             speaker_role=role,
             term_hints=term_hints,
+            project_context=project_context,
         )
 
         cleaned_segment = {
@@ -79,6 +83,7 @@ def clean_file_content_json(
     file_content_json: str,
     speaker_roles: Optional[Dict[str, str]] = None,
     term_hints: Optional[List[str]] = None,
+    project_context: Optional[str] = None,
 ) -> str:
     """
     针对 bh_project_interview.file_content 中的 JSON 结果进行清洗，
@@ -89,6 +94,7 @@ def clean_file_content_json(
                            应包含 result.speakers 结构。
         speaker_roles:     可选，speaker_id 到角色的映射。
         term_hints:        可选，专业术语提示列表。
+        project_context:   可选，项目背景说明块，会在逐段清洗时注入到模型提示词中。
 
     返回:
         更新后的 JSON 字符串，结构大致为:
@@ -116,6 +122,7 @@ def clean_file_content_json(
         speakers=speakers,
         speaker_roles=speaker_roles,
         term_hints=term_hints,
+        project_context=project_context,
     )
 
     enriched: List[Dict[str, Any]] = []

@@ -102,6 +102,36 @@ def fetch_projects() -> list[dict]:
     return rows
 
 
+def fetch_project_by_id(project_id: int) -> dict | None:
+    """
+    根据项目 ID 查询单条项目记录。
+
+    参数:
+        project_id: 项目主键 ID，对应 bh_project.id。
+
+    返回:
+        如果存在则返回项目记录字典，否则返回 None。
+    """
+    sql = """
+        SELECT
+            id,
+            name,
+            keywords,
+            core_problem
+        FROM bh_project
+        WHERE id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
 def fetch_question_intents() -> list[dict]:
     """
     查询所有可用的 question intent。
@@ -596,6 +626,7 @@ def fetch_interviews_by_project(parse_project_id: int) -> list[dict]:
             - name
             - interview_date
             - file_name
+            - file_path
     """
     sql = """
         SELECT

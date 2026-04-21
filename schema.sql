@@ -132,7 +132,7 @@ DROP TABLE IF EXISTS `bh_project_interview_summary`;
 CREATE TABLE `bh_project_interview_summary` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
   `project_interview_id` bigint(20) NOT NULL,
-  `timestamp` varchar(20) DEFAULT NULL,
+  `timestamp` varchar(32) DEFAULT NULL,
   `speaker` varchar(255) DEFAULT NULL,
   `text` longtext DEFAULT NULL,
   `modify` tinyint(2) NOT NULL DEFAULT 0,

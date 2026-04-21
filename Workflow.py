@@ -16,6 +16,50 @@ from DbAccess import DbAccess
 from config import config
 
 
+def _build_project_context(project_row: Dict[str, Any] | None) -> str:
+    """
+    将项目表中的名称、关键词和核心描述，整理为可直接注入 prompt 的背景块。
+
+    参数:
+        project_row: bh_project 表中的项目记录，通常包含 name、keywords、core_problem。
+
+    返回:
+        以【项目背景】开头的多行文本；如果没有有效内容则返回空字符串。
+    """
+    if not project_row:
+        return ""
+
+    name = str(project_row.get("name") or "").strip()
+    keywords = str(project_row.get("keywords") or "").strip()
+    core_problem = str(project_row.get("core_problem") or "").strip()
+
+    lines: List[str] = ["【项目背景】"]
+    if name:
+        lines.append(f"项目名称：{name}")
+    if keywords:
+        lines.append(f"项目关键词：{keywords}")
+    if core_problem:
+        lines.append(f"访谈核心描述：{core_problem}")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+def _load_project_context_by_id(project_id: int) -> str:
+    """
+    按项目 ID 读取项目记录并格式化为背景块。
+
+    该函数仅承担“查询 + 格式化”职责，方便清洗和 notes 阶段复用同一份上下文。
+    """
+    try:
+        project_row = DbAccess.get_project_by_id(project_id)
+    except Exception as e:
+        print(f"[PROJECT] 读取项目背景失败 project_id={project_id}: {e}")
+        return ""
+    return _build_project_context(project_row)
+
+
 def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
     """
     步骤 1：本地上云，返回 {object_key, audio_url}。
@@ -104,9 +148,13 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
     return {"success": True, "file_content": payload}
 
 
-def step_clean_with_llm(file_content_json: str) -> Dict[str, Any]:
+def step_clean_with_llm(file_content_json: str, project_context: str | None = None) -> Dict[str, Any]:
     """
     步骤 3：调用模型进行清洗（去口头禅、统一术语），返回更新后的 JSON 字符串。
+
+    参数:
+        file_content_json: 上一步写入的 file_content JSON。
+        project_context:   可选的项目背景块，会注入到清洗 prompt，帮助模型理解行业语境。
     """
     # 可选：根据项目实际构建 speaker_roles / term_hints
     speaker_roles = {"1": "interviewer", "2": "interviewee"}
@@ -116,6 +164,7 @@ def step_clean_with_llm(file_content_json: str) -> Dict[str, Any]:
             file_content_json=file_content_json,
             speaker_roles=speaker_roles,
             term_hints=term_hints,
+            project_context=project_context,
         )
     except Exception as e:
         return {"success": False, "message": f"clean with llm failed: {e}"}
@@ -127,7 +176,7 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
     步骤 4：将清洗后的 speakers 写入 bh_project_interview_summary（逐句/逐段明细表）。
     目标字段:
         - project_interview_id: interview_id
-        - timestamp: 可空，这里写空字符串
+        - timestamp: 由 ASR 原始分段计算得到的毫秒级时间区间
         - speaker: speaker_id（或映射后的角色）
         - text: speaker_content_clean
         - modify: 0
@@ -225,6 +274,7 @@ def step_generate_notes(
     interview_id: int,
     questions: List[Dict[str, Any]],
     top_k: int = 10,
+    project_context: str | None = None,
 ) -> Dict[str, Any]:
     """
     步骤 7：针对题目列表执行 RAG 检索并调用 LLM 生成 Notes（仅返回内存结果，不落库）。
@@ -234,6 +284,7 @@ def step_generate_notes(
         interview_id: 访谈 ID。
         questions:    步骤 6 返回的题目列表，需包含 research_phase 字段。
         top_k:        每道题目 RAG 检索返回的片段数量上限。
+        project_context: 可选的项目背景块；为空时会根据 project_id 自动回查项目表。
 
     返回结构:
         {
@@ -265,6 +316,9 @@ def step_generate_notes(
             "results": [],
             "message": "no questions to generate notes for",
         }
+
+    if not project_context:
+        project_context = _load_project_context_by_id(project_id)
 
     index_warning = None
     try:
@@ -334,10 +388,11 @@ def step_generate_notes(
                 notes = model_client.generate_notes_for_question_with_fewshot(
                     question_text=question_text,
                     segments=segments,
-                    intent_name=intent_name,
-                    question_type=question_type,
-                    fewshot_samples=fewshot_samples,
-                )
+                intent_name=intent_name,
+                question_type=question_type,
+                fewshot_samples=fewshot_samples,
+                project_context=project_context,
+            )
         except Exception as e:
             results.append(
                 {
@@ -455,6 +510,8 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
     只负责“转录 -> 清洗 -> 写 summary”的工作流。
 
     旧版工作流中的 Notes 生成已拆分出去，后续由独立接口按题目触发。
+    当前工作流会先读取访谈所属项目的关键词与核心描述，并将其注入到清洗阶段，
+    以便后续 summary 的文本更贴合项目语境。
     """
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
         try:
@@ -469,6 +526,14 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         except Exception:
             # 状态更新失败不影响主流程。
             pass
+
+        interview_row = DbAccess.get_interview_by_id(interview_id)
+        if not interview_row:
+            return fail("load_interview", {"message": f"interview {interview_id} not found"})
+        project_id = interview_row.get("parse_project_id")
+        if project_id is None:
+            return fail("load_project", {"message": "project id missing from interview"})
+        project_context = _load_project_context_by_id(int(project_id))
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)
@@ -491,7 +556,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
 
         # 4. LLM 清洗
-        cl = step_clean_with_llm(file_content_json)
+        cl = step_clean_with_llm(file_content_json, project_context=project_context)
         if not cl.get("success"):
             return fail("clean_llm", cl)
         cleaned_json = cl["cleaned_json"]

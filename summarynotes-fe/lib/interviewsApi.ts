@@ -1,4 +1,4 @@
-import { request } from "./apiClient";
+import { getBaseUrl, request } from "./apiClient";
 import {
   DeleteInterviewResponse,
   DeleteQuestionResponse,
@@ -15,15 +15,6 @@ import {
   QuestionIntentItem,
   RunInterviewResponse,
 } from "./types";
-
-const defaultBaseUrl = "http://127.0.0.1:9000";
-
-function getBaseUrl(): string {
-  if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) {
-    return process.env.NEXT_PUBLIC_API_BASE_URL;
-  }
-  return defaultBaseUrl;
-}
 
 export function runInterview(interviewId: number): Promise<RunInterviewResponse> {
   return request<RunInterviewResponse>(`/api/interviews/${interviewId}/run`, {
@@ -187,6 +178,11 @@ export function getProjectInterviews(projectId: number): Promise<ProjectIntervie
 
 export function getInterviewSummary(interviewId: number): Promise<InterviewSummaryResponse> {
   return request<InterviewSummaryResponse>(`/api/interviews/${interviewId}/summary`);
+}
+
+export function getInterviewAudioUrl(interviewId: number): string {
+  const baseUrl = getBaseUrl().replace(/\/$/, "");
+  return `${baseUrl}/api/interviews/${interviewId}/audio`;
 }
 
 export function updateInterviewSummary(

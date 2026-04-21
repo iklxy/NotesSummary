@@ -341,6 +341,24 @@ class ModelClient:
         cls._config_revision = config.revision
 
     @classmethod
+    def _build_project_context_block(cls, project_context: Optional[str]) -> str:
+        """
+        将项目背景文本包装成统一的 prompt 区块。
+
+        参数:
+            project_context: 已整理好的项目背景文本，通常包含名称、关键词和核心描述。
+
+        返回:
+            适合直接拼接进 user prompt 的背景块字符串；如果没有内容则返回空串。
+        """
+        if not project_context:
+            return ""
+        cleaned = project_context.strip()
+        if not cleaned:
+            return ""
+        return f"【项目背景】\n{cleaned}\n\n"
+
+    @classmethod
     def generate(cls, system_prompt: str, user_prompt: str) -> str:
         """
         调用当前配置的 LLM provider，返回文本形式的回复内容。
@@ -363,6 +381,7 @@ class ModelClient:
         speaker_text: str,
         speaker_role: Optional[str] = None,
         term_hints: Optional[List[str]] = None,
+        project_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         使用大模型对单个 speaker 的发言进行纠错和清洗。
@@ -371,6 +390,8 @@ class ModelClient:
             speaker_text: 原始转写文本。
             speaker_role: 说话人角色标签（如 interviewer / interviewee），可选。
             term_hints:   专业热词提示列表，用于纠正专有名词，格式为若干字符串。
+            project_context: 项目背景说明块，可选；用于帮助模型理解本项目的业务语境、
+                             研究对象和行业术语。
 
         返回:
             一个字典，至少包含:
@@ -386,6 +407,7 @@ class ModelClient:
         if term_hints:
             joined_terms = ", ".join(term_hints)
             term_hint_text = f"专业术语提示: {joined_terms}\n"
+        project_context_text = cls._build_project_context_block(project_context)
 
         system_prompt = (
             "你是一个医学与药学访谈文本编辑助手，负责在不改变事实的前提下，"
@@ -393,6 +415,7 @@ class ModelClient:
         )
 
         user_prompt = (
+            f"{project_context_text}"
             f"{term_hint_text}"
             "请根据以下要求清洗这段访谈文本:\n"
             "1. 删除明显的语气词和重复口头禅，例如“呃、嗯、就是、然后、那个”等。\n"
@@ -444,6 +467,7 @@ class ModelClient:
         segments: List[Dict[str, Any]],
         intent_name: Optional[str] = None,
         question_type: Optional[str] = None,
+        project_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         使用大模型针对单个问题生成结构化 Notes。
@@ -457,6 +481,7 @@ class ModelClient:
                            - score
             intent_name:   可选，问题所属意图名称，用于提示模型关注的方向。
             question_type: 可选，问题类型标签，用于给模型提供额外背景。
+            project_context: 项目背景说明块，可选；会作为问题生成 Notes 的全局上下文。
 
         返回:
             一个字典，包含生成的 Notes 结果，约定结构为:
@@ -486,6 +511,7 @@ class ModelClient:
 
         intent_part = intent_name or "未指定"
         qtype_part = question_type or "未指定"
+        project_context_text = cls._build_project_context_block(project_context)
 
         system_prompt = (
             "你是一名医学与药学领域的访谈分析专家，负责根据给定的访谈片段，"
@@ -494,6 +520,7 @@ class ModelClient:
         )
 
         user_prompt = (
+            f"{project_context_text}"
             "下面是一道研究问题及其相关的访谈片段，请你基于这些信息生成结构化的 Notes。\n\n"
             f"【问题类型】{qtype_part}\n"
             f"【问题意图】{intent_part}\n"
@@ -570,6 +597,7 @@ class ModelClient:
         intent_name: Optional[str],
         question_type: Optional[str],
         fewshot_samples: List[Dict[str, Any]],
+        project_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         使用大模型针对单个问题生成结构化 Notes，并注入 few-shot 示例。
@@ -580,6 +608,7 @@ class ModelClient:
             intent_name:      问题所属意图名称或描述。
             question_type:    问题类型标签。
             fewshot_samples:  few-shot 样本列表，由 Fewshot.select_fewshot_samples 返回。
+            project_context:  项目背景说明块，可选；会与 few-shot 示例一起注入到 prompt 中。
 
         返回:
             结构与 generate_notes_for_question 相同的 Notes 结果字典。
@@ -597,6 +626,7 @@ class ModelClient:
 
         intent_part = intent_name or "未指定"
         qtype_part = question_type or "未指定"
+        project_context_text = cls._build_project_context_block(project_context)
 
         system_prompt = (
             "你是一名医学与药学领域的访谈分析专家，负责根据给定的访谈片段，"
@@ -605,6 +635,7 @@ class ModelClient:
         )
 
         base_user_prompt = (
+            f"{project_context_text}"
             "下面是一道研究问题及其相关的访谈片段，请你基于这些信息生成结构化的 Notes。\n\n"
             f"【问题类型】{qtype_part}\n"
             f"【问题意图】{intent_part}\n"

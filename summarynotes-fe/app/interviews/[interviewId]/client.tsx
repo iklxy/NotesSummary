@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Layout,
   Typography,
@@ -16,7 +16,9 @@ import {
   message,
   Tag,
   Select,
+  Slider,
 } from "antd";
+import { PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import {
   createInterviewQuestions,
   deleteQuestion,
@@ -24,6 +26,7 @@ import {
   deleteQuestionFewshotSample,
   generateQuestionNotes,
   getInterviewFewshotSamples,
+  getInterviewAudioUrl,
   getInterviewQuestions,
   getQuestionIntents,
   getInterviewNotes,
@@ -32,6 +35,7 @@ import {
 } from "../../../lib/interviewsApi";
 import type {
   InterviewSummaryResponse,
+  InterviewSummaryItem,
 } from "../../../lib/interviewsApi";
 import type {
   InterviewNotesResponse,
@@ -64,6 +68,58 @@ interface FewshotDraft {
   evidence: FewshotEvidenceDraft[];
 }
 
+interface AudioTimestampRange {
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * 将 summary 字段里保存的毫秒区间字符串解析成可操作的时间范围。
+ * 支持 "1234-5678" 和单点 "1234" 两种写法。
+ */
+function parseAudioTimestampRange(timestamp?: string | null): AudioTimestampRange | null {
+  if (!timestamp) {
+    return null;
+  }
+  const match = timestamp.trim().match(/^(\d+)(?:-(\d+))?$/);
+  if (!match) {
+    return null;
+  }
+  const startMs = Number(match[1]);
+  const endMs = match[2] ? Number(match[2]) : startMs;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return null;
+  }
+  return {
+    startMs: Math.min(startMs, endMs),
+    endMs: Math.max(startMs, endMs),
+  };
+}
+
+/**
+ * 将毫秒数格式化为 mm:ss，用于 summary 标签和播放器时间显示。
+ */
+function formatAudioClock(ms: number): string {
+  const safeMs = Math.max(0, Math.floor(ms));
+  const totalSeconds = Math.floor(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * 将 summary 的原始时间戳转成用户更易读的 mm:ss 区间。
+ */
+function formatAudioTimestampRange(timestamp?: string | null): string {
+  const range = parseAudioTimestampRange(timestamp);
+  if (!range) {
+    return timestamp?.trim() || "";
+  }
+  const start = formatAudioClock(range.startMs);
+  const end = formatAudioClock(range.endMs);
+  return start === end ? start : `${start} - ${end}`;
+}
+
 function createEmptyFewshotDraft(intentId?: number): FewshotDraft {
   return {
     intent_id: intentId,
@@ -83,6 +139,8 @@ function createEmptyFewshotDraft(intentId?: number): FewshotDraft {
 
 export default function InterviewDetailClient({ interviewId }: Props) {
   const interviewIdNum = interviewId;
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingSeekRef = useRef<{ seekMs: number; autoplay: boolean } | null>(null);
 
   const [summary, setSummary] = useState<InterviewSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -90,6 +148,11 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
   const [draftSummaryText, setDraftSummaryText] = useState("");
   const [savingSummaryId, setSavingSummaryId] = useState<number | null>(null);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0);
+  const [audioIsPlaying, setAudioIsPlaying] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [audioSeeking, setAudioSeeking] = useState(false);
 
   const [notes, setNotes] = useState<InterviewNotesResponse | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -152,6 +215,15 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     } else {
       setSummaryError("无效的访谈 ID");
     }
+  }, [interviewIdNum]);
+
+  useEffect(() => {
+    setAudioDuration(0);
+    setAudioCurrentTime(0);
+    setAudioIsPlaying(false);
+    setAudioError(null);
+    setAudioSeeking(false);
+    pendingSeekRef.current = null;
   }, [interviewIdNum]);
 
   useEffect(() => {
@@ -293,6 +365,36 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     return map;
   }, [summary]);
 
+  const audioUrl = useMemo(() => getInterviewAudioUrl(interviewIdNum), [interviewIdNum]);
+
+  const summaryAudioRanges = useMemo(() => {
+    return (summary?.items || [])
+      .map((item) => ({
+        item,
+        range: parseAudioTimestampRange(item.timestamp),
+      }))
+      .filter((entry) => entry.range !== null)
+      .map((entry) => ({
+        id: entry.item.id,
+        startMs: entry.range!.startMs,
+        endMs: entry.range!.endMs,
+      }));
+  }, [summary]);
+
+  const activeSummaryId = useMemo(() => {
+    if (summaryAudioRanges.length === 0) {
+      return null;
+    }
+    const currentMs = Math.floor(audioCurrentTime * 1000);
+    for (let index = summaryAudioRanges.length - 1; index >= 0; index -= 1) {
+      const entry = summaryAudioRanges[index];
+      if (currentMs >= entry.startMs && currentMs <= entry.endMs + 200) {
+        return entry.id;
+      }
+    }
+    return null;
+  }, [audioCurrentTime, summaryAudioRanges]);
+
   const fewshotSamplesByQuestion = useMemo(() => {
     const map: Record<number, FewshotSampleItem[]> = {};
     for (const sample of fewshotSamples) {
@@ -351,6 +453,115 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     }
     const value = noteObj[fieldName];
     return typeof value === "string" ? value : "";
+  };
+
+  const seekAudioToMs = async (seekMs: number, autoplay: boolean) => {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(seekMs) || seekMs < 0) {
+      return;
+    }
+
+    const applySeek = async () => {
+      const nextTime = seekMs / 1000;
+      audio.currentTime = nextTime;
+      setAudioCurrentTime(nextTime);
+      if (autoplay) {
+        await audio.play();
+        setAudioIsPlaying(true);
+      }
+    };
+
+    if (audio.readyState < 1) {
+      pendingSeekRef.current = { seekMs, autoplay };
+      audio.load();
+      return;
+    }
+
+    try {
+      await applySeek();
+    } catch (e) {
+      message.warning(e instanceof Error ? e.message : "定位音频失败");
+      setAudioIsPlaying(false);
+    }
+  };
+
+  const handleSummaryClick = async (item: InterviewSummaryItem) => {
+    const range = parseAudioTimestampRange(item.timestamp);
+    scrollToSummary(String(item.id));
+    if (!range) {
+      message.info("当前 summary 还没有可用时间戳");
+      return;
+    }
+    await seekAudioToMs(range.startMs, true);
+  };
+
+  const handleAudioToggle = async () => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    if (audio.paused) {
+      try {
+        await audio.play();
+        setAudioIsPlaying(true);
+      } catch (e) {
+        setAudioIsPlaying(false);
+        message.warning(e instanceof Error ? e.message : "播放失败");
+      }
+      return;
+    }
+    audio.pause();
+    setAudioIsPlaying(false);
+  };
+
+  const handleAudioLoadedMetadata = () => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    setAudioDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+    setAudioError(null);
+    const pending = pendingSeekRef.current;
+    if (pending) {
+      pendingSeekRef.current = null;
+      void seekAudioToMs(pending.seekMs, pending.autoplay);
+    }
+  };
+
+  const handleAudioTimeUpdate = () => {
+    const audio = audioRef.current;
+    if (!audio || audioSeeking) {
+      return;
+    }
+    setAudioCurrentTime(audio.currentTime);
+  };
+
+  const handleAudioSeekChange = (value: number) => {
+    setAudioSeeking(true);
+    setAudioCurrentTime(value);
+  };
+
+  const handleAudioSeekAfterChange = async (value: number) => {
+    setAudioSeeking(false);
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    try {
+      audio.currentTime = value;
+      setAudioCurrentTime(value);
+    } catch (e) {
+      message.warning(e instanceof Error ? e.message : "拖动进度条失败");
+    }
+  };
+
+  const handleAudioEnded = () => {
+    setAudioIsPlaying(false);
+  };
+
+  const handleAudioError = () => {
+    setAudioIsPlaying(false);
+    setAudioError("音频加载失败，请确认原始文件仍可访问");
   };
 
   const beginEditSummary = (summaryId: number, text: string) => {
@@ -808,8 +1019,15 @@ export default function InterviewDetailClient({ interviewId }: Props) {
               style={{
                 borderRadius: 24,
                 boxShadow: "0 16px 48px -30px rgba(15,23,42,0.28)",
+                height: "calc(100vh - 96px)",
               }}
-              bodyStyle={{ padding: 20 }}
+              bodyStyle={{
+                height: "100%",
+                padding: 20,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
             >
               <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 16 }}>
                 <div>
@@ -826,88 +1044,197 @@ export default function InterviewDetailClient({ interviewId }: Props) {
               ) : summaryError ? (
                 <Alert type="error" message={summaryError} />
               ) : (
-                <div style={{ paddingRight: 8 }}>
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 16,
+                  }}
+                >
                   {summary?.items && summary.items.length > 0 ? (
-                    summary.items.map((item) => {
-                      const speaker = (item.speaker || "").trim() || "未知角色";
-                      const side = speakerSideMap[speaker] || "left";
-                      const timestamp = item.timestamp || "";
-                      const text = item.text || "";
-                      const isEditing = editingSummaryId === item.id;
-                      const cardText = isEditing ? draftSummaryText : text;
-                      const sideLabel = getSideLabel(side);
-                      return (
-                        <div
-                          key={item.id}
-                          id={`summary-item-${item.id}`}
-                          style={{
-                            display: "flex",
-                            justifyContent: side === "left" ? "flex-start" : "flex-end",
-                            marginBottom: 12,
-                          }}
-                        >
-                          <Card
-                            size="small"
-                            style={{
-                              maxWidth: "82%",
-                              backgroundColor: side === "left" ? "#ffffff" : "#eef6ff",
-                              borderRadius: 18,
-                              boxShadow: "0 8px 24px -18px rgba(15,23,42,0.28)",
-                            }}
-                          >
-                            <Space
-                              style={{ width: "100%", justifyContent: "space-between" }}
-                              align="start"
+                    <>
+                      <div
+                        style={{
+                          flex: 1,
+                          minHeight: 0,
+                          overflowY: "auto",
+                          paddingRight: 8,
+                        }}
+                      >
+                        {summary.items.map((item) => {
+                          const speaker = (item.speaker || "").trim() || "未知角色";
+                          const side = speakerSideMap[speaker] || "left";
+                          const timestamp = item.timestamp || "";
+                          const text = item.text || "";
+                          const isEditing = editingSummaryId === item.id;
+                          const cardText = isEditing ? draftSummaryText : text;
+                          const sideLabel = getSideLabel(side);
+                          const isActive = activeSummaryId === item.id;
+                          return (
+                            <div
+                              key={item.id}
+                              id={`summary-item-${item.id}`}
+                              style={{
+                                display: "flex",
+                                justifyContent: side === "left" ? "flex-start" : "flex-end",
+                                marginBottom: 12,
+                                cursor: isEditing ? "default" : "pointer",
+                              }}
+                              onClick={
+                                isEditing
+                                  ? undefined
+                                  : () => {
+                                      void handleSummaryClick(item);
+                                    }
+                              }
                             >
-                              <Space size={8} wrap>
-                                <Tag color={side === "left" ? "blue" : "cyan"}>
-                                  {sideLabel}
-                                </Tag>
-                                <Tag>summary_id: {item.id}</Tag>
-                                {timestamp ? (
-                                  <Text type="secondary" style={{ fontSize: 12 }}>
-                                    {timestamp}
-                                  </Text>
-                                ) : null}
-                              </Space>
-                              {!isEditing ? (
-                                <Button
-                                  type="link"
-                                  size="small"
-                                  style={{ padding: 0, height: "auto" }}
-                                  onClick={() => beginEditSummary(item.id, text)}
+                              <Card
+                                size="small"
+                                style={{
+                                  maxWidth: "82%",
+                                  backgroundColor: isActive
+                                    ? "#eff6ff"
+                                    : side === "left"
+                                      ? "#ffffff"
+                                      : "#eef6ff",
+                                  borderRadius: 18,
+                                  boxShadow: isActive
+                                    ? "0 12px 32px -18px rgba(37,99,235,0.55)"
+                                    : "0 8px 24px -18px rgba(15,23,42,0.28)",
+                                  border: isActive ? "1px solid rgba(37,99,235,0.35)" : undefined,
+                                }}
+                              >
+                                <Space
+                                  style={{ width: "100%", justifyContent: "space-between" }}
+                                  align="start"
                                 >
-                                  编辑
-                                </Button>
-                              ) : null}
-                            </Space>
-                            {!isEditing ? (
-                              <Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
-                                {text}
-                              </Paragraph>
-                            ) : (
-                              <div style={{ marginTop: 8 }}>
-                                <Input.TextArea
-                                  value={cardText}
-                                  autoSize={{ minRows: 3, maxRows: 8 }}
-                                  onChange={(e) => setDraftSummaryText(e.target.value)}
-                                />
-                                <Space style={{ marginTop: 8 }}>
-                                  <Button
-                                    type="primary"
-                                    loading={savingSummaryId === item.id}
-                                    onClick={() => void saveSummary(item.id)}
-                                  >
-                                    保存
-                                  </Button>
-                                  <Button onClick={cancelEditSummary}>取消</Button>
+                                  <Space size={8} wrap>
+                                    <Tag color={side === "left" ? "blue" : "cyan"}>
+                                      {sideLabel}
+                                    </Tag>
+                                    <Tag>summary_id: {item.id}</Tag>
+                                    {timestamp ? (
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        {formatAudioTimestampRange(timestamp)}
+                                      </Text>
+                                    ) : null}
+                                  </Space>
+                                  {!isEditing ? (
+                                    <Button
+                                      type="link"
+                                      size="small"
+                                      style={{ padding: 0, height: "auto" }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        beginEditSummary(item.id, text);
+                                      }}
+                                    >
+                                      编辑
+                                    </Button>
+                                  ) : null}
                                 </Space>
-                              </div>
-                            )}
-                          </Card>
-                        </div>
-                      );
-                    })
+                                {!isEditing ? (
+                                  <Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
+                                    {text}
+                                  </Paragraph>
+                                ) : (
+                                  <div style={{ marginTop: 8 }}>
+                                    <Input.TextArea
+                                      value={cardText}
+                                      autoSize={{ minRows: 3, maxRows: 8 }}
+                                      onChange={(e) => setDraftSummaryText(e.target.value)}
+                                    />
+                                    <Space style={{ marginTop: 8 }}>
+                                      <Button
+                                        type="primary"
+                                        loading={savingSummaryId === item.id}
+                                        onClick={() => void saveSummary(item.id)}
+                                      >
+                                        保存
+                                      </Button>
+                                      <Button onClick={cancelEditSummary}>取消</Button>
+                                    </Space>
+                                  </div>
+                                )}
+                              </Card>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div
+                        style={{
+                          borderTop: "1px solid #e2e8f0",
+                          paddingTop: 16,
+                          background: "linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)",
+                          borderRadius: 18,
+                        }}
+                      >
+                        <audio
+                          ref={audioRef}
+                          src={audioUrl}
+                          preload="metadata"
+                          onLoadedMetadata={handleAudioLoadedMetadata}
+                          onTimeUpdate={handleAudioTimeUpdate}
+                          onEnded={handleAudioEnded}
+                          onError={handleAudioError}
+                          onPlay={() => setAudioIsPlaying(true)}
+                          onPause={() => setAudioIsPlaying(false)}
+                        />
+                        <Space
+                          style={{ width: "100%", justifyContent: "space-between", marginBottom: 12 }}
+                          align="center"
+                        >
+                          <div>
+                            <Text type="secondary">音频播放器</Text>
+                            <Title level={5} style={{ margin: 0 }}>
+                              点击 summary 自动跳转
+                            </Title>
+                          </div>
+                          <Tag color={audioIsPlaying ? "green" : "default"}>
+                            {audioIsPlaying ? "播放中" : "已暂停"}
+                          </Tag>
+                        </Space>
+                        {audioError ? <Alert type="warning" message={audioError} /> : null}
+                        <Space style={{ width: "100%", alignItems: "center", marginTop: 12 }}>
+                          <Button
+                            type="primary"
+                            shape="circle"
+                            icon={audioIsPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                            onClick={() => void handleAudioToggle()}
+                          />
+                          <div style={{ flex: 1 }}>
+                            <Slider
+                              min={0}
+                              max={Math.max(audioDuration || 0, 1)}
+                              step={0.1}
+                              value={Math.min(audioCurrentTime, Math.max(audioDuration || 0, 1))}
+                              tooltip={{
+                                formatter: (value) =>
+                                  formatAudioClock(Number(value ?? 0) * 1000),
+                              }}
+                              onChange={(value) => handleAudioSeekChange(Number(value))}
+                              onAfterChange={(value) =>
+                                void handleAudioSeekAfterChange(Number(value))
+                              }
+                            />
+                            <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                              <Text type="secondary">
+                                当前：{formatAudioClock(audioCurrentTime * 1000)}
+                              </Text>
+                              <Text type="secondary">
+                                总时长：{formatAudioClock((audioDuration || 0) * 1000)}
+                              </Text>
+                            </Space>
+                          </div>
+                        </Space>
+                        <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+                          点击任意 summary 可跳到对应开始时间，播放器会自动同步进度。
+                        </Text>
+                      </div>
+                    </>
                   ) : (
                     <Text type="secondary">暂无原文数据。</Text>
                   )}
