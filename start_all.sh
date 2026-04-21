@@ -29,6 +29,25 @@ ENGINE_PORT="${ENGINE_PORT:-8000}"
 BFF_PORT="${BFF_PORT:-9000}"
 FE_PORT="${FE_PORT:-3000}"
 
+detect_primary_ip() {
+  local ip=""
+  if command -v hostname >/dev/null 2>&1; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  if [[ -z "${ip:-}" ]] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')"
+  fi
+  if [[ -z "${ip:-}" ]]; then
+    ip="127.0.0.1"
+  fi
+  printf '%s' "$ip"
+}
+
+if [[ -z "${NEXT_PUBLIC_API_BASE_URL:-}" ]]; then
+  PRIMARY_IP="$(detect_primary_ip)"
+  export NEXT_PUBLIC_API_BASE_URL="http://${PRIMARY_IP}:${BFF_PORT}"
+fi
+
 ENGINE_PID_FILE="$PID_DIR/engine.pid"
 BFF_PID_FILE="$PID_DIR/bff.pid"
 FE_PID_FILE="$PID_DIR/fe.pid"
@@ -263,6 +282,7 @@ case "${1:-start}" in
     echo "引擎: http://127.0.0.1:${ENGINE_PORT}"
     echo "BFF:   http://127.0.0.1:${BFF_PORT}"
     echo "FE:    http://127.0.0.1:${FE_PORT}"
+    echo "前端 API Base: ${NEXT_PUBLIC_API_BASE_URL}"
     ;;
   stop)
     stop_process "前端" "$FE_PID_FILE" "$FE_PORT"
