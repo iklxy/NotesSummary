@@ -169,7 +169,8 @@ run_python_service() {
 
   local cmd=()
   if [[ -n "$conda_env" ]]; then
-    cmd=(conda run -n "$conda_env" "$PYTHON_BIN" -m uvicorn "$module" --host 0.0.0.0 --port "$port")
+    # `--no-capture-output` 避免 conda run 在后台启动时把 uvicorn 包成一个容易被提前终止的 wrapper。
+    cmd=(conda run --no-capture-output -n "$conda_env" "$PYTHON_BIN" -m uvicorn "$module" --host 0.0.0.0 --port "$port")
   else
     cmd=("$PYTHON_BIN" -m uvicorn "$module" --host 0.0.0.0 --port "$port")
   fi
