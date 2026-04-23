@@ -78,4 +78,3 @@ def list_projects() -> list[Dict[str, Any]]:
     """
     rows = fetch_projects()
     return rows
-

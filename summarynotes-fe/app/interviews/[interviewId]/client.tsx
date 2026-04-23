@@ -18,7 +18,7 @@ import {
   Select,
   Slider,
 } from "antd";
-import { PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { DownloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import {
   createInterviewQuestions,
   deleteQuestion,
@@ -408,6 +408,45 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   }, [fewshotSamples]);
 
   const getSideLabel = (side: "left" | "right") => (side === "left" ? "1" : "2");
+
+  const exportSummaryAsTxt = () => {
+    if (!summary?.items || summary.items.length === 0) {
+      message.warning("当前没有可导出的 summary");
+      return;
+    }
+
+    const speakerMap = new Map<string, string>();
+    let speakerIndex = 0;
+    const lines: string[] = [];
+
+    lines.push(`interview_id: ${interviewIdNum}`);
+    lines.push("");
+
+    for (const item of summary.items) {
+      const rawSpeaker = (item.speaker || "").trim() || "unknown";
+      if (!speakerMap.has(rawSpeaker)) {
+        speakerIndex += 1;
+        speakerMap.set(rawSpeaker, `speaker${speakerIndex}`);
+      }
+      const speakerLabel = speakerMap.get(rawSpeaker) || rawSpeaker;
+      const text = (item.text || "").trim();
+      if (!text) {
+        continue;
+      }
+      lines.push(`${speakerLabel}: ${text}`);
+    }
+
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `interview-${interviewIdNum}-summary.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    message.success("已开始导出 TXT");
+  };
 
   const getNoteObject = (noteJson: unknown): Record<string, unknown> | null => {
     if (noteJson && typeof noteJson === "object" && !Array.isArray(noteJson)) {
@@ -953,6 +992,9 @@ export default function InterviewDetailClient({ interviewId }: Props) {
         <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
           访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
         </Title>
+        <Button icon={<DownloadOutlined />} onClick={exportSummaryAsTxt}>
+          导出 TXT
+        </Button>
       </Header>
       <Content className="bg-slate-50">
         <div

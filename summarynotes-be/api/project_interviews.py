@@ -6,6 +6,7 @@ import requests
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 
+from Hotword import save_hotword_state
 from db import (
     fetch_interviews_by_project,
     insert_interview,
@@ -108,6 +109,7 @@ async def create_interview(
     background_tasks: BackgroundTasks,
     name: str = Form(...),
     interview_date: Optional[str] = Form(None),
+    hotword_keys: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
     """
@@ -147,6 +149,9 @@ async def create_interview(
             interview_date=interview_date,
             file_name=original_name,
         )
+        keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
+        if keys:
+            save_hotword_state("interview", interview_id, keys)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"insert interview failed: {e}")
 

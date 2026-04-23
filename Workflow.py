@@ -11,7 +11,7 @@ from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 from Fewshot import select_fewshot_samples
-from Hotword import load_term_hints_from_file
+from Hotword import load_term_hints_from_state, merge_term_hints
 from DbAccess import DbAccess
 from config import config
 
@@ -128,6 +128,21 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
         project_id = row.get("parse_project_id")
         file_name = row.get("file_name") or f"{interview_id}.wav"
 
+        speakers = asr_result.get("speakers", [])
+        transcript = []
+        for idx, seg in enumerate(speakers, start=1):
+            if not isinstance(seg, dict):
+                continue
+            transcript.append(
+                {
+                    "uid": f"u{idx:04d}",
+                    "speaker_id": str(seg.get("speaker_id", "")),
+                    "start_time": seg.get("start_time"),
+                    "end_time": seg.get("end_time"),
+                    "text": seg.get("speaker_content", ""),
+                }
+            )
+
         payload = {
             "audio": {
                 "project_id": project_id,
@@ -139,7 +154,8 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
             },
             "result": {
                 "full_text": asr_result.get("full_text", ""),
-                "speakers": asr_result.get("speakers", []),
+                "speakers": speakers,
+                "transcript": transcript,
             },
         }
         DbAccess.update_interview_file_content(interview_id, json.dumps(payload, ensure_ascii=False))
@@ -148,23 +164,58 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
     return {"success": True, "file_content": payload}
 
 
-def step_clean_with_llm(file_content_json: str, project_context: str | None = None) -> Dict[str, Any]:
+def step_extract_interview_context(
+    interview_id: int,
+    project_context: str | None = None,
+    term_hints: List[str] | None = None,
+) -> Dict[str, Any]:
     """
-    步骤 3：调用模型进行清洗（去口头禅、统一术语），返回更新后的 JSON 字符串。
+    步骤 4：从已落库的 file_content 中读取整篇 ASR 全文，提炼访谈背景说明。
+    """
+    try:
+        row = DbAccess.get_interview_by_id(interview_id)
+        if not row:
+            return {"success": False, "message": f"interview {interview_id} not found"}
+        file_content_json = row.get("file_content") or ""
+        if not file_content_json.strip():
+            return {"success": False, "message": "file_content is empty"}
+        obj = json.loads(file_content_json)
+        full_text = (obj.get("result") or {}).get("full_text") or ""
+        if not str(full_text).strip():
+            return {"success": False, "message": "full_text is empty"}
+        client = ModelClient()
+        interview_context = client.extract_interview_context(
+            full_text=str(full_text),
+            project_context=project_context,
+            term_hints=term_hints,
+        )
+    except Exception as e:
+        return {"success": False, "message": f"extract interview context failed: {e}"}
+    return {"success": True, "interview_context": interview_context}
+
+
+def step_clean_with_llm(
+    file_content_json: str,
+    project_context: str | None = None,
+    interview_context: Dict[str, Any] | str | None = None,
+    term_hints: List[str] | None = None,
+) -> Dict[str, Any]:
+    """
+    步骤 5：先逐段纠错，再逐段清洗，返回更新后的 JSON 字符串。
 
     参数:
         file_content_json: 上一步写入的 file_content JSON。
         project_context:   可选的项目背景块，会注入到清洗 prompt，帮助模型理解行业语境。
     """
-    # 可选：根据项目实际构建 speaker_roles / term_hints
     speaker_roles = {"1": "interviewer", "2": "interviewee"}
-    term_hints: List[str] = load_term_hints_from_file(config.TERM_HINTS_FILE)
+    effective_term_hints = merge_term_hints(term_hints or [])
     try:
         updated_json = clean_file_content_json(
             file_content_json=file_content_json,
             speaker_roles=speaker_roles,
-            term_hints=term_hints,
+            term_hints=effective_term_hints,
             project_context=project_context,
+            interview_context=interview_context,
         )
     except Exception as e:
         return {"success": False, "message": f"clean with llm failed: {e}"}
@@ -507,10 +558,10 @@ def step_write_notes_results(notes_block: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_workflow(interview_id: int) -> Dict[str, Any]:
     """
-    只负责“转录 -> 清洗 -> 写 summary”的工作流。
+    只负责“转录 -> 背景提炼 -> 纠错 -> 清洗 -> 写 summary”的工作流。
 
     旧版工作流中的 Notes 生成已拆分出去，后续由独立接口按题目触发。
-    当前工作流会先读取访谈所属项目的关键词与核心描述，并将其注入到清洗阶段，
+    当前工作流会先读取访谈所属项目的背景描述，并将其注入到清洗阶段，
     以便后续 summary 的文本更贴合项目语境。
     """
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
@@ -534,6 +585,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if project_id is None:
             return fail("load_project", {"message": "project id missing from interview"})
         project_context = _load_project_context_by_id(int(project_id))
+        term_hints = load_term_hints_from_state(interview_id=interview_id)
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)
@@ -555,13 +607,28 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         file_content_obj = st["file_content"]
         file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
 
-        # 4. LLM 清洗
-        cl = step_clean_with_llm(file_content_json, project_context=project_context)
+        # 4. 提炼访谈背景
+        ec = step_extract_interview_context(
+            interview_id,
+            project_context=project_context,
+            term_hints=term_hints,
+        )
+        if not ec.get("success"):
+            return fail("extract_interview_context", ec)
+        interview_context = ec["interview_context"]
+
+        # 5. LLM 清洗
+        cl = step_clean_with_llm(
+            file_content_json,
+            project_context=project_context,
+            interview_context=interview_context,
+            term_hints=term_hints,
+        )
         if not cl.get("success"):
             return fail("clean_llm", cl)
         cleaned_json = cl["cleaned_json"]
 
-        # 5. 写 summary
+        # 6. 写 summary
         ws = step_write_summary(interview_id, cleaned_json)
         if not ws.get("success"):
             return fail("write_summary", ws)

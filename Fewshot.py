@@ -130,7 +130,7 @@ def build_fewshot_prompt_block(samples: List[Dict[str, Any]]) -> str:
         return ""
 
     lines: List[str] = []
-    lines.append("下面是若干个历史示例。每个示例包含【标准化的 Notes JSON】。\n")
+    lines.append("以下是历史示例，仅用于学习输出结构和写法，不要复述其中的业务事实。")
 
     for idx, sample in enumerate(samples, start=1):
         raw = sample.get("sample_json")
@@ -138,10 +138,10 @@ def build_fewshot_prompt_block(samples: List[Dict[str, Any]]) -> str:
             json_text = json.dumps(raw, ensure_ascii=False)
         else:
             json_text = str(raw)
-        lines.append(f"示例 {idx}：")
+        lines.append(f"【历史示例 {idx}】")
         lines.append("标准化 Notes（JSON）：")
         lines.append(json_text)
         lines.append("")
 
-    lines.append("请参照上述示例的结构和书写风格，对当前题目生成 Notes。")
+    lines.append("请只根据当前题目生成新的 JSON，不要复用示例中的具体业务内容。")
     return "\n".join(lines)

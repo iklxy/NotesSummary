@@ -1,0 +1,9 @@
+{
+  "interview": [
+    {
+      "code": "tumor_cd",
+      "label": "肿瘤伴随诊断热词",
+      "file": "interview/tumor_companion_diagnostics.txt"
+    }
+  ]
+}

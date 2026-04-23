@@ -1,7 +1,14 @@
 "@Date: 2026-04-15"
 "@Author: lixinyang"
 
+import sys
+from pathlib import Path
+
 from fastapi import FastAPI
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from api.interviews import router as interviews_router
 from api.projects import router as projects_router

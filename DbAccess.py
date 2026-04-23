@@ -20,7 +20,11 @@ class DbAccess:
             return raw_timestamp.strip()
 
         start_time = seg.get("start_time")
+        if start_time is None:
+            start_time = seg.get("start_ms")
         end_time = seg.get("end_time")
+        if end_time is None:
+            end_time = seg.get("end_ms")
         try:
             start_ms = int(start_time) if start_time is not None else None
         except (TypeError, ValueError):

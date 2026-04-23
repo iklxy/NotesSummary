@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button, Card, Col, Form, Input, Layout, List, Modal, Row, Space, Typography, message } from "antd";
 import { DatePicker, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { DownOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { DownOutlined } from "@ant-design/icons";
 import { Project } from "../lib/types";
 import { createProject, getProjects } from "../lib/projectsApi";
 import {
@@ -13,10 +13,8 @@ import {
   createInterview,
   getProjectInterviews,
 } from "../lib/interviewsApi";
-import {
-  PROJECT_KEYWORD_OPTIONS,
-  PROJECT_KEYWORD_PAGE_SIZE,
-} from "../lib/projectKeywordOptions";
+import HotwordSelector from "../components/HotwordSelector";
+import { INTERVIEW_HOTWORD_OPTIONS } from "../lib/hotwordOptions";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -34,8 +32,9 @@ export default function Home() {
   const [interviewForm] = Form.useForm();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [expandedProjectIds, setExpandedProjectIds] = useState<number[]>([]);
-  const [selectedKeywordValues, setSelectedKeywordValues] = useState<string[]>([]);
-  const [keywordPage, setKeywordPage] = useState(0);
+  const [selectedInterviewHotwordValues, setSelectedInterviewHotwordValues] = useState<string[]>(
+    [],
+  );
 
   const formatInterviewDate = (value?: string | null) => {
     if (!value) {
@@ -44,39 +43,9 @@ export default function Home() {
     return value.includes("T") ? value.split("T")[0] : value;
   };
 
-  const keywordPageCount = Math.max(
-    1,
-    Math.ceil(PROJECT_KEYWORD_OPTIONS.length / PROJECT_KEYWORD_PAGE_SIZE),
-  );
-
-  const keywordOptionsForPage = useMemo(() => {
-    // 关键词面板按固定 2x2 网格分页，每页展示 4 个词。
-    const start = keywordPage * PROJECT_KEYWORD_PAGE_SIZE;
-    return PROJECT_KEYWORD_OPTIONS.slice(start, start + PROJECT_KEYWORD_PAGE_SIZE);
-  }, [keywordPage]);
-
-  const syncKeywordField = (values: string[]) => {
-    // 后端仍按逗号分隔字符串存储，这里统一负责拼接。
-    setSelectedKeywordValues(values);
-    form.setFieldValue("keywords", values.join(","));
-  };
-
-  const parseKeywordValues = (value?: string | null) => {
-    // 编辑项目时把保存的字符串还原成勾选态。
-    if (!value) {
-      return [];
-    }
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  };
-
   const openCreateProject = () => {
     setEditingProject(null);
     form.resetFields();
-    setKeywordPage(0);
-    syncKeywordField([]);
     setModalVisible(true);
   };
 
@@ -98,18 +67,10 @@ export default function Home() {
 
   const openEditProject = (project: Project) => {
     setEditingProject(project);
-    const values = parseKeywordValues(project.keywords ?? "");
     form.setFieldsValue({
       name: project.name,
       core_description: project.core_problem ?? "",
     });
-    const firstMatchedIndex = PROJECT_KEYWORD_OPTIONS.findIndex((item) => values.includes(item));
-    if (firstMatchedIndex >= 0) {
-      setKeywordPage(Math.floor(firstMatchedIndex / PROJECT_KEYWORD_PAGE_SIZE));
-    } else {
-      setKeywordPage(0);
-    }
-    syncKeywordField(values.filter((item) => PROJECT_KEYWORD_OPTIONS.includes(item)));
     setModalVisible(true);
   };
 
@@ -121,11 +82,10 @@ export default function Home() {
           prev.map((p) =>
             p.id === editingProject.id
               ? {
-                ...p,
-                name: values.name as string,
-                keywords: (values.keywords as string) || null,
-                core_problem: (values.core_description as string) || null,
-              }
+                  ...p,
+                  name: values.name as string,
+                  core_problem: (values.core_description as string) || null,
+                }
               : p,
           ),
         );
@@ -133,7 +93,6 @@ export default function Home() {
       } else {
         const payload = {
           name: values.name as string,
-          keywords: (values.keywords as string) || undefined,
           core_problem: (values.core_description as string) || undefined,
         };
         const created = await createProject(payload);
@@ -141,8 +100,6 @@ export default function Home() {
         message.success("项目已创建");
       }
       setModalVisible(false);
-      setSelectedKeywordValues([]);
-      setKeywordPage(0);
     } catch (e) {
       if (e instanceof Error) {
         message.error(e.message);
@@ -154,28 +111,19 @@ export default function Home() {
 
   const handleProjectCancel = () => {
     setModalVisible(false);
-    setSelectedKeywordValues([]);
-    setKeywordPage(0);
-  };
-
-  const toggleKeyword = (keyword: string) => {
-    // 允许多选，但最终仍按词库顺序写回。
-    const nextValues = selectedKeywordValues.includes(keyword)
-      ? selectedKeywordValues.filter((item) => item !== keyword)
-      : [...selectedKeywordValues, keyword];
-    const ordered = PROJECT_KEYWORD_OPTIONS.filter((item) => nextValues.includes(item));
-    syncKeywordField(ordered);
   };
 
   const openCreateInterview = (project: Project) => {
     setCurrentProjectForInterview(project);
     interviewForm.resetFields();
     setFileList([]);
+    setSelectedInterviewHotwordValues([]);
     setInterviewModalVisible(true);
   };
 
   const handleInterviewCancel = () => {
     setInterviewModalVisible(false);
+    setSelectedInterviewHotwordValues([]);
   };
 
   const handleInterviewOk = async () => {
@@ -202,6 +150,7 @@ export default function Home() {
         return;
       }
       formData.append("file", file.originFileObj as File);
+      formData.append("hotword_keys", selectedInterviewHotwordValues.join(","));
 
       const created = await createInterview(currentProjectForInterview.id, formData);
 
@@ -227,6 +176,7 @@ export default function Home() {
       );
       message.success("访谈信息已填写");
       setInterviewModalVisible(false);
+      setSelectedInterviewHotwordValues([]);
       router.push(`/interviews/${created.id}/processing`);
     } catch (e) {
       if (e instanceof Error) {
@@ -378,9 +328,6 @@ export default function Home() {
                                 </Button>
                               </Space>
                             </Space>
-                            {project.keywords && (
-                              <Text type="secondary">关键词：{project.keywords}</Text>
-                            )}
                             {project.core_problem && (
                               <Paragraph style={{ marginBottom: 0 }}>
                                 核心描述：{project.core_problem}
@@ -474,71 +421,6 @@ export default function Home() {
           >
             <Input placeholder="请输入项目名称" />
           </Form.Item>
-          <Form.Item label="项目关键词">
-            <Form.Item name="keywords" hidden>
-              <Input />
-            </Form.Item>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                <Text type="secondary">点击选择关键词，支持多选</Text>
-                <Space size={8}>
-                  <Button
-                    size="small"
-                    icon={<LeftOutlined />}
-                    disabled={keywordPage <= 0}
-                    onClick={() => setKeywordPage((value) => Math.max(0, value - 1))}
-                  />
-                  <Text type="secondary">
-                    {keywordPage + 1} / {keywordPageCount}
-                  </Text>
-                  <Button
-                    size="small"
-                    icon={<RightOutlined />}
-                    disabled={keywordPage >= keywordPageCount - 1}
-                    onClick={() =>
-                      setKeywordPage((value) => Math.min(keywordPageCount - 1, value + 1))
-                    }
-                  />
-                </Space>
-              </Space>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 10,
-                }}
-              >
-                {keywordOptionsForPage.map((keyword) => {
-                  const selected = selectedKeywordValues.includes(keyword);
-                  return (
-                    <Button
-                      key={keyword}
-                      style={{
-                        height: 56,
-                        borderRadius: 14,
-                        borderColor: selected ? "#1677ff" : "#d9d9d9",
-                        background: selected ? "#e6f4ff" : "#ffffff",
-                        color: "#1f2937",
-                        textAlign: "left",
-                        boxShadow: selected ? "0 8px 20px -14px rgba(22,119,255,0.55)" : undefined,
-                      }}
-                      onClick={() => toggleKeyword(keyword)}
-                    >
-                      <Space direction="vertical" size={0} style={{ width: "100%" }}>
-                        <Text strong>{keyword}</Text>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {selected ? "已选中" : "点击选择"}
-                        </Text>
-                      </Space>
-                    </Button>
-                  );
-                })}
-              </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                已选关键词：{selectedKeywordValues.length > 0 ? selectedKeywordValues.join("，") : "无"}
-              </Text>
-            </div>
-          </Form.Item>
           <Form.Item label="访谈核心描述" name="core_description">
             <Input.TextArea
               rows={5}
@@ -560,8 +442,17 @@ export default function Home() {
       >
         {currentProjectForInterview ? (
           <Form form={interviewForm} layout="vertical">
-            <Form.Item label="所属项目">
+          <Form.Item label="所属项目">
               <Text>{currentProjectForInterview.name}</Text>
+            </Form.Item>
+            <Form.Item label="访谈级热词">
+              <HotwordSelector
+                title="访谈热词"
+                description="选择本次访谈热词。当前包含原项目级与访谈级词包。"
+                options={INTERVIEW_HOTWORD_OPTIONS}
+                selectedKeys={selectedInterviewHotwordValues}
+                onChange={setSelectedInterviewHotwordValues}
+              />
             </Form.Item>
             <Form.Item
               label="访谈名称"
