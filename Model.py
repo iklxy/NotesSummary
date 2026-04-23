@@ -383,6 +383,31 @@ class ModelClient:
         return f"【访谈背景】\n{cleaned}\n\n"
 
     @classmethod
+    def _build_correction_rules_block(cls, correction_rules: Optional[List[str]]) -> str:
+        """
+        将“兜底纠错文本”包装成独立的 prompt 区块。
+
+        correction_rules 约定为若干行字符串，推荐格式为：
+            错误词 -> 正确词
+        """
+        if not correction_rules:
+            return ""
+
+        normalized_rules = []
+        for item in correction_rules:
+            text = str(item or "").strip()
+            if text:
+                normalized_rules.append(text)
+
+        if not normalized_rules:
+            return ""
+
+        lines = ["【兜底纠错文本】"]
+        for rule in normalized_rules:
+            lines.append(rule if "->" in rule else f"- {rule}")
+        return "\n".join(lines) + "\n\n"
+
+    @classmethod
     def _strip_code_fences(cls, text: str) -> str:
         stripped = text.strip()
         if stripped.startswith("```"):
@@ -668,6 +693,154 @@ class ModelClient:
         return merged
 
     @classmethod
+    def apply_correction_fallback_batch(
+        cls,
+        transcript: List[Dict[str, Any]],
+        correction_rules: Optional[List[str]] = None,
+        term_hints: Optional[List[str]] = None,
+        project_context: Optional[str] = None,
+        interview_context: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        在主纠错之后，再根据“兜底纠错文本”做一次收敛修正。
+
+        这一层只处理可显式映射或可高置信度判定的残留错词，不承担清洗职责。
+        """
+        normalized = cls._normalize_transcript_records(transcript, text_field="corrected_text")
+        if not normalized:
+            return []
+
+        normalized_rules = [str(item).strip() for item in (correction_rules or []) if str(item).strip()]
+        if not normalized_rules:
+            return [
+                {
+                    "uid": item["uid"],
+                    "speaker_id": item["speaker_id"],
+                    "start_time": item["start_time"],
+                    "end_time": item["end_time"],
+                    "corrected_text": item["text"],
+                    "text": item["text"],
+                    "corrections": [],
+                    "uncertain_terms": [],
+                }
+                for item in normalized
+            ]
+
+        term_hint_text = ""
+        if term_hints:
+            joined_terms = ", ".join(term_hints)
+            term_hint_text = f"专业术语提示: {joined_terms}\n\n"
+        project_context_text = cls._build_project_context_block(project_context)
+        interview_context_text = cls._build_interview_context_block(interview_context)
+        correction_rules_text = cls._build_correction_rules_block(normalized_rules)
+        transcript_block = cls._build_transcript_prompt_block(normalized)
+
+        system_prompt = (
+            "你现在是一位拥有 15 年经验的医学与医疗行业访谈转录兜底纠错专家，"
+            "熟悉实体瘤、靶向药、免疫治疗、分子检测、体外诊断、临床指标、公司名称和行业术语。"
+        )
+        user_prompt = (
+            f"{project_context_text}"
+            f"{interview_context_text}"
+            f"{term_hint_text}"
+            f"{correction_rules_text}"
+            "你的任务是：在【主纠错结果】基础上，再依据【兜底纠错文本】做一次收敛修正。\n\n"
+            "核心目标：\n"
+            "- 优先把【兜底纠错文本】中的错误词纠正为对应的正确词。\n"
+            "- 只修正仍然明确可判定的残余错词，不做总结，不做润色，不改写表达，不删减信息。\n"
+            "- 不要调整说话顺序，不要改变原有事实，不要输出解释。\n\n"
+            "严格规则：\n"
+            "1. 【兜底纠错文本】中的映射是高优先级参考，能明确命中时优先执行。\n"
+            "2. 如果某个词无法明确判断是否命中，不要猜测，保留原文。\n"
+            "3. 只允许做词级或短语级替换，不要扩写，不要压缩。\n"
+            "4. 不要把口语改成书面语，这一步不承担清洗职责。\n"
+            "5. 保留所有数字、单位、时间、剂量、百分比、分数、缩写格式。\n"
+            "6. 药物名、基因位点、检测名、抗体克隆号、公司名优先按行业通用写法统一。\n"
+            "7. 如果上下文与兜底规则都无法明确支持修改，直接保留原文。\n"
+            "8. 绝不输出解释、分析、备注或修正原因。\n\n"
+            "输出要求：\n"
+            "- 只输出合法 JSON。\n"
+            "- 不要输出 markdown。\n"
+            "- 不要输出多余文字。\n"
+            "- 不要输出前缀、标题、解释。\n"
+            "- 必须严格返回以下结构：\n\n"
+            '{\n'
+            '  "transcript": [\n'
+            '    {\n'
+            '      "uid": "u001",\n'
+            '      "speaker_id": "speaker1",\n'
+            '      "start_time": 12340,\n'
+            '      "end_time": 15800,\n'
+            '      "corrected_text": "兜底纠错后的正文",\n'
+            '      "corrections": [\n'
+            '        {\n'
+            '          "original": "原词",\n'
+            '          "corrected": "修正词"\n'
+            '        }\n'
+            '      ],\n'
+            '      "uncertain_terms": []\n'
+            '    }\n'
+            '  ]\n'
+            '}\n\n'
+            "示例：\n"
+            '{\n'
+            '  "transcript": [\n'
+            '    {\n'
+            '      "uid": "u001",\n'
+            '      "speaker_id": "speaker1",\n'
+            '      "start_time": 12340,\n'
+            '      "end_time": 15800,\n'
+            '      "corrected_text": "这次主要看 HER2 和 PD-L1 的检测结果。",\n'
+            '      "corrections": [\n'
+            '        {\n'
+            '          "original": "喝醋",\n'
+            '          "corrected": "HER2"\n'
+            '        }\n'
+            '      ],\n'
+            '      "uncertain_terms": []\n'
+            '    }\n'
+            '  ]\n'
+            '}\n\n'
+            "【主纠错结果】\n"
+            f"{transcript_block}\n\n"
+            "请仅返回合法 JSON。"
+        )
+
+        content = cls.generate(system_prompt, user_prompt)
+        try:
+            parsed = cls._parse_json_payload(content)
+        except json.JSONDecodeError:
+            parsed = {}
+
+        output_records = cls._extract_transcript_items(parsed)
+        if not output_records:
+            return [
+                {
+                    "uid": item["uid"],
+                    "speaker_id": item["speaker_id"],
+                    "start_time": item["start_time"],
+                    "end_time": item["end_time"],
+                    "corrected_text": item["text"],
+                    "text": item["text"],
+                    "corrections": [],
+                    "uncertain_terms": [],
+                }
+                for item in normalized
+            ]
+
+        merged = cls._merge_transcript_output(
+            normalized,
+            output_records,
+            output_text_field="corrected_text",
+            preserve_raw_fields=False,
+        )
+        for item in merged:
+            if not item.get("corrected_text"):
+                item["corrected_text"] = item.get("text", "")
+            item["text"] = item.get("corrected_text", item.get("text", ""))
+        return merged
+
+    @classmethod
     def clean_transcript_batch(
         cls,
         transcript: List[Dict[str, Any]],
@@ -817,6 +990,7 @@ class ModelClient:
         speaker_text: str,
         speaker_role: Optional[str] = None,
         term_hints: Optional[List[str]] = None,
+        correction_rules: Optional[List[str]] = None,
         project_context: Optional[str] = None,
         interview_context: Optional[Any] = None,
     ) -> Dict[str, Any]:
@@ -827,13 +1001,14 @@ class ModelClient:
             speaker_text: 原始转写文本。
             speaker_role: 说话人角色标签（如 interviewer / interviewee），可选。
             term_hints:   专业热词提示列表，用于纠正专有名词，格式为若干字符串。
+            correction_rules: 兜底纠错文本列表，格式推荐为“错误词 -> 正确词”。
             project_context: 项目背景说明块，可选；用于帮助模型理解本项目的业务语境、
                              研究对象和行业术语。
 
         返回:
             一个字典，至少包含:
             {
-                "clean_text": str,          # 清洗后的文本
+                "clean_text": str,          # 当前版本下为兜底纠错后的文本
                 "term_corrections": [       # 可选的术语纠错记录列表
                     {"from": str, "to": str}
                 ]
@@ -854,15 +1029,22 @@ class ModelClient:
             project_context=project_context,
             interview_context=interview_context,
         )
-        cleaned = cls.clean_transcript_batch(
+        fallback_corrected = cls.apply_correction_fallback_batch(
             transcript=corrected,
+            correction_rules=correction_rules,
             term_hints=term_hints,
             project_context=project_context,
             interview_context=interview_context,
         )
-        first = cleaned[0] if cleaned else {}
+        # cleaned = cls.clean_transcript_batch(
+        #     transcript=fallback_corrected,
+        #     term_hints=term_hints,
+        #     project_context=project_context,
+        #     interview_context=interview_context,
+        # )
+        first = fallback_corrected[0] if fallback_corrected else {}
         return {
-            "clean_text": first.get("clean_text", speaker_text),
+            "clean_text": first.get("corrected_text", speaker_text),
             "term_corrections": first.get("corrections", []),
             "uncertain_terms": first.get("uncertain_terms", []),
             "corrected_text": first.get("corrected_text", speaker_text),

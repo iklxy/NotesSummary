@@ -130,6 +130,65 @@ def correct_speakers(
     return corrected
 
 
+def fallback_correct_speakers(
+    speakers: List[Dict[str, Any]],
+    correction_rules: Optional[List[str]] = None,
+    speaker_roles: Optional[Dict[str, str]] = None,
+    term_hints: Optional[List[str]] = None,
+    project_context: Optional[str] = None,
+    interview_context: Optional[Dict[str, Any] | str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    在主纠错后，根据热词对应的兜底纠错文本再做一次收敛修正。
+    """
+    client = ModelClient()
+    total = len(speakers)
+    corrected: List[Dict[str, Any]] = []
+    for idx, seg in enumerate(speakers, start=1):
+        seg_id = seg.get("id")
+        speaker_id = str(seg.get("speaker_id", ""))
+        raw_text = str(seg.get("speaker_content_corrected", seg.get("speaker_content", "")) or "")
+        role = speaker_roles.get(speaker_id) if speaker_roles else None
+        print(f"[FallbackCorrectSpeakers] 开始兜底纠错第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
+        corrected_item = client.apply_correction_fallback_batch(
+            transcript=[
+                {
+                    "uid": str(seg.get("uid") or f"u{idx:04d}"),
+                    "id": seg_id,
+                    "speaker_id": speaker_id,
+                    "speaker_role": role,
+                    "start_time": seg.get("start_time"),
+                    "end_time": seg.get("end_time"),
+                    "corrected_text": raw_text,
+                }
+            ],
+            correction_rules=correction_rules,
+            term_hints=term_hints,
+            project_context=project_context,
+            interview_context=interview_context,
+        )
+        corrected_row = corrected_item[0] if corrected_item else {}
+        corrected_text = corrected_row.get("corrected_text", raw_text)
+        corrected.append(
+            {
+                "id": seg_id,
+                "uid": corrected_row.get("uid", f"u{idx:04d}"),
+                "speaker_id": speaker_id,
+                "speaker_role": role,
+                "speaker_content": str(seg.get("speaker_content", "")),
+                "speaker_content_corrected": corrected_text,
+                "speaker_content_clean": corrected_text,
+                "start_time": seg.get("start_time"),
+                "end_time": seg.get("end_time"),
+                "term_corrections": corrected_row.get("corrections", []),
+                "uncertain_terms": corrected_row.get("uncertain_terms", []),
+            }
+        )
+        print(f"[FallbackCorrectSpeakers] 完成兜底纠错第 {idx}/{total} 段, id={seg_id}")
+
+    return corrected
+
+
 def clean_speakers(
     speakers: List[Dict[str, Any]],
     speaker_roles: Optional[Dict[str, str]] = None,
@@ -191,18 +250,20 @@ def clean_file_content_json(
     file_content_json: str,
     speaker_roles: Optional[Dict[str, str]] = None,
     term_hints: Optional[List[str]] = None,
+    correction_rules: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
 ) -> str:
     """
-    针对 bh_project_interview.file_content 中的 JSON 结果进行清洗，
-    在现有结构的基础上为每个说话轮次增加清洗结果。
+    针对 bh_project_interview.file_content 中的 JSON 结果进行逐段纠错与兜底纠错，
+    在现有结构的基础上为每个说话轮次增加最终纠错结果。
 
     参数:
         file_content_json: 现有的 file_content JSON 字符串，
                            应包含 result.speakers 结构。
         speaker_roles:     可选，speaker_id 到角色的映射。
         term_hints:        可选，专业术语提示列表。
+        correction_rules:   可选，兜底纠错文本列表（错误词 -> 正确词）。
         project_context:   可选，项目背景说明块，会在逐段清洗时注入到模型提示词中。
 
     返回:
@@ -234,6 +295,9 @@ def clean_file_content_json(
                 ]
             }
         }
+    说明:
+        当前版本保留清洗函数，但流程里暂不执行清洗步骤；
+        因此 speaker_content_clean 会先承接兜底纠错后的最终文本。
     """
     data = json.loads(file_content_json)
     result = data.get("result") or {}
@@ -274,17 +338,27 @@ def clean_file_content_json(
         project_context=project_context,
         interview_context=interview_context,
     )
-    cleaned_speakers = clean_speakers(
+    fallback_corrected_speakers = fallback_correct_speakers(
         speakers=corrected_speakers,
+        correction_rules=correction_rules,
         speaker_roles=speaker_roles,
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
     )
+    # 清洗能力保留，但当前流程暂不启用。
+    # cleaned_speakers = clean_speakers(
+    #     speakers=fallback_corrected_speakers,
+    #     speaker_roles=speaker_roles,
+    #     term_hints=term_hints,
+    #     project_context=project_context,
+    #     interview_context=interview_context,
+    # )
+    cleaned_speakers = fallback_corrected_speakers
 
     enriched: List[Dict[str, Any]] = []
     transcript_enriched: List[Dict[str, Any]] = []
-    for original, corrected, cleaned in zip(source_speakers, corrected_speakers, cleaned_speakers):
+    for original, corrected, cleaned in zip(source_speakers, fallback_corrected_speakers, cleaned_speakers):
         merged = dict(original)
         uid = str(corrected.get("uid") or original.get("uid") or original.get("id") or "")
         raw_text = str(original.get("speaker_content", "") or original.get("text", "") or "")

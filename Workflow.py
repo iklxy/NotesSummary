@@ -11,7 +11,7 @@ from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 from Fewshot import select_fewshot_samples
-from Hotword import load_term_hints_from_state, merge_term_hints
+from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
 from DbAccess import DbAccess
 from config import config
 
@@ -199,9 +199,10 @@ def step_clean_with_llm(
     project_context: str | None = None,
     interview_context: Dict[str, Any] | str | None = None,
     term_hints: List[str] | None = None,
+    correction_rules: List[str] | None = None,
 ) -> Dict[str, Any]:
     """
-    步骤 5：先逐段纠错，再逐段清洗，返回更新后的 JSON 字符串。
+    步骤 5：先逐段纠错，再做热词兜底纠错，返回更新后的 JSON 字符串。
 
     参数:
         file_content_json: 上一步写入的 file_content JSON。
@@ -214,6 +215,7 @@ def step_clean_with_llm(
             file_content_json=file_content_json,
             speaker_roles=speaker_roles,
             term_hints=effective_term_hints,
+            correction_rules=correction_rules,
             project_context=project_context,
             interview_context=interview_context,
         )
@@ -558,10 +560,10 @@ def step_write_notes_results(notes_block: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_workflow(interview_id: int) -> Dict[str, Any]:
     """
-    只负责“转录 -> 背景提炼 -> 纠错 -> 清洗 -> 写 summary”的工作流。
+    只负责“转录 -> 背景提炼 -> 纠错兜底 -> 写 summary”的工作流。
 
     旧版工作流中的 Notes 生成已拆分出去，后续由独立接口按题目触发。
-    当前工作流会先读取访谈所属项目的背景描述，并将其注入到清洗阶段，
+    当前工作流会先读取访谈所属项目的背景描述，并将其注入到纠错阶段，
     以便后续 summary 的文本更贴合项目语境。
     """
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
@@ -586,6 +588,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             return fail("load_project", {"message": "project id missing from interview"})
         project_context = _load_project_context_by_id(int(project_id))
         term_hints = load_term_hints_from_state(interview_id=interview_id)
+        correction_rules = load_correction_rules_from_state(interview_id=interview_id)
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)
@@ -617,15 +620,16 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             return fail("extract_interview_context", ec)
         interview_context = ec["interview_context"]
 
-        # 5. LLM 清洗
+        # 5. LLM 兜底纠错（清洗流程当前保留注释，暂不启用）
         cl = step_clean_with_llm(
             file_content_json,
             project_context=project_context,
             interview_context=interview_context,
             term_hints=term_hints,
+            correction_rules=correction_rules,
         )
         if not cl.get("success"):
-            return fail("clean_llm", cl)
+            return fail("correct_fallback", cl)
         cleaned_json = cl["cleaned_json"]
 
         # 6. 写 summary

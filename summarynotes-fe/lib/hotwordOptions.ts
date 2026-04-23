@@ -4,6 +4,7 @@ export interface HotwordOption {
   code: string;
   label: string;
   file: string;
+  correction_file?: string;
 }
 
 interface HotwordManifest {

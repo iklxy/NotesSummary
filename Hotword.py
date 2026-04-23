@@ -7,6 +7,7 @@
 支持两类来源：
 1. 直接从单个热词文件加载。
 2. 根据统一热词包 code，从 data/hotword_manifest.json 读取并拼接对应词表。
+3. 根据统一热词包 code，读取对应的兜底纠错文本文件。
 """
 
 from __future__ import annotations
@@ -144,7 +145,7 @@ def load_hotword_manifest() -> dict[str, list[dict[str, str]]]:
     }
 
 
-def _build_code_map(category: str) -> dict[str, Path]:
+def _build_code_map(category: str, field_name: str = "file") -> dict[str, Path]:
     manifest = load_hotword_manifest()
     options = manifest.get(category, [])
     if not options and category == "project":
@@ -154,7 +155,14 @@ def _build_code_map(category: str) -> dict[str, Path]:
         if not isinstance(item, dict):
             continue
         code = _normalize_term(item.get("code"))
-        file_rel = _normalize_term(item.get("file"))
+        file_rel = _normalize_term(item.get(field_name))
+        if not file_rel and field_name == "correction_file":
+            # 兼容没有显式配置 correction_file 的旧 manifest：
+            # 直接按主词表文件名推导对应的兜底纠错文本。
+            base_file_rel = _normalize_term(item.get("file"))
+            if base_file_rel:
+                base_path = Path(base_file_rel)
+                file_rel = str(base_path.with_name(f"{base_path.stem}_corrections{base_path.suffix}"))
         if not code or not file_rel:
             continue
         mapping[code] = ROOT_DIR / "data" / file_rel
@@ -164,7 +172,7 @@ def _build_code_map(category: str) -> dict[str, Path]:
 def load_term_hints_from_keys(category: str, keys: list[str] | None) -> List[str]:
     if not keys:
         return []
-    mapping = _build_code_map(category)
+    mapping = _build_code_map(category, field_name="file")
     items: List[str] = []
     for key in keys:
         path = mapping.get(_normalize_term(key))
@@ -174,6 +182,30 @@ def load_term_hints_from_keys(category: str, keys: list[str] | None) -> List[str
     return _dedupe_keep_order(items)
 
 
+def load_correction_rules_from_keys(category: str, keys: list[str] | None) -> List[str]:
+    if not keys:
+        return []
+    mapping = _build_code_map(category, field_name="correction_file")
+    items: List[str] = []
+    for key in keys:
+        path = mapping.get(_normalize_term(key))
+        if not path or not path.exists():
+            continue
+        items.extend(load_term_hints_from_file(str(path)))
+    return _dedupe_keep_order(items)
+
+
+def _extract_state_keys(data: Any) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("keys")
+    if raw is None:
+        raw = data.get("hotword_keys")
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
 def load_term_hints_from_state(interview_id: int | None = None) -> List[str]:
     items: List[str] = []
     if interview_id is not None:
@@ -181,7 +213,20 @@ def load_term_hints_from_state(interview_id: int | None = None) -> List[str]:
         if state_path.exists():
             try:
                 data = json.loads(state_path.read_text(encoding="utf-8"))
-                items.extend(load_term_hints_from_keys("interview", data.get("keys") or []))
+                items.extend(load_term_hints_from_keys("interview", _extract_state_keys(data)))
+            except Exception:
+                pass
+    return _dedupe_keep_order(items)
+
+
+def load_correction_rules_from_state(interview_id: int | None = None) -> List[str]:
+    items: List[str] = []
+    if interview_id is not None:
+        state_path = HOTWORD_STATE_DIR / "interview" / f"{interview_id}.json"
+        if state_path.exists():
+            try:
+                data = json.loads(state_path.read_text(encoding="utf-8"))
+                items.extend(load_correction_rules_from_keys("interview", _extract_state_keys(data)))
             except Exception:
                 pass
     return _dedupe_keep_order(items)
@@ -190,7 +235,11 @@ def load_term_hints_from_state(interview_id: int | None = None) -> List[str]:
 def save_hotword_state(category: str, entity_id: int, keys: list[str] | None) -> Path:
     target_dir = HOTWORD_STATE_DIR / category
     target_dir.mkdir(parents=True, exist_ok=True)
-    payload = {"keys": _dedupe_keep_order(keys or [])}
+    normalized_keys = _dedupe_keep_order(keys or [])
+    payload = {
+        "keys": normalized_keys,
+        "hotword_keys": normalized_keys,
+    }
     target_path = target_dir / f"{entity_id}.json"
     target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return target_path
