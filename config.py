@@ -8,8 +8,46 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 
 
+def _get_env_str(name: str, default: str | None = None) -> str | None:
+    """
+    从环境变量中读取字符串配置。
+
+    参数:
+        name: 环境变量名称，例如 `DB_HOST` 或 `LLM_PROVIDER`。
+        default: 当环境变量不存在时使用的默认值；允许为 `None`。
+
+    返回:
+        读取到的字符串值；若环境变量不存在，则返回 `default`。
+    """
+    return os.getenv(name, default)
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """
+    从环境变量中读取整数配置。
+
+    参数:
+        name: 环境变量名称，例如 `DB_PORT` 或 `QDRANT_PORT`。
+        default: 当环境变量不存在时使用的默认整数值。
+
+    返回:
+        解析后的整数值。
+
+    异常:
+        ValueError: 当环境变量存在但不是合法整数时抛出。
+    """
+    return int(os.getenv(name, str(default)))
+
+
 @dataclass
 class RuntimeConfig:
+    """
+    统一管理 engine 运行时配置。
+
+    配置值来源统一为项目根目录下的 `.env` 文件。
+    `reload()` 会重新读取 `.env`，并把结果回填到当前实例。
+    """
+
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 3306
     DB_USER: str | None = None
@@ -48,41 +86,58 @@ class RuntimeConfig:
     revision: int = field(default=0, init=False)
 
     def reload(self) -> "RuntimeConfig":
+        """
+        重新加载 `.env` 文件，并刷新当前配置对象中的所有字段。
+
+        参数:
+            无。配置默认从 `ENV_PATH` 指向的 `.env` 文件读取。
+
+        返回:
+            刷新后的 `RuntimeConfig` 自身实例，便于链式调用或直接赋值。
+        """
         load_dotenv(dotenv_path=ENV_PATH, override=True)
-        self.DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-        self.DB_PORT = int(os.getenv("DB_PORT", "3306"))
-        self.DB_USER = os.getenv("DB_USER")
-        self.DB_PASSWORD = os.getenv("DB_PASSWORD")
-        self.DB_NAME = os.getenv("DB_NAME")
 
-        self.LLM_API_KEY = os.getenv("LLM_API_KEY")
-        self.LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-        self.LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME")
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+        # 数据库配置
+        self.DB_HOST = _get_env_str("DB_HOST", "127.0.0.1") or "127.0.0.1"
+        self.DB_PORT = _get_env_int("DB_PORT", 3306)
+        self.DB_USER = _get_env_str("DB_USER")
+        self.DB_PASSWORD = _get_env_str("DB_PASSWORD")
+        self.DB_NAME = _get_env_str("DB_NAME")
 
-        self.OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self.OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "bge-m3:latest")
-        self.TERM_HINTS_FILE = os.getenv("TERM_HINTS_FILE")
+        # 大模型配置
+        self.LLM_API_KEY = _get_env_str("LLM_API_KEY")
+        self.LLM_BASE_URL = _get_env_str("LLM_BASE_URL")
+        self.LLM_MODEL_NAME = _get_env_str("LLM_MODEL_NAME")
+        self.LLM_PROVIDER = _get_env_str("LLM_PROVIDER", "anthropic") or "anthropic"
 
-        self.ASR_APP_KEY = os.getenv("ASR_APP_KEY")
-        self.ASR_ACCESS_KEY = os.getenv("ASR_ACCESS_KEY")
-        self.VOLCANO_CLUSTER = os.getenv("VOLCANO_CLUSTER")
-        self.VOLCANO_SERVICE_URL = os.getenv("VOLCANO_SERVICE_URL")
+        # Embedding / Ollama 配置
+        self.OLLAMA_HOST = _get_env_str("OLLAMA_HOST", "http://localhost:11434") or "http://localhost:11434"
+        self.OLLAMA_MODEL_NAME = _get_env_str("OLLAMA_MODEL_NAME", "bge-m3:latest") or "bge-m3:latest"
+        self.TERM_HINTS_FILE = _get_env_str("TERM_HINTS_FILE")
 
-        self.TOS_ACCESS_KEY = os.getenv("TOS_ACCESS_KEY")
-        self.TOS_SECRET_KEY = os.getenv("TOS_SECRET_KEY")
-        self.TOS_ENDPOINT = os.getenv("TOS_ENDPOINT", "https://tos-cn-shanghai.volces.com")
-        self.TOS_REGION = os.getenv("TOS_REGION", "cn-shanghai")
-        self.TOS_BUCKET_NAME = os.getenv("TOS_BUCKET_NAME", "benhealth")
-        self.LOCAL_AUDIO_ROOT = os.getenv("LOCAL_AUDIO_ROOT", ".")
-        self.TOS_AUDIO_PREFIX = os.getenv("TOS_AUDIO_PREFIX", "audio")
-        self.TOS_URL_EXPIRE_SECONDS = int(os.getenv("TOS_URL_EXPIRE_SECONDS", "3600"))
+        # ASR 配置
+        self.ASR_APP_KEY = _get_env_str("ASR_APP_KEY")
+        self.ASR_ACCESS_KEY = _get_env_str("ASR_ACCESS_KEY")
+        self.VOLCANO_CLUSTER = _get_env_str("VOLCANO_CLUSTER")
+        self.VOLCANO_SERVICE_URL = _get_env_str("VOLCANO_SERVICE_URL")
 
-        self.QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-        self.QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
-        self.QDRANT_COLLECTION_SUMMARY = os.getenv("QDRANT_COLLECTION_SUMMARY", "interview_summary")
+        # TOS 配置
+        self.TOS_ACCESS_KEY = _get_env_str("TOS_ACCESS_KEY")
+        self.TOS_SECRET_KEY = _get_env_str("TOS_SECRET_KEY")
+        self.TOS_ENDPOINT = _get_env_str("TOS_ENDPOINT", "https://tos-cn-shanghai.volces.com") or "https://tos-cn-shanghai.volces.com"
+        self.TOS_REGION = _get_env_str("TOS_REGION", "cn-shanghai") or "cn-shanghai"
+        self.TOS_BUCKET_NAME = _get_env_str("TOS_BUCKET_NAME", "benhealth") or "benhealth"
+        self.LOCAL_AUDIO_ROOT = _get_env_str("LOCAL_AUDIO_ROOT", ".") or "."
+        self.TOS_AUDIO_PREFIX = _get_env_str("TOS_AUDIO_PREFIX", "audio") or "audio"
+        self.TOS_URL_EXPIRE_SECONDS = _get_env_int("TOS_URL_EXPIRE_SECONDS", 3600)
 
-        self.INTERNAL_SERVICE_BASE = os.getenv("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000")
+        # Qdrant 配置
+        self.QDRANT_HOST = _get_env_str("QDRANT_HOST", "localhost") or "localhost"
+        self.QDRANT_PORT = _get_env_int("QDRANT_PORT", 6333)
+        self.QDRANT_COLLECTION_SUMMARY = _get_env_str("QDRANT_COLLECTION_SUMMARY", "interview_summary") or "interview_summary"
+
+        # 内部服务配置
+        self.INTERNAL_SERVICE_BASE = _get_env_str("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000") or "http://127.0.0.1:8000"
 
         self.revision += 1
         return self
@@ -93,6 +148,12 @@ config = RuntimeConfig().reload()
 
 def refresh_runtime_config() -> RuntimeConfig:
     """
-    重新加载 .env 并刷新运行时配置。
+    重新读取 `.env`，并刷新全局运行时配置对象。
+
+    参数:
+        无。内部直接复用模块级 `config` 实例执行 `reload()`。
+
+    返回:
+        已重新加载后的全局 `RuntimeConfig` 实例。
     """
     return config.reload()

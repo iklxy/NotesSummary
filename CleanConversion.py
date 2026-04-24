@@ -48,6 +48,163 @@ def _extract_transcript_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
+def _build_segment_prompt_record(
+    seg: Dict[str, Any],
+    idx: int,
+    speaker_roles: Optional[Dict[str, str]] = None,
+    text_field: str = "speaker_content",
+) -> Dict[str, Any]:
+    """
+    将单条 speaker 记录整理成模型调用所需的最小输入结构。
+
+    参数:
+        seg: 单条 speaker 记录，通常包含 speaker_id、时间戳和文本字段。
+        idx: 当前记录在列表中的顺序编号，用于兜底生成 uid。
+        speaker_roles: 可选的 speaker_id -> 角色映射字典。
+        text_field: 本轮调用需要读取的文本字段名，例如 `text` 或 `corrected_text`。
+
+    返回:
+        适合直接送入 transcript prompt 的字典。
+    """
+    speaker_id = str(seg.get("speaker_id", ""))
+    text_value = seg.get(text_field)
+    if text_value is None and text_field == "text":
+        text_value = seg.get("speaker_content", "")
+    if text_value is None and text_field == "corrected_text":
+        text_value = seg.get("speaker_content_corrected", seg.get("speaker_content", ""))
+    return {
+        "uid": str(seg.get("uid") or f"u{idx:04d}"),
+        "id": seg.get("id"),
+        "speaker_id": speaker_id,
+        "speaker_role": speaker_roles.get(speaker_id) if speaker_roles else None,
+        "start_time": seg.get("start_time"),
+        "end_time": seg.get("end_time"),
+        text_field: str(text_value or ""),
+    }
+
+
+def _run_segment_stage(
+    speakers: List[Dict[str, Any]],
+    stage_name: str,
+    model_method_name: str,
+    input_text_field: str,
+    output_text_field: str,
+    speaker_roles: Optional[Dict[str, str]] = None,
+    term_hints: Optional[List[str]] = None,
+    correction_rules: Optional[List[str]] = None,
+    project_context: Optional[str] = None,
+    interview_context: Optional[Dict[str, Any] | str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    用统一模板执行逐段处理，避免主纠错 / 兜底纠错 / 清洗三段逻辑重复。
+
+    参数:
+        speakers: 待处理的逐段记录列表。
+        stage_name: 当前阶段名称，用于日志输出。
+        model_method_name: ModelClient 上实际要调用的方法名。
+        input_text_field: 本阶段从输入记录里读取的文本字段名。
+        output_text_field: 本阶段期望写回的文本字段名。
+        speaker_roles: 可选的 speaker_id -> 角色映射字典。
+        term_hints: 可选热词提示列表。
+        correction_rules: 可选兜底纠错规则列表，仅兜底纠错阶段使用。
+        project_context: 可选项目背景文本。
+        interview_context: 可选访谈背景对象或文本。
+
+    返回:
+        合并了原始字段和当前阶段输出字段的记录列表。
+    """
+    client = ModelClient()
+    runner = getattr(client, model_method_name)
+    total = len(speakers)
+    results: List[Dict[str, Any]] = []
+
+    def _resolve_output_text(stage_row: Dict[str, Any], request_item: Dict[str, Any]) -> str:
+        """
+        从模型返回值中解析当前阶段的最终文本。
+
+        参数:
+            stage_row: 单段模型返回的字典。
+            request_item: 本次送给模型的请求记录。
+
+        返回:
+            当前阶段应写回的文本；如果模型没有返回有效结果，则回退到请求文本。
+        """
+        if output_text_field == "speaker_content_corrected":
+            candidates = (
+                stage_row.get("corrected_text"),
+                stage_row.get("speaker_content_corrected"),
+                stage_row.get("text"),
+                request_item.get(input_text_field),
+            )
+        elif output_text_field == "speaker_content_clean":
+            candidates = (
+                stage_row.get("clean_text"),
+                stage_row.get("speaker_content_clean"),
+                stage_row.get("text"),
+                request_item.get(input_text_field),
+            )
+        else:
+            candidates = (
+                stage_row.get(output_text_field),
+                stage_row.get("text"),
+                request_item.get(input_text_field),
+            )
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+        return str(request_item.get(input_text_field) or "")
+
+    for idx, seg in enumerate(speakers, start=1):
+        seg_id = seg.get("id")
+        speaker_id = str(seg.get("speaker_id", ""))
+        print(f"[{stage_name}] 开始处理第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
+
+        request_item = _build_segment_prompt_record(
+            seg=seg,
+            idx=idx,
+            speaker_roles=speaker_roles,
+            text_field=input_text_field,
+        )
+        runner_kwargs = {
+            "transcript": [request_item],
+            "term_hints": term_hints,
+            "project_context": project_context,
+            "interview_context": interview_context,
+        }
+        if correction_rules is not None and model_method_name == "apply_correction_fallback_batch":
+            runner_kwargs["correction_rules"] = correction_rules
+        stage_rows = runner(**runner_kwargs)
+        stage_row = stage_rows[0] if stage_rows else {}
+
+        raw_text = str(seg.get("speaker_content", "") or "")
+        corrected_text = str(seg.get("speaker_content_corrected", raw_text) or raw_text)
+        final_text = _resolve_output_text(stage_row, request_item)
+
+        merged = {
+            "id": seg_id,
+            "uid": stage_row.get("uid", request_item["uid"]),
+            "speaker_id": speaker_id,
+            "speaker_role": request_item.get("speaker_role"),
+            "speaker_content": raw_text,
+            "speaker_content_corrected": corrected_text,
+            "speaker_content_clean": str(seg.get("speaker_content_clean", corrected_text) or corrected_text),
+            "start_time": seg.get("start_time"),
+            "end_time": seg.get("end_time"),
+            "term_corrections": stage_row.get("corrections", seg.get("term_corrections", [])),
+            "uncertain_terms": stage_row.get("uncertain_terms", seg.get("uncertain_terms", [])),
+        }
+        merged[output_text_field] = final_text
+        if output_text_field == "speaker_content_corrected":
+            merged["speaker_content_clean"] = final_text
+        if output_text_field == "speaker_content_clean":
+            merged["speaker_content_clean"] = final_text
+        results.append(merged)
+        print(f"[{stage_name}] 完成处理第 {idx}/{total} 段, id={seg_id}")
+
+    return results
+
+
 def correct_speakers(
     speakers: List[Dict[str, Any]],
     speaker_roles: Optional[Dict[str, str]] = None,
@@ -84,50 +241,17 @@ def correct_speakers(
             "uncertain_terms": [str]
         }
     """
-    client = ModelClient()
-    total = len(speakers)
-    corrected: List[Dict[str, Any]] = []
-    for idx, seg in enumerate(speakers, start=1):
-        seg_id = seg.get("id")
-        speaker_id = str(seg.get("speaker_id", ""))
-        raw_text = str(seg.get("speaker_content", "") or "")
-        role = speaker_roles.get(speaker_id) if speaker_roles else None
-        print(f"[CorrectSpeakers] 开始纠错第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
-        corrected_item = client.correct_transcript_batch(
-            transcript=[
-                {
-                    "uid": str(seg.get("uid") or f"u{idx:04d}"),
-                    "id": seg_id,
-                    "speaker_id": speaker_id,
-                    "speaker_role": role,
-                    "start_time": seg.get("start_time"),
-                    "end_time": seg.get("end_time"),
-                    "text": raw_text,
-                }
-            ],
-            term_hints=term_hints,
-            project_context=project_context,
-            interview_context=interview_context,
-        )
-        corrected_row = corrected_item[0] if corrected_item else {}
-        corrected_text = corrected_row.get("corrected_text", raw_text)
-        corrected.append(
-            {
-                "id": seg_id,
-                "uid": corrected_row.get("uid", f"u{idx:04d}"),
-                "speaker_id": speaker_id,
-                "speaker_role": role,
-                "speaker_content": raw_text,
-                "speaker_content_corrected": corrected_text,
-                "start_time": seg.get("start_time"),
-                "end_time": seg.get("end_time"),
-                "term_corrections": corrected_row.get("corrections", []),
-                "uncertain_terms": corrected_row.get("uncertain_terms", []),
-            }
-        )
-        print(f"[CorrectSpeakers] 完成纠错第 {idx}/{total} 段, id={seg_id}")
-
-    return corrected
+    return _run_segment_stage(
+        speakers=speakers,
+        stage_name="CorrectSpeakers",
+        model_method_name="correct_transcript_batch",
+        input_text_field="text",
+        output_text_field="speaker_content_corrected",
+        speaker_roles=speaker_roles,
+        term_hints=term_hints,
+        project_context=project_context,
+        interview_context=interview_context,
+    )
 
 
 def fallback_correct_speakers(
@@ -141,52 +265,18 @@ def fallback_correct_speakers(
     """
     在主纠错后，根据热词对应的兜底纠错文本再做一次收敛修正。
     """
-    client = ModelClient()
-    total = len(speakers)
-    corrected: List[Dict[str, Any]] = []
-    for idx, seg in enumerate(speakers, start=1):
-        seg_id = seg.get("id")
-        speaker_id = str(seg.get("speaker_id", ""))
-        raw_text = str(seg.get("speaker_content_corrected", seg.get("speaker_content", "")) or "")
-        role = speaker_roles.get(speaker_id) if speaker_roles else None
-        print(f"[FallbackCorrectSpeakers] 开始兜底纠错第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
-        corrected_item = client.apply_correction_fallback_batch(
-            transcript=[
-                {
-                    "uid": str(seg.get("uid") or f"u{idx:04d}"),
-                    "id": seg_id,
-                    "speaker_id": speaker_id,
-                    "speaker_role": role,
-                    "start_time": seg.get("start_time"),
-                    "end_time": seg.get("end_time"),
-                    "corrected_text": raw_text,
-                }
-            ],
-            correction_rules=correction_rules,
-            term_hints=term_hints,
-            project_context=project_context,
-            interview_context=interview_context,
-        )
-        corrected_row = corrected_item[0] if corrected_item else {}
-        corrected_text = corrected_row.get("corrected_text", raw_text)
-        corrected.append(
-            {
-                "id": seg_id,
-                "uid": corrected_row.get("uid", f"u{idx:04d}"),
-                "speaker_id": speaker_id,
-                "speaker_role": role,
-                "speaker_content": str(seg.get("speaker_content", "")),
-                "speaker_content_corrected": corrected_text,
-                "speaker_content_clean": corrected_text,
-                "start_time": seg.get("start_time"),
-                "end_time": seg.get("end_time"),
-                "term_corrections": corrected_row.get("corrections", []),
-                "uncertain_terms": corrected_row.get("uncertain_terms", []),
-            }
-        )
-        print(f"[FallbackCorrectSpeakers] 完成兜底纠错第 {idx}/{total} 段, id={seg_id}")
-
-    return corrected
+    return _run_segment_stage(
+        speakers=speakers,
+        stage_name="FallbackCorrectSpeakers",
+        model_method_name="apply_correction_fallback_batch",
+        input_text_field="corrected_text",
+        output_text_field="speaker_content_corrected",
+        speaker_roles=speaker_roles,
+        term_hints=term_hints,
+        correction_rules=correction_rules,
+        project_context=project_context,
+        interview_context=interview_context,
+    )
 
 
 def clean_speakers(
@@ -199,51 +289,17 @@ def clean_speakers(
     """
     对纠错后的 speakers 列表进行逐段清洗。
     """
-    client = ModelClient()
-    total = len(speakers)
-    cleaned: List[Dict[str, Any]] = []
-    for idx, seg in enumerate(speakers, start=1):
-        seg_id = seg.get("id")
-        speaker_id = str(seg.get("speaker_id", ""))
-        raw_text = str(seg.get("speaker_content", "") or "")
-        corrected_text = str(seg.get("speaker_content_corrected", raw_text) or raw_text)
-        role = speaker_roles.get(speaker_id) if speaker_roles else None
-        print(f"[CleanSpeakers] 开始清洗第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
-        cleaned_item = client.clean_transcript_batch(
-            transcript=[
-                {
-                    "uid": str(seg.get("uid") or f"u{idx:04d}"),
-                    "id": seg_id,
-                    "speaker_id": speaker_id,
-                    "speaker_role": role,
-                    "start_time": seg.get("start_time"),
-                    "end_time": seg.get("end_time"),
-                    "corrected_text": corrected_text,
-                }
-            ],
-            term_hints=term_hints,
-            project_context=project_context,
-            interview_context=interview_context,
-        )
-        cleaned_row = cleaned_item[0] if cleaned_item else {}
-        clean_text = cleaned_row.get("clean_text", corrected_text)
-        cleaned_segment = {
-            "id": seg_id,
-            "uid": cleaned_row.get("uid", f"u{idx:04d}"),
-            "speaker_id": speaker_id,
-            "speaker_role": role,
-            "speaker_content": raw_text,
-            "speaker_content_corrected": corrected_text,
-            "speaker_content_clean": clean_text,
-            "start_time": seg.get("start_time"),
-            "end_time": seg.get("end_time"),
-            "term_corrections": seg.get("term_corrections", []),
-            "uncertain_terms": seg.get("uncertain_terms", []),
-        }
-        cleaned.append(cleaned_segment)
-        print(f"[CleanSpeakers] 完成清洗第 {idx}/{total} 段, id={seg_id}")
-
-    return cleaned
+    return _run_segment_stage(
+        speakers=speakers,
+        stage_name="CleanSpeakers",
+        model_method_name="clean_transcript_batch",
+        input_text_field="corrected_text",
+        output_text_field="speaker_content_clean",
+        speaker_roles=speaker_roles,
+        term_hints=term_hints,
+        project_context=project_context,
+        interview_context=interview_context,
+    )
 
 
 def clean_file_content_json(

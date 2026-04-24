@@ -2,80 +2,28 @@
 "@author:lixinyang"
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from DbAccess import DbAccess
-from Model import ModelClient
-from RagIndex import index_interview_summary, retrieve_segments_for_question
+from NotesWorkflow import fetch_questions_step, generate_notes_step
 from config import config
 
 
 def fetch_questions_for_interview(interview_id: int) -> List[Dict[str, Any]]:
     """
-    根据访谈 ID 查询 bh_project_question 表中的题目列表。
+    查询某个访谈下配置的题目列表。
 
     参数:
-        interview_id: 访谈主键 ID，对应 bh_project_interview.id。
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
 
     返回:
-        题目记录列表，每个元素为字典，至少包含:
-            - id
-            - project_interview_id
-            - question_order
-            - question_text
-            - question_type
-            - intent_id
+        题目记录列表；若查询失败或没有题目，则返回空列表。
+        该函数是对 `NotesWorkflow.fetch_questions_step` 的命令行友好包装。
     """
-    sql = """
-        SELECT
-            id,
-            project_interview_id,
-            question_order,
-            question_text,
-            question_type,
-            intent_id
-        FROM bh_project_question
-        WHERE project_interview_id = %s
-        ORDER BY question_order ASC, id ASC
-    """
-    conn = DbAccess.get_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, (interview_id,))
-            rows: List[Dict[str, Any]] = cursor.fetchall()
-            return rows
-    finally:
-        conn.close()
-
-
-def fetch_intent_names(intent_ids: List[int]) -> Dict[int, str]:
-    """
-    根据 intent_id 列表查询意图名称。
-    """
-    if not intent_ids:
-        return {}
-
-    placeholders = ",".join(["%s"] * len(intent_ids))
-    sql = f"""
-        SELECT id, name, code
-        FROM bh_question_intent
-        WHERE id IN ({placeholders})
-    """
-    conn = DbAccess.get_connection()
-    intent_name_map: Dict[int, str] = {}
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, intent_ids)
-            rows = cursor.fetchall()
-            for row in rows:
-                iid = row.get("id")
-                name = (row.get("name") or row.get("code") or "").strip()
-                if iid is not None:
-                    intent_name_map[int(iid)] = name
-    finally:
-        conn.close()
-
-    return intent_name_map
+    result = fetch_questions_step(interview_id)
+    if not result.get("success"):
+        return []
+    return result.get("questions") or []
 
 
 def generate_notes_for_question_with_rag(
@@ -84,110 +32,113 @@ def generate_notes_for_question_with_rag(
     top_k: int = 10,
 ) -> Dict[str, Any]:
     """
-    针对单个题目执行 RAG 检索并调用大模型生成 Notes。
+    为单个题目执行 RAG + LLM Notes 生成，并返回对应结果。
 
     参数:
-        interview_id: 访谈主键 ID，用于限定检索范围。
-        question_row: 单条题目记录，来自 fetch_questions_for_interview。
-        top_k:        RAG 检索返回的片段数量上限。
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+        question_row: 单条题目记录，通常来自 `fetch_questions_for_interview`。
+        top_k: 每道题目的 RAG 检索片段上限。
 
     返回:
-        字典结构，包含:
-            - question_id
-            - question_text
-            - question_type
-            - intent_id
-            - segments: RAG 检索到的片段列表
-            - notes:    大模型生成的 Notes 结果字典
+        单题 Notes 结果字典。若生成失败，则返回带 `error` 字段的结果。
     """
-    question_id = question_row.get("id")
-    question_text = question_row.get("question_text", "")
-    question_type = question_row.get("question_type")
-    intent_id = question_row.get("intent_id")
-    intent_name = None
-    if intent_id is not None:
-        intent_name = fetch_intent_names([int(intent_id)]).get(int(intent_id))
+    interview = DbAccess.get_interview_by_id(interview_id)
+    if not interview:
+        return {
+            "question_id": question_row.get("id"),
+            "question_text": question_row.get("question_text", ""),
+            "question_type": question_row.get("question_type"),
+            "intent_id": question_row.get("intent_id"),
+            "segments": [],
+            "notes": {"error": f"interview {interview_id} not found"},
+        }
 
-    print(f"[NOTES] 开始为问题 {question_id} 生成 Notes")
-
-    segments = retrieve_segments_for_question(
+    project_id = int(interview.get("parse_project_id") or 0)
+    notes_block = generate_notes_step(
+        project_id=project_id,
         interview_id=interview_id,
-        question_text=question_text,
+        questions=[question_row],
         top_k=top_k,
-        question_type=question_type or None,
-        intent_name=intent_name,
     )
-    print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
-
-    model_client = ModelClient()
-    notes = model_client.generate_notes_for_question(
-        question_text=question_text,
-        segments=segments,
-        intent_name=intent_name,
-        question_type=question_type,
-    )
+    results = notes_block.get("results") or []
+    if results:
+        return results[0]
 
     return {
-        "question_id": question_id,
-        "question_text": question_text,
-        "question_type": question_type,
-        "intent_id": intent_id,
-        "segments": segments,
-        "notes": notes,
+        "question_id": question_row.get("id"),
+        "question_text": question_row.get("question_text", ""),
+        "question_type": question_row.get("question_type"),
+        "intent_id": question_row.get("intent_id"),
+        "segments": [],
+        "notes": {"error": notes_block.get("message") or "generate notes failed"},
     }
 
 
 def run_generate_notes_for_interview(
     interview_id: int,
     top_k: int = 10,
+    question_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    针对单场访谈的所有题目执行 Notes 生成流程。
+    为指定访谈生成 Notes，但仅返回内存结果，不执行写库。
 
     参数:
-        interview_id: 访谈主键 ID。
-        top_k:        每道题目 RAG 检索返回的片段数量上限。
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+        top_k: 每道题目的 RAG 检索片段上限。
+        question_id: 可选题目 ID；传入时仅生成单题结果。
 
     返回:
-        每个题目的 Notes 结果列表。
+        Notes 结果列表。若访谈不存在、题目不存在或生成失败，则返回空列表。
     """
-    print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
-    index_interview_summary(interview_id)
-
-    questions = fetch_questions_for_interview(interview_id)
-    if not questions:
-        print(f"[NOTES] 访谈 {interview_id} 下未找到任何题目记录")
+    interview = DbAccess.get_interview_by_id(interview_id)
+    if not interview:
+        print(f"[NOTES] interview {interview_id} not found")
         return []
 
-    print(f"[NOTES] 共找到 {len(questions)} 条题目，开始生成 Notes")
+    project_id = int(interview.get("parse_project_id") or 0)
+    question_result = fetch_questions_step(interview_id)
+    if not question_result.get("success"):
+        print(f"[NOTES] {question_result.get('message')}")
+        return []
 
-    results: List[Dict[str, Any]] = []
-    for row in questions:
-        result = generate_notes_for_question_with_rag(
-            interview_id=interview_id,
-            question_row=row,
-            top_k=top_k,
-        )
-        results.append(result)
+    questions: List[Dict[str, Any]] = question_result.get("questions") or []
+    if question_id is not None:
+        target_question_id = int(question_id)
+        questions = [row for row in questions if int(row.get("id") or 0) == target_question_id]
+        if not questions:
+            print(f"[NOTES] question {target_question_id} not found")
+            return []
 
-    return results
+    notes_block = generate_notes_step(
+        project_id=project_id,
+        interview_id=interview_id,
+        questions=questions,
+        top_k=top_k,
+    )
+    if not notes_block.get("success"):
+        print(f"[NOTES] {notes_block.get('message')}")
+        return []
+    return notes_block.get("results") or []
 
 
 def pretty_print_notes_results(results: List[Dict[str, Any]]) -> None:
     """
-    将 Notes 生成结果以易读格式打印到控制台。
+    将 Notes 结果按控制台可读格式打印出来。
 
     参数:
-        results: run_generate_notes_for_interview 的返回列表。
+        results: Notes 结果列表，通常来自 `run_generate_notes_for_interview`。
+
+    返回:
+        无返回值。函数直接向标准输出打印内容。
     """
     for idx, item in enumerate(results, start=1):
-        qid = item.get("question_id")
-        qtext = item.get("question_text", "")
+        question_id = item.get("question_id")
+        question_text = item.get("question_text", "")
         notes = item.get("notes", {})
 
         print("\n" + "=" * 80)
-        print(f"[NOTES] 问题序号 {idx}，question_id={qid}")
-        print(f"[NOTES] 问题内容: {qtext}")
+        print(f"[NOTES] 问题序号 {idx}，question_id={question_id}")
+        print(f"[NOTES] 问题内容: {question_text}")
         print("-" * 80)
         print("[NOTES] 生成的 Notes JSON:")
         print(json.dumps(notes, ensure_ascii=False, indent=2))
@@ -197,6 +148,7 @@ if __name__ == "__main__":
     interview_id_str = config.TEST_INTERVIEW_ID
     if not interview_id_str:
         raise RuntimeError("未在环境变量中找到 TEST_INTERVIEW_ID")
+
     interview_id = int(interview_id_str)
     all_results = run_generate_notes_for_interview(interview_id=interview_id, top_k=10)
     pretty_print_notes_results(all_results)

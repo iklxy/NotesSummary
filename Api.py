@@ -2,26 +2,67 @@
 "@Author: lixinyang"
 
 import json
-from typing import Any, Dict, List
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 
 from DbAccess import DbAccess
+from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
 from RagIndex import index_interview_summary
-from Workflow import run_notes_generation_for_interview, run_workflow, step_fetch_questions
+from Workflow import run_workflow
 
 
 app = FastAPI()
 TRANSCRIBE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="transcribe")
 
 
+def _load_interview_or_404(interview_id: int) -> Dict[str, Any]:
+    """
+    读取访谈记录；若不存在则直接抛出 404。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        访谈记录字典，内容来自 `DbAccess.get_interview_by_id`。
+
+    异常:
+        HTTPException: 当访谈不存在时抛出 404。
+    """
+    interview = DbAccess.get_interview_by_id(interview_id)
+    if not interview:
+        raise HTTPException(status_code=404, detail="interview not found")
+    return interview
+
+
 def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
     """
-    将转录工作提交给线程池，立即返回受理结果。
+    将转录工作流提交到后台线程池，并立即返回受理结果。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        受理结果字典，包含：
+            - success: 是否已成功提交到线程池。
+            - queued: 是否已进入后台队列。
+            - interview_id: 本次提交对应的访谈 ID。
+
+    异常:
+        HTTPException: 当线程池提交失败时抛出 500。
     """
 
     def _job() -> None:
+        """
+        在线程池中实际执行完整工作流，并在异常时回写失败状态。
+
+        参数:
+            无。闭包内部直接使用外层 `interview_id`。
+
+        返回:
+            无返回值。执行结果仅用于日志输出。
+        """
         try:
             result = run_workflow(interview_id)
             print(f"[TRANSCRIBE] interview_id={interview_id} finished: {json.dumps(result, ensure_ascii=False)}")
@@ -36,6 +77,7 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
         TRANSCRIBE_EXECUTOR.submit(_job)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"submit transcribe job failed: {e}")
+
     return {
         "success": True,
         "queued": True,
@@ -43,115 +85,91 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
     }
 
 
-@app.post("/internal/interviews/{interview_id}/transcribe")
-@app.post("/internal/interviews/{interview_id}/run-workflow")
-def api_run_workflow(interview_id: int) -> Dict[str, Any]:
+def _load_interview_notes_rows(interview_id: int) -> List[Dict[str, Any]]:
     """
-    对指定访谈 ID 执行“转录 -> 清洗 -> 写 summary”的工作流。
-
-    包含步骤：
-        1) 本地音频上云（或直接生成预签名 URL）
-        2) 云上音频转文字（ASR）
-        3) 组装并写入 bh_project_interview.file_content
-        4) LLM 清洗并写入 bh_project_interview_summary
-        5) 将访谈状态标记为“可分析”
+    查询某个访谈下题目与 Notes 的联表结果。
 
     参数:
-        interview_id: 访谈主键 ID，对应 bh_project_interview.id。
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
 
     返回:
-        立即返回受理结果；真正的工作流在后台线程池中执行。
+        联表查询结果列表。每条记录同时包含题目信息与对应 Notes 信息；
+        若某题尚未生成 Notes，则 Notes 相关字段可能为 `None`。
+
+    异常:
+        HTTPException: 当数据库查询失败时抛出 500。
     """
-    return _submit_transcribe_job(interview_id)
-
-
-@app.post("/internal/interviews/{interview_id}/generate-notes")
-def api_generate_notes(interview_id: int, question_id: int | None = None) -> Dict[str, Any]:
+    sql = """
+        SELECT
+            q.id AS question_id,
+            q.question_order,
+            q.question_text,
+            q.question_type,
+            q.intent_id AS question_intent_id,
+            q.research_phase,
+            n.id AS notes_id,
+            n.intent_id AS notes_intent_id,
+            n.note_json,
+            n.confidence,
+            n.status
+        FROM bh_project_question q
+        LEFT JOIN bh_project_interview_notes n
+          ON n.project_interview_id = q.project_interview_id
+         AND n.question_id = q.id
+        WHERE q.project_interview_id = %s
+        ORDER BY q.question_order ASC, q.id ASC, n.id ASC
     """
-    针对指定访谈，按题目生成 Notes 并写入数据库。
-
-    参数:
-        interview_id: 访谈主键 ID。
-        question_id:   可选，只为单个题目生成 Notes；不传则为该访谈下全部题目生成。
-    """
-    try:
-        result = run_notes_generation_for_interview(interview_id, question_id=question_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
-    return result
-
-
-@app.get("/internal/interviews/{interview_id}/notes")
-def api_get_interview_notes(interview_id: int) -> Dict[str, Any]:
-    """
-    按题目维度获取某个访谈对应的 Notes 列表。
-
-    参数:
-        interview_id: 访谈主键 ID，对应 bh_project_interview.id。
-
-    返回:
-        {
-            "interview_id": ...,
-            "project_id": ...,
-            "questions": [
-                {
-                    "question_id": ...,
-                    "question_order": ...,
-                    "question_text": "...",
-                    "question_type": "...",
-                    "intent_id": ...,
-                    "research_phase": "...",
-                    "notes": [
-                        {
-                            "notes_id": ...,
-                            "intent_id": ...,
-                            "note_json": {...},  # 已尝试反序列化为 JSON
-                            "confidence": ...,
-                            "status": ...,
-                        },
-                        ...
-                    ],
-                },
-                ...
-            ],
-        }
-    """
-    interview = DbAccess.get_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
-
-    project_id = interview.get("parse_project_id")
-
     conn = DbAccess.get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
-                SELECT
-                    q.id AS question_id,
-                    q.question_order,
-                    q.question_text,
-                    q.question_type,
-                    q.intent_id AS question_intent_id,
-                    q.research_phase,
-                    n.id AS notes_id,
-                    n.intent_id AS notes_intent_id,
-                    n.note_json,
-                    n.confidence,
-                    n.status
-                FROM bh_project_question q
-                LEFT JOIN bh_project_interview_notes n
-                  ON n.project_interview_id = q.project_interview_id
-                 AND n.question_id = q.id
-                WHERE q.project_interview_id = %s
-                ORDER BY q.question_order ASC, q.id ASC, n.id ASC
-            """
             cursor.execute(sql, (interview_id,))
             rows: List[Dict[str, Any]] = cursor.fetchall()
+            return rows
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"query notes failed: {e}")
     finally:
         conn.close()
 
+
+def _parse_note_json(note_json_raw: Any) -> Any:
+    """
+    将数据库中的 `note_json` 字段尽量解析为 Python 对象。
+
+    参数:
+        note_json_raw: 数据库原始返回值。可能是 JSON 字符串，也可能已经是字典、
+            列表，或其他基础类型。
+
+    返回:
+        若输入是合法 JSON 字符串，则返回反序列化后的 Python 对象；
+        若解析失败，则原样返回输入字符串或原始对象。
+    """
+    if isinstance(note_json_raw, str):
+        try:
+            return json.loads(note_json_raw)
+        except Exception:
+            return note_json_raw
+    return note_json_raw
+
+
+def _build_interview_notes_response(
+    interview_id: int,
+    project_id: Optional[int],
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    将题目与 Notes 的联表结果整理成 API 对外返回结构。
+
+    参数:
+        interview_id: 访谈主键 ID，用于回填响应中的 `interview_id`。
+        project_id: 所属项目 ID，通常来自访谈记录中的 `parse_project_id`。
+        rows: 数据库联表结果列表，来自 `_load_interview_notes_rows`。
+
+    返回:
+        标准化后的响应字典，结构包含：
+            - interview_id
+            - project_id
+            - questions: 按题目聚合后的列表，每题下挂载对应 Notes 列表。
+    """
     questions_map: Dict[int, Dict[str, Any]] = {}
 
     for row in rows:
@@ -168,36 +186,97 @@ def api_get_interview_notes(interview_id: int) -> Dict[str, Any]:
             }
 
         notes_id = row.get("notes_id")
-        if notes_id is not None:
-            note_json_raw = row.get("note_json")
-            if isinstance(note_json_raw, str):
-                try:
-                    note_parsed: Any = json.loads(note_json_raw)
-                except Exception:
-                    note_parsed = note_json_raw
-            else:
-                note_parsed = note_json_raw
+        if notes_id is None:
+            continue
 
-            questions_map[question_id]["notes"].append(
-                {
-                    "notes_id": notes_id,
-                    "intent_id": row.get("notes_intent_id"),
-                    "note_json": note_parsed,
-                    "confidence": row.get("confidence"),
-                    "status": row.get("status"),
-                }
-            )
+        questions_map[question_id]["notes"].append(
+            {
+                "notes_id": notes_id,
+                "intent_id": row.get("notes_intent_id"),
+                "note_json": _parse_note_json(row.get("note_json")),
+                "confidence": row.get("confidence"),
+                "status": row.get("status"),
+            }
+        )
 
     questions_list = sorted(
         questions_map.values(),
-        key=lambda x: (x["question_order"], x["question_id"]),
+        key=lambda item: (item["question_order"], item["question_id"]),
     )
-
     return {
         "interview_id": interview_id,
         "project_id": project_id,
         "questions": questions_list,
     }
+
+
+# ----------------------------------------------------------------------
+# 转录与工作流路由
+# ----------------------------------------------------------------------
+@app.post("/internal/interviews/{interview_id}/transcribe")
+@app.post("/internal/interviews/{interview_id}/run-workflow")
+def api_run_workflow(interview_id: int) -> Dict[str, Any]:
+    """
+    异步触发指定访谈的“转录 -> 纠错 -> summary”工作流。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        后台任务受理结果，表示任务已提交到线程池，而不是工作流已完成。
+    """
+    return _submit_transcribe_job(interview_id)
+
+
+# ----------------------------------------------------------------------
+# Notes 与题目路由
+# ----------------------------------------------------------------------
+@app.post("/internal/interviews/{interview_id}/generate-notes")
+def api_generate_notes(interview_id: int, question_id: int | None = None) -> Dict[str, Any]:
+    """
+    为指定访谈生成 Notes；可选择只生成单题，也可生成全部题目。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+        question_id: 可选题目 ID。传入时只处理该题；为空时处理该访谈下所有题目。
+
+    返回:
+        Notes 工作流执行结果，内容由 `run_notes_generation_for_interview` 返回。
+
+    异常:
+        HTTPException: 当 Notes 工作流执行失败时抛出 500。
+    """
+    try:
+        return run_notes_generation_for_interview(interview_id, question_id=question_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
+
+
+@app.get("/internal/interviews/{interview_id}/notes")
+def api_get_interview_notes(interview_id: int) -> Dict[str, Any]:
+    """
+    按题目维度返回某个访谈下已经生成的 Notes 结果。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        一个按题目聚合后的响应字典。每道题下包含：
+            - question_id
+            - question_order
+            - question_text
+            - question_type
+            - intent_id
+            - research_phase
+            - notes: 该题对应的 Notes 列表
+    """
+    interview = _load_interview_or_404(interview_id)
+    rows = _load_interview_notes_rows(interview_id)
+    return _build_interview_notes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        rows=rows,
+    )
 
 
 @app.get("/internal/interviews/{interview_id}/questions")
@@ -206,26 +285,15 @@ def api_get_interview_questions(interview_id: int) -> Dict[str, Any]:
     获取某个访谈下配置的题目列表。
 
     参数:
-        interview_id: 访谈主键 ID，对应 bh_project_interview.id。
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
 
     返回:
-        {
-            "interview_id": ...,
-            "questions": [
-                {
-                    "id": ...,
-                    "project_interview_id": ...,
-                    "question_order": ...,
-                    "question_text": "...",
-                    "question_type": "...",
-                    "research_phase": "...",
-                    "intent_id": ...,
-                },
-                ...
-            ],
-        }
+        包含 `interview_id` 与 `questions` 列表的响应字典。
+
+    异常:
+        HTTPException: 当访谈下没有题目或题目查询失败时抛出 404。
     """
-    result = step_fetch_questions(interview_id)
+    result = fetch_questions_step(interview_id)
     if not result.get("success"):
         message = result.get("message") or "questions not found"
         raise HTTPException(status_code=404, detail=message)
@@ -236,14 +304,27 @@ def api_get_interview_questions(interview_id: int) -> Dict[str, Any]:
     }
 
 
+# ----------------------------------------------------------------------
+# RAG 索引路由
+# ----------------------------------------------------------------------
 @app.post("/internal/interviews/{interview_id}/reindex-rag")
 def api_reindex_rag(interview_id: int) -> Dict[str, Any]:
     """
-    重新构建指定访谈的 RAG 向量索引。
+    重新为指定访谈构建 RAG 向量索引。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        重建结果字典，包含：
+            - success: 是否执行成功。
+            - interview_id: 访谈 ID。
+            - indexed: 实际写入或更新的向量数量。
+
+    异常:
+        HTTPException: 当访谈不存在时抛出 404；当重建失败时抛出 500。
     """
-    interview = DbAccess.get_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    _load_interview_or_404(interview_id)
 
     try:
         indexed = index_interview_summary(interview_id)

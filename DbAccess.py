@@ -1,19 +1,43 @@
 "@Date:2026-04-10"
 "@author:lixinyang"
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
+
 import pymysql
 
 from config import config
 
-class DbAccess:
-    @staticmethod
-    def _format_summary_timestamp(seg: dict) -> str:
-        """
-        将 ASR 段的时间范围格式化为 summary 表可存储的字符串。
 
-        统一使用毫秒级区间格式：start_ms-end_ms。
-        如果只有一端时间可用，则退化为单点时间 start_ms-start_ms。
+class DbAccess:
+    """
+    统一封装 engine 侧数据库访问逻辑。
+
+    当前文件不再按“功能散落”的方式组织，而是在单文件内按职责分层：
+    1. 连接与基础读写辅助方法
+    2. 项目与访谈读取
+    3. 访谈更新
+    4. Summary 落库
+    5. Notes 落库
+    """
+
+    # ------------------------------------------------------------------
+    # 连接与基础读写辅助方法
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _format_summary_timestamp(seg: Dict[str, Any]) -> str:
+        """
+        将 ASR 分段时间信息格式化为 summary 表使用的时间范围字符串。
+
+        参数:
+            seg: 单条说话轮次记录。允许包含以下任意时间字段：
+                - timestamp: 已格式化好的时间区间字符串，若存在则直接复用。
+                - start_time / end_time: 原始 ASR 的起止时间，通常为毫秒。
+                - start_ms / end_ms: 备用毫秒字段，供纠错/清洗后的结构继续复用。
+
+        返回:
+            标准化后的时间区间字符串，格式为 `start_ms-end_ms`。
+            若只有一端时间存在，则退化为 `start_ms-start_ms`。
+            若所有时间字段均缺失，则返回空字符串。
         """
         raw_timestamp = seg.get("timestamp")
         if isinstance(raw_timestamp, str) and raw_timestamp.strip():
@@ -52,51 +76,126 @@ class DbAccess:
         创建并返回一个 MySQL 数据库连接。
 
         参数:
-            无，所有配置均从环境变量中读取:
-                - DB_HOST: 数据库主机名或 IP，默认 127.0.0.1。
-                - DB_PORT: 数据库端口，默认 3306。
-                - DB_USER: 数据库用户名。
-                - DB_PASSWORD: 数据库密码。
-                - DB_NAME: 数据库名称。
+            无。数据库连接参数统一从 `config` 中读取：
+                - config.DB_HOST: MySQL 主机名或 IP。
+                - config.DB_PORT: MySQL 端口。
+                - config.DB_USER: 数据库用户名。
+                - config.DB_PASSWORD: 数据库密码。
+                - config.DB_NAME: 数据库名称。
 
         返回:
-            已建立连接的 pymysql Connection 实例。
+            一个已建立连接的 `pymysql.connections.Connection` 实例。
         """
-        host = config.DB_HOST
-        port = config.DB_PORT
-        user = config.DB_USER
-        password = config.DB_PASSWORD
-        db_name = config.DB_NAME
-
-        connection = pymysql.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database=db_name,
+        return pymysql.connect(
+            host=config.DB_HOST,
+            port=config.DB_PORT,
+            user=config.DB_USER,
+            password=config.DB_PASSWORD,
+            database=config.DB_NAME,
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=False,
         )
-        return connection
 
+    @classmethod
+    def _fetch_one(
+        cls,
+        sql: str,
+        params: Sequence[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        执行单行查询并返回第一条结果。
+
+        参数:
+            sql: 需要执行的 SQL 查询语句，应返回至多一行结果。
+            params: SQL 参数序列，顺序需与语句中的占位符 `%s` 一致。
+
+        返回:
+            查询到数据时返回字典形式的单条记录；没有数据时返回 `None`。
+        """
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, params)
+                return cursor.fetchone()
+        finally:
+            conn.close()
+
+    @classmethod
+    def _fetch_all(
+        cls,
+        sql: str,
+        params: Sequence[Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        执行多行查询并返回完整结果集。
+
+        参数:
+            sql: 需要执行的 SQL 查询语句。
+            params: SQL 参数序列，顺序需与语句中的占位符 `%s` 一致。
+
+        返回:
+            结果列表；每个元素为一行记录的字典。
+            若查询无结果，返回空列表。
+        """
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, params)
+                rows: List[Dict[str, Any]] = cursor.fetchall()
+                return rows
+        finally:
+            conn.close()
+
+    @classmethod
+    def _execute_write(
+        cls,
+        sql: str,
+        params: Sequence[Any],
+    ) -> int:
+        """
+        执行单条写操作 SQL，并统一处理事务提交与回滚。
+
+        参数:
+            sql: 需要执行的 INSERT / UPDATE / DELETE 语句。
+            params: SQL 参数序列，顺序需与语句中的占位符 `%s` 一致。
+
+        返回:
+            受影响的行数，即 `cursor.rowcount` 的值。
+        """
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, params)
+                affected_rows = cursor.rowcount
+            conn.commit()
+            return affected_rows
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # 项目与访谈读取
+    # ------------------------------------------------------------------
     @classmethod
     def get_interview_by_id(cls, interview_id: int) -> Optional[Dict[str, Any]]:
         """
-        根据访谈 ID 查询 bh_project_interview 表中的单条记录。
+        根据访谈 ID 查询 `bh_project_interview` 表中的单条记录。
 
         参数:
-            interview_id: 访谈主键 ID，对应 bh_project_interview.id。
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
 
         返回:
-            如果存在，返回一行记录的字典形式，字段至少包含:
+            若查询成功，返回访谈记录字典，字段至少包含：
                 - id
                 - parse_project_id
                 - file_name
                 - file_content
                 - file_path
                 - status
-            如果不存在，返回 None。
+            若不存在对应记录，则返回 `None`。
         """
         sql = """
             SELECT
@@ -110,31 +209,23 @@ class DbAccess:
             WHERE id = %s
             LIMIT 1
         """
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, (interview_id,))
-                row = cursor.fetchone()
-                return row
-        finally:
-            conn.close()
+        return cls._fetch_one(sql, (interview_id,))
 
     @classmethod
     def get_project_by_id(cls, project_id: int) -> Optional[Dict[str, Any]]:
         """
-        根据项目 ID 查询 bh_project 表中的单条记录。
+        根据项目 ID 查询 `bh_project` 表中的单条记录。
 
         参数:
-            project_id: 项目主键 ID，对应 bh_project.id。
-
-        返回字段至少包含:
-            - id
-            - name
-            - keywords
-            - core_problem
+            project_id: 项目主键 ID，对应 `bh_project.id`。
 
         返回:
-            如果存在则返回项目记录字典，否则返回 None。
+            若查询成功，返回项目记录字典，字段至少包含：
+                - id
+                - name
+                - keywords
+                - core_problem
+            若不存在对应记录，则返回 `None`。
         """
         sql = """
             SELECT
@@ -146,15 +237,77 @@ class DbAccess:
             WHERE id = %s
             LIMIT 1
         """
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, (project_id,))
-                row = cursor.fetchone()
-                return row
-        finally:
-            conn.close()
+        return cls._fetch_one(sql, (project_id,))
 
+    @classmethod
+    def fetch_questions_for_interview(cls, interview_id: int) -> List[Dict[str, Any]]:
+        """
+        查询某个访谈配置的题目列表。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+        返回:
+            题目记录列表。每条记录至少包含：
+                - id: 题目主键 ID。
+                - project_interview_id: 所属访谈 ID。
+                - question_order: 题目排序序号。
+                - question_text: 题目正文。
+                - question_type: 题目类型。
+                - research_phase: 研究阶段信息。
+                - intent_id: 关联意图 ID。
+        """
+        sql = """
+            SELECT
+                id,
+                project_interview_id,
+                question_order,
+                question_text,
+                question_type,
+                research_phase,
+                intent_id
+            FROM bh_project_question
+            WHERE project_interview_id = %s
+            ORDER BY question_order ASC, id ASC
+        """
+        return cls._fetch_all(sql, (interview_id,))
+
+    @classmethod
+    def fetch_intent_name_map(cls, intent_ids: List[int]) -> Dict[int, str]:
+        """
+        根据意图 ID 列表构造 `intent_id -> name` 映射。
+
+        参数:
+            intent_ids: 意图 ID 列表。允许混入 `None` 或不可用值，函数内部会做过滤。
+
+        返回:
+            一个字典，键为意图 ID，值优先取 `bh_question_intent.name`，
+            若 name 为空则退回 `code`。
+        """
+        normalized_ids = [int(i) for i in intent_ids if i is not None]
+        if not normalized_ids:
+            return {}
+
+        placeholders = ",".join(["%s"] * len(normalized_ids))
+        sql = f"""
+            SELECT id, name, code
+            FROM bh_question_intent
+            WHERE id IN ({placeholders})
+        """
+        rows = cls._fetch_all(sql, normalized_ids)
+
+        intent_name_map: Dict[int, str] = {}
+        for row in rows:
+            intent_id = row.get("id")
+            if intent_id is None:
+                continue
+            name = str(row.get("name") or row.get("code") or "").strip()
+            intent_name_map[int(intent_id)] = name
+        return intent_name_map
+
+    # ------------------------------------------------------------------
+    # 访谈更新
+    # ------------------------------------------------------------------
     @classmethod
     def update_interview_after_upload(
         cls,
@@ -165,65 +318,51 @@ class DbAccess:
         audio_url: Optional[str] = None,
     ) -> None:
         """
-        在音频上传完成后，更新 bh_project_interview 中的文件相关字段。
+        在音频上传完成后，更新访谈记录中的文件路径与状态字段。
 
         参数:
-            interview_id: 访谈主键 ID，对应 bh_project_interview.id。
-            object_key:   上传到 TOS 的对象 key，写入 file_path 字段。
-            status:       访谈处理状态，例如 1 表示“已上传待 ASR”。
-            file_id:      可选，写入 file_id 字段，可与 object_key 或 TOS 返回的 ID 对应。
-            audio_url:    预留参数，当前实现未写入数据库。
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            object_key: 上传到 TOS 后的对象 key，写入 `file_path` 字段。
+            status: 上传完成后的访谈状态码，例如“已上传待 ASR”。
+            file_id: 可选的文件唯一标识，若存在则写入 `file_id` 字段。
+            audio_url: 预留参数，当前版本未写入数据库，仅用于保留接口兼容性。
 
         返回:
-            无返回值，更新失败时会抛出数据库异常。
+            无返回值。数据库更新失败时抛出异常。
         """
         fields = ["file_path = %s", "status = %s"]
-        params: list[Any] = [object_key, status]
+        params: List[Any] = [object_key, status]
 
         if file_id is not None:
             fields.append("file_id = %s")
             params.append(file_id)
 
         params.append(interview_id)
-
         sql = f"""
             UPDATE bh_project_interview
             SET {", ".join(fields)}
             WHERE id = %s
         """
-
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, params)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        cls._execute_write(sql, params)
 
     @classmethod
     def update_interview_status(cls, interview_id: int, status: int) -> None:
         """
-        仅更新访谈状态字段。
+        更新访谈状态字段。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            status: 需要写入的状态码，含义由业务状态枚举定义。
+
+        返回:
+            无返回值。数据库更新失败时抛出异常。
         """
         sql = """
             UPDATE bh_project_interview
             SET status = %s
             WHERE id = %s
         """
-
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, (status, interview_id))
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        cls._execute_write(sql, (status, interview_id))
 
     @classmethod
     def update_interview_file_content(
@@ -232,51 +371,45 @@ class DbAccess:
         file_content_json: str,
     ) -> None:
         """
-        将转录后的 JSON 结果写入 bh_project_interview.file_content 字段。
+        将转录或纠错后的完整 JSON 结果写入访谈记录。
 
         参数:
-            interview_id:      访谈主键 ID，对应 bh_project_interview.id。
-            file_content_json: 已经序列化好的 JSON 字符串。
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            file_content_json: 已序列化的 JSON 字符串，通常包含 ASR、纠错、清洗等结果。
 
         返回:
-            无返回值，更新失败时会抛出数据库异常。
+            无返回值。数据库更新失败时抛出异常。
         """
         sql = """
             UPDATE bh_project_interview
             SET file_content = %s
             WHERE id = %s
         """
+        cls._execute_write(sql, (file_content_json, interview_id))
 
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, (file_content_json, interview_id))
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
+    # ------------------------------------------------------------------
+    # Summary 落库
+    # ------------------------------------------------------------------
     @classmethod
     def insert_summary_from_cleaned_speakers(
         cls,
         interview_id: int,
-        speakers: list[dict],
+        speakers: List[Dict[str, Any]],
     ) -> int:
         """
-        将清洗后的 speakers 列表写入 bh_project_interview_summary 表。
+        将清洗后的说话轮次批量写入 `bh_project_interview_summary`。
 
         参数:
-            interview_id: 访谈主键 ID，对应 bh_project_interview.id。
-            speakers:     清洗后的说话轮次列表，每个元素至少包含:
-                          - speaker_id: 说话人 ID
-                          - speaker_content_clean: 清洗后的文本内容
-                          - start_time/end_time: 可选，ASR 原始分段时间（毫秒）
-                          - timestamp: 可选，若已预先格式化可直接使用
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            speakers: 清洗后的说话轮次列表。每个元素至少应包含：
+                - speaker_id: 说话人 ID，写入 `speaker` 字段。
+                - speaker_content_clean: 清洗后的文本正文，写入 `text` 字段。
+                - start_time / end_time: 原始 ASR 的起止毫秒时间。
+                - 或 timestamp: 已预格式化好的时间区间字符串。
 
         返回:
-            实际插入的记录条数。
+            实际插入到 `bh_project_interview_summary` 表中的记录条数。
+            为空文本的分段会被自动跳过。
         """
         if not speakers:
             return 0
@@ -295,6 +428,12 @@ class DbAccess:
                     speaker_id = str(seg.get("speaker_id", ""))
                     clean_text = seg.get("speaker_content_clean", "")
                     if not clean_text:
+                        clean_text = seg.get("speaker_content_corrected", "")
+                    if not clean_text:
+                        clean_text = seg.get("text", "")
+                    if not clean_text:
+                        clean_text = seg.get("speaker_content", "")
+                    if not clean_text:
                         continue
                     timestamp = cls._format_summary_timestamp(seg)
                     cursor.execute(sql, (interview_id, timestamp, speaker_id, clean_text, 0))
@@ -308,6 +447,9 @@ class DbAccess:
 
         return inserted
 
+    # ------------------------------------------------------------------
+    # Notes 落库
+    # ------------------------------------------------------------------
     @classmethod
     def insert_notes_result(
         cls,
@@ -321,26 +463,33 @@ class DbAccess:
         error_message: Optional[str] = None,
     ) -> int:
         """
-        将单条 Notes 结果写入 bh_project_interview_notes 表。
+        将单条 Notes 结果写入 `bh_project_interview_notes` 表，并在重复键场景下更新旧记录。
 
         参数:
-            project_id:    项目 ID，对应 bh_project.id。
-            interview_id:  访谈 ID，对应 bh_project_interview.id。
-            question_id:   题目 ID，对应 bh_project_question.id。
-            intent_id:     意图 ID，对应 bh_question_intent.id。
-            note_json_str: 已序列化的 Notes JSON 字符串。
-            confidence:    模型置信度，0–1 之间的小数。
-            status:        Notes 状态：0自动生成/1已通过/2已编辑/3已拒绝/4错误。
-            error_message: 可选的错误说明。
+            project_id: 项目 ID，对应 `bh_project.id`。
+            interview_id: 访谈 ID，对应 `bh_project_interview.id`。
+            question_id: 题目 ID，对应 `bh_project_question.id`。
+            intent_id: 意图 ID，对应 `bh_question_intent.id`。
+            note_json_str: 已序列化的 Notes JSON 字符串，写入 `note_json` 字段。
+            confidence: 模型输出置信度，通常为 0 到 1 之间的小数。
+            status: Notes 状态码，例如自动生成、已通过、已编辑、已拒绝、错误。
+            error_message: 可选错误说明；当生成失败或需要记录异常信息时写入。
 
         返回:
-            新插入记录的自增 ID。
+            插入或更新后的记录 ID。
+            当命中唯一键并走 upsert 更新时，返回已有记录的主键 ID。
         """
         sql = """
             INSERT INTO bh_project_interview_notes
                 (project_id, project_interview_id, question_id, intent_id,
                  note_json, confidence, status, error_message)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                note_json = VALUES(note_json),
+                confidence = VALUES(confidence),
+                status = VALUES(status),
+                error_message = VALUES(error_message),
+                id = LAST_INSERT_ID(id)
         """
 
         conn = cls.get_connection()
@@ -359,7 +508,7 @@ class DbAccess:
                         error_message,
                     ),
                 )
-                new_id = cursor.lastrowid
+                record_id = cursor.lastrowid
             conn.commit()
         except Exception:
             conn.rollback()
@@ -367,4 +516,4 @@ class DbAccess:
         finally:
             conn.close()
 
-        return new_id
+        return record_id
