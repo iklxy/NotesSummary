@@ -272,7 +272,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             return fail("extract_interview_context", ec)
         interview_context = ec["interview_context"]
 
-        # 5. LLM 兜底纠错（清洗流程当前保留注释，暂不启用）
+        # 5. LLM 纠错 + 再纠错 + 清洗
         cl = step_clean_with_llm(
             file_content_json,
             project_context=project_context,

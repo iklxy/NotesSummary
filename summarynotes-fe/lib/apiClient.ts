@@ -20,7 +20,11 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   if (options.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
     headers["Content-Type"] = "application/json";
   }
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
   if (!response.ok) {
     let detail: unknown;
     try {

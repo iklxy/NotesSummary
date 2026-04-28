@@ -94,9 +94,6 @@ export interface InterviewQuestionsResponse {
 
 export interface QuestionCreateItem {
   question_text: string;
-  question_type?: string | null;
-  intent_id: number;
-  research_phase?: string | null;
 }
 
 export interface QuestionCreateResponse {
@@ -167,6 +164,9 @@ export interface Interview {
   id: number;
   name: string;
   date?: string | null;
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
   audioFileName?: string | null;
 }
 
@@ -176,4 +176,10 @@ export interface Project {
   keywords?: string | null;
   core_problem?: string | null;
   interviews?: Interview[];
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  display_name?: string | null;
 }

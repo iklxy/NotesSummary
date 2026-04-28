@@ -352,8 +352,8 @@ def clean_file_content_json(
             }
         }
     说明:
-        当前版本保留清洗函数，但流程里暂不执行清洗步骤；
-        因此 speaker_content_clean 会先承接兜底纠错后的最终文本。
+        当前版本会先执行主纠错、再纠错和清洗三个步骤；
+        因此 speaker_content_clean 会承接清洗后的最终文本。
     """
     data = json.loads(file_content_json)
     result = data.get("result") or {}
@@ -402,15 +402,13 @@ def clean_file_content_json(
         project_context=project_context,
         interview_context=interview_context,
     )
-    # 清洗能力保留，但当前流程暂不启用。
-    # cleaned_speakers = clean_speakers(
-    #     speakers=fallback_corrected_speakers,
-    #     speaker_roles=speaker_roles,
-    #     term_hints=term_hints,
-    #     project_context=project_context,
-    #     interview_context=interview_context,
-    # )
-    cleaned_speakers = fallback_corrected_speakers
+    cleaned_speakers = clean_speakers(
+        speakers=fallback_corrected_speakers,
+        speaker_roles=speaker_roles,
+        term_hints=term_hints,
+        project_context=project_context,
+        interview_context=interview_context,
+    )
 
     enriched: List[Dict[str, Any]] = []
     transcript_enriched: List[Dict[str, Any]] = []

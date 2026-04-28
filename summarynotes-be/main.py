@@ -11,6 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.interviews import router as interviews_router
+from api.auth import router as auth_router
 from api.projects import router as projects_router
 from api.project_interviews import router as project_interviews_router
 from api.question_intents import router as question_intents_router
@@ -25,6 +26,7 @@ app.include_router(projects_router)
 app.include_router(project_interviews_router)
 app.include_router(question_intents_router)
 app.include_router(interviews_router)
+app.include_router(auth_router)
 
 
 if __name__ == "__main__":

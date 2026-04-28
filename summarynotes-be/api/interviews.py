@@ -6,9 +6,10 @@ from typing import Any, Dict, List
 
 import os
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from api.auth import require_current_user_id
 from db import (
     delete_interview_graph,
     delete_fewshot_sample,
@@ -49,6 +50,23 @@ from storage import delete_remote_object
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
 
 
+def _get_owned_interview_or_404(interview_id: int, current_user_id: int) -> Dict[str, Any]:
+    """
+    查询当前用户可访问的访谈；若不属于当前用户则统一返回 404。
+
+    参数:
+        interview_id: 访谈主键 ID。
+        current_user_id: 当前登录用户 ID。
+
+    返回:
+        访谈记录字典。
+    """
+    interview = fetch_interview_by_id(interview_id, current_user_id)
+    if not interview:
+        raise HTTPException(status_code=404, detail="interview not found")
+    return interview
+
+
 def _get_internal_base() -> str:
     """
     获取内部 SummaryNotes 引擎服务的基地址。
@@ -70,13 +88,13 @@ def _get_audio_root() -> Path:
     return project_root / "audio"
 
 
-def _resolve_audio_file(interview_id: int) -> tuple[Path, str]:
+def _resolve_audio_file(interview_id: int, current_user_id: int) -> tuple[Path, str]:
     """
     根据访谈 ID 定位本地音频文件。
 
     该函数会先查访谈记录，读取项目 ID 和原始文件名，再拼出本地 audio 目录下的真实路径。
     """
-    row = fetch_interview_by_id(interview_id)
+    row = fetch_interview_by_id(interview_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="interview not found")
 
@@ -164,6 +182,22 @@ def _delete_local_audio_dir(project_id: int, interview_id: int) -> tuple[bool, s
     return True, None
 
 
+def _delete_local_backup_dir(project_id: int, interview_id: int) -> tuple[bool, str | None]:
+    """
+    删除 data 目录下的访谈备份目录。
+    """
+    api_dir = Path(__file__).resolve().parent
+    project_root = api_dir.parent.parent
+    target_dir = project_root / "data" / f"project_{project_id}" / f"interview_{interview_id}"
+    if not target_dir.exists():
+        return True, None
+    try:
+        shutil.rmtree(target_dir)
+    except Exception as e:
+        return False, f"local backup delete failed: {e}"
+    return True, None
+
+
 def _delete_cloud_audio_object(object_key: str | None) -> tuple[bool, str | None]:
     if not object_key:
         return True, None
@@ -197,7 +231,10 @@ def _parse_sample_json(raw: Any) -> tuple[Any, str | None, str | None, int]:
 
 
 @router.post("/{interview_id}/run", response_model=RunInterviewResponse)
-def run_interview_workflow(interview_id: int) -> RunInterviewResponse:
+def run_interview_workflow(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> RunInterviewResponse:
     """
     对外接口：触发指定访谈的转录工作流执行。
 
@@ -219,6 +256,7 @@ def run_interview_workflow(interview_id: int) -> RunInterviewResponse:
         HTTPException(404): 内部服务返回 404，表示访谈不存在。
         HTTPException(502): 内部服务不可用或返回 5xx 错误。
     """
+    _get_owned_interview_or_404(interview_id, current_user_id)
     base = _get_internal_base()
     url = f"{base}/internal/interviews/{interview_id}/transcribe"
     try:
@@ -263,13 +301,15 @@ def run_interview_workflow(interview_id: int) -> RunInterviewResponse:
     "/{interview_id}/questions/{question_id}/generate-notes",
     response_model=GenerateNotesResponse,
 )
-def generate_question_notes(interview_id: int, question_id: int) -> GenerateNotesResponse:
+def generate_question_notes(
+    interview_id: int,
+    question_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> GenerateNotesResponse:
     """
     针对指定题目生成 Notes。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     base = _get_internal_base()
     url = f"{base}/internal/interviews/{interview_id}/generate-notes"
@@ -314,7 +354,10 @@ def generate_question_notes(interview_id: int, question_id: int) -> GenerateNote
 
 
 @router.get("/{interview_id}/status", response_model=InterviewStatusResponse)
-def get_interview_status(interview_id: int) -> InterviewStatusResponse:
+def get_interview_status(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> InterviewStatusResponse:
     """
     查询访谈当前处理状态。
 
@@ -322,9 +365,7 @@ def get_interview_status(interview_id: int) -> InterviewStatusResponse:
         - interview_id
         - status: bh_project_interview.status
     """
-    row = fetch_interview_by_id(interview_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="interview not found")
+    row = _get_owned_interview_or_404(interview_id, current_user_id)
     return InterviewStatusResponse(
         interview_id=interview_id,
         status=row.get("status"),
@@ -332,14 +373,17 @@ def get_interview_status(interview_id: int) -> InterviewStatusResponse:
 
 
 @router.get("/{interview_id}/audio")
-def get_interview_audio(interview_id: int) -> FileResponse:
+def get_interview_audio(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> FileResponse:
     """
     返回该访谈对应的本地音频文件，供前端播放器直接播放。
 
     该接口返回的是文件流响应，而不是预先读取到内存的完整二进制内容，
     方便浏览器按需缓存和 seek。
     """
-    audio_path, file_name = _resolve_audio_file(interview_id)
+    audio_path, file_name = _resolve_audio_file(interview_id, current_user_id)
     media_type, _ = mimetypes.guess_type(str(audio_path))
     return FileResponse(
         path=str(audio_path),
@@ -349,13 +393,14 @@ def get_interview_audio(interview_id: int) -> FileResponse:
 
 
 @router.delete("/{interview_id}", response_model=DeleteInterviewResponse)
-def delete_interview(interview_id: int) -> DeleteInterviewResponse:
+def delete_interview(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> DeleteInterviewResponse:
     """
     删除访谈及其关联数据。
     """
-    row = fetch_interview_by_id(interview_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="interview not found")
+    row = _get_owned_interview_or_404(interview_id, current_user_id)
 
     project_id = row.get("parse_project_id")
     object_key = row.get("file_path")
@@ -371,6 +416,9 @@ def delete_interview(interview_id: int) -> DeleteInterviewResponse:
         local_audio_deleted, local_audio_error = _delete_local_audio_dir(project_id, interview_id)
         if not local_audio_deleted:
             failures.append(local_audio_error or "local audio delete failed")
+        backup_deleted, backup_error = _delete_local_backup_dir(project_id, interview_id)
+        if not backup_deleted:
+            failures.append(backup_error or "local backup delete failed")
 
     cloud_audio_deleted, cloud_audio_error = _delete_cloud_audio_object(object_key)
     if not cloud_audio_deleted:
@@ -412,13 +460,14 @@ def delete_interview(interview_id: int) -> DeleteInterviewResponse:
     "/{interview_id}/notes",
     response_model=InterviewNotesResponse,
 )
-def get_interview_notes(interview_id: int) -> InterviewNotesResponse:
+def get_interview_notes(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> InterviewNotesResponse:
     """
     对外接口：直接从数据库获取指定访谈的 Notes 列表（按题目聚合）。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     rows = fetch_notes_rows_by_interview(interview_id)
     questions_map: Dict[int, Dict[str, Any]] = {}
@@ -473,13 +522,14 @@ def get_interview_notes(interview_id: int) -> InterviewNotesResponse:
     "/{interview_id}/questions",
     response_model=InterviewQuestionsResponse,
 )
-def get_interview_questions(interview_id: int) -> InterviewQuestionsResponse:
+def get_interview_questions(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> InterviewQuestionsResponse:
     """
     对外接口：直接从数据库获取指定访谈下配置的题目列表。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     rows = fetch_questions_by_interview(interview_id)
     questions = [
@@ -504,23 +554,16 @@ def get_interview_questions(interview_id: int) -> InterviewQuestionsResponse:
 def create_interview_questions(
     interview_id: int,
     payload: QuestionCreateRequest,
+    current_user_id: int = Depends(require_current_user_id),
 ) -> QuestionCreateResponse:
     """
     为指定访谈批量新增需总结的问题。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     questions = payload.questions or []
     if not questions:
         raise HTTPException(status_code=400, detail="questions is required")
-
-    valid_intent_ids = {
-        row.get("id")
-        for row in fetch_question_intents()
-        if row.get("id") is not None
-    }
 
     existing_questions = fetch_questions_by_interview(interview_id)
     next_order = 1
@@ -530,22 +573,16 @@ def create_interview_questions(
     cleaned: List[Dict[str, Any]] = []
     for index, item in enumerate(questions, start=1):
         question_text = (item.question_text or "").strip()
-        question_type = (item.question_type or "OPEN").strip().upper()
-        intent_id = int(item.intent_id)
-        research_phase = item.research_phase
-
         if not question_text:
             raise HTTPException(status_code=400, detail=f"第 {index} 条问题不能为空")
-        if intent_id not in valid_intent_ids:
-            raise HTTPException(status_code=400, detail=f"第 {index} 条问题的 intent_id 不存在")
 
         cleaned.append(
             {
                 "question_order": next_order,
                 "question_text": question_text,
-                "question_type": question_type,
-                "intent_id": intent_id,
-                "research_phase": research_phase,
+                "question_type": "OPEN",
+                "intent_id": 1,
+                "research_phase": None,
             }
         )
         next_order += 1
@@ -569,13 +606,12 @@ def create_interview_questions(
 def delete_interview_question(
     interview_id: int,
     question_id: int,
+    current_user_id: int = Depends(require_current_user_id),
 ) -> QuestionDeleteResponse:
     """
     删除指定访谈下的一条题目，并级联删除其对应的 Notes。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    _get_owned_interview_or_404(interview_id, current_user_id)
 
     try:
         result = delete_question_and_notes(interview_id, question_id)
@@ -600,13 +636,14 @@ def delete_interview_question(
     "/{interview_id}/fewshot-samples",
     response_model=InterviewFewshotSamplesResponse,
 )
-def get_interview_fewshot_samples(interview_id: int) -> InterviewFewshotSamplesResponse:
+def get_interview_fewshot_samples(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> InterviewFewshotSamplesResponse:
     """
     查询某个访谈下全部 few-shot 种子。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     rows = fetch_fewshot_samples_by_interview(interview_id)
     samples: List[Dict[str, Any]] = []
@@ -647,13 +684,12 @@ def create_question_fewshot_sample(
     interview_id: int,
     question_id: int,
     payload: FewshotSampleCreateRequest,
+    current_user_id: int = Depends(require_current_user_id),
 ) -> FewshotSampleCreateResponse:
     """
     为指定问题新增 few-shot 冷启动种子。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
 
     question = fetch_question_by_id(interview_id, question_id)
     if not question:
@@ -726,13 +762,12 @@ def create_question_fewshot_sample(
 def delete_question_fewshot_sample(
     interview_id: int,
     sample_id: int,
+    current_user_id: int = Depends(require_current_user_id),
 ) -> FewshotSampleDeleteResponse:
     """
     删除指定访谈下的一条 few-shot 冷启动种子。
     """
-    interview = fetch_interview_by_id(interview_id)
-    if not interview:
-        raise HTTPException(status_code=404, detail="interview not found")
+    _get_owned_interview_or_404(interview_id, current_user_id)
 
     try:
         row = delete_fewshot_sample(interview_id, sample_id)
@@ -753,7 +788,10 @@ def delete_question_fewshot_sample(
 
 
 @router.get("/{interview_id}/summary")
-def get_interview_summary(interview_id: int) -> Dict[str, Any]:
+def get_interview_summary(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
     """
     对外接口：获取指定访谈的原文明细列表。
 
@@ -777,6 +815,7 @@ def get_interview_summary(interview_id: int) -> Dict[str, Any]:
             ]
         }
     """
+    _get_owned_interview_or_404(interview_id, current_user_id)
     rows: List[Dict[str, Any]] = fetch_interview_summary(project_interview_id=interview_id)
     return {"interview_id": interview_id, "items": rows}
 
@@ -809,10 +848,12 @@ def update_interview_summary(
     interview_id: int,
     summary_id: int,
     payload: SummaryUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
 ) -> SummaryUpdateResponse:
     """
     更新指定 summary 的文本，并触发索引重建。
     """
+    _get_owned_interview_or_404(interview_id, current_user_id)
     new_text = payload.text.strip()
     if not new_text:
         raise HTTPException(status_code=400, detail="summary text is required")

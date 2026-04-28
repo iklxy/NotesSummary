@@ -1,8 +1,9 @@
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from api.auth import require_current_user_id
 from db import fetch_projects, insert_project
 
 
@@ -25,7 +26,10 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 @router.post("", response_model=Dict[str, Any])
-def create_project(payload: ProjectCreate) -> Dict[str, Any]:
+def create_project(
+    payload: ProjectCreate,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
     """
     创建新项目，对应在 bh_project 表中插入一条记录。
 
@@ -52,6 +56,7 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
             name=name,
             keywords=(payload.keywords.strip() if payload.keywords else None),
             core_problem=(payload.core_problem.strip() if payload.core_problem else None),
+            created_by_user_id=current_user_id,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"insert project failed: {e}")
@@ -65,7 +70,9 @@ def create_project(payload: ProjectCreate) -> Dict[str, Any]:
 
 
 @router.get("", response_model=list[Dict[str, Any]])
-def list_projects() -> list[Dict[str, Any]]:
+def list_projects(
+    current_user_id: int = Depends(require_current_user_id),
+) -> list[Dict[str, Any]]:
     """
     查询所有项目列表。
 
@@ -76,5 +83,5 @@ def list_projects() -> list[Dict[str, Any]]:
             - keywords
             - core_problem
     """
-    rows = fetch_projects()
+    rows = fetch_projects(created_by_user_id=current_user_id)
     return rows

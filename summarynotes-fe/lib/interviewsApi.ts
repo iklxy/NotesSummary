@@ -117,6 +117,9 @@ export interface CreatedInterview {
   project_id: number;
   name: string;
   interview_date?: string | null;
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
   file_name: string;
   local_path: string;
 }
@@ -126,6 +129,9 @@ export interface ProjectInterviewDTO {
   parse_project_id: number;
   name: string;
   interview_date?: string | null;
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
   file_name?: string | null;
 }
 
@@ -159,6 +165,7 @@ export async function createInterview(
   const resp = await fetch(url, {
     method: "POST",
     body: formData,
+    credentials: "include",
   });
   if (!resp.ok) {
     let detail: unknown;

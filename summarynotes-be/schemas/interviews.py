@@ -199,11 +199,12 @@ class InterviewQuestionsResponse(BaseModel):
 class QuestionCreateItem(BaseModel):
     """
     新建题目时使用的单条输入结构。
+
+    现在前端只提交 question_text，其余字段由后端默认写死：
+        - question_type = OPEN
+        - intent_id = 1
     """
     question_text: str
-    question_type: Optional[str] = "OPEN"
-    intent_id: int
-    research_phase: Optional[str] = None
 
 
 class QuestionCreateRequest(BaseModel):

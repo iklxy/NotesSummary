@@ -1,15 +1,22 @@
 import os
+import shutil
 from typing import Any, Dict, Optional
 from pathlib import Path
 
 import requests
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 
+from api.auth import require_current_user_id
+from DocxToMd import convert_docx_questionnaire
 from Hotword import save_hotword_state
+from QuestionTree import build_question_insert_rows
 from db import (
+    delete_interview_graph,
+    fetch_project_by_id,
     fetch_interviews_by_project,
     insert_interview,
+    insert_questions_for_interview,
     update_interview_status,
 )
 
@@ -77,6 +84,45 @@ def _get_internal_base() -> str:
     return base.rstrip("/")
 
 
+def _get_data_root() -> Path:
+    """
+    获取本地问卷/备份数据根目录。
+
+    固定使用 SummaryNotes 工程根目录下的 data 目录：
+        <project_root>/data
+    """
+    api_dir = Path(__file__).resolve().parent
+    project_root = api_dir.parent.parent
+    return project_root / "data"
+
+
+def _get_owned_project_or_404(project_id: int, current_user_id: int) -> Dict[str, Any]:
+    """
+    查询当前用户可访问的项目；若项目不属于当前用户则统一返回 404。
+
+    参数:
+        project_id: 项目主键 ID。
+        current_user_id: 当前登录用户 ID。
+
+    返回:
+        项目记录字典。
+    """
+    project = fetch_project_by_id(project_id, current_user_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    return project
+
+
+def _get_interview_backup_dir(project_id: int, interview_id: int) -> Path:
+    """
+    获取指定访谈在 data 目录下的备份目录。
+
+    目录结构：
+        data/project_{project_id}/interview_{interview_id}
+    """
+    return _get_data_root() / f"project_{project_id}" / f"interview_{interview_id}"
+
+
 def _trigger_workflow_background(interview_id: int) -> None:
     """
     在后台触发内部引擎工作流。
@@ -103,14 +149,130 @@ def _trigger_workflow_background(interview_id: int) -> None:
             pass
 
 
+def _save_backup_audio_file(
+    project_id: int,
+    interview_id: int,
+    source_audio_path: Path,
+    file_name: str,
+) -> str:
+    """
+    将音频文件复制到 data 目录下的访谈备份目录。
+
+    参数:
+        project_id:       项目 ID。
+        interview_id:     访谈 ID。
+        source_audio_path: 当前 audio 目录下的源音频文件绝对路径。
+        file_name:        原始音频文件名。
+
+    返回:
+        备份后的相对路径，便于调试和日志输出。
+    """
+    backup_dir = _get_interview_backup_dir(project_id, interview_id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / file_name
+    try:
+        shutil.copy2(source_audio_path, backup_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"backup audio file failed: {e}")
+    return f"project_{project_id}/interview_{interview_id}/{file_name}"
+
+
+def _save_uploaded_questionnaire_file(
+    project_id: int,
+    interview_id: int,
+    upload_file: UploadFile,
+) -> Path:
+    """
+    将上传的问卷文件保存到 data 目录下的访谈备份目录。
+
+    参数:
+        project_id:    项目 ID。
+        interview_id:  访谈 ID。
+        upload_file:   访谈问卷文件，要求为 docx。
+
+    返回:
+        保存后的绝对路径。
+    """
+    original_name = upload_file.filename or ""
+    if not original_name:
+        raise HTTPException(status_code=400, detail="上传问卷缺少文件名")
+    if not original_name.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="仅支持 docx 格式的问卷")
+
+    backup_dir = _get_interview_backup_dir(project_id, interview_id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    target_path = backup_dir / original_name
+
+    try:
+        with target_path.open("wb") as f:
+            while True:
+                chunk = upload_file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save questionnaire file failed: {e}")
+
+    return target_path
+
+
+def _delete_interview_backup_dir(project_id: int, interview_id: int) -> None:
+    """
+    删除 data 目录下该访谈对应的备份目录。
+
+    删除失败时只记录为异常，由调用方决定是否中断。
+    """
+    backup_dir = _get_interview_backup_dir(project_id, interview_id)
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _delete_local_audio_dir(project_id: int, interview_id: int) -> None:
+    """
+    删除本地 audio 目录下该访谈对应的文件夹。
+    """
+    audio_root = _get_audio_root()
+    target_dir = audio_root / f"project_{project_id}" / f"interview_{interview_id}"
+    if target_dir.exists():
+        shutil.rmtree(target_dir, ignore_errors=True)
+
+
+def _cleanup_failed_interview(project_id: int, interview_id: int) -> None:
+    """
+    清理创建访谈过程中失败的半成品数据。
+
+    会删除：
+        - bh_project_interview 及其关联数据
+        - 本地 audio 目录下的音频备份
+        - data 目录下的访谈备份目录
+    """
+    try:
+        delete_interview_graph(interview_id)
+    except Exception:
+        pass
+    try:
+        _delete_local_audio_dir(project_id, interview_id)
+    except Exception:
+        pass
+    try:
+        _delete_interview_backup_dir(project_id, interview_id)
+    except Exception:
+        pass
+
+
 @router.post("/{project_id}/interviews", response_model=Dict[str, Any])
 async def create_interview(
     project_id: int,
     background_tasks: BackgroundTasks,
+    current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
     interview_date: Optional[str] = Form(None),
+    hospital_city: str = Form(...),
+    hospital_decile: int = Form(...),
+    doctor_level: str = Form(...),
     hotword_keys: Optional[str] = Form(None),
     file: UploadFile = File(...),
+    questionnaire_file: Optional[UploadFile] = File(None),
 ) -> Dict[str, Any]:
     """
     为指定项目创建访谈，并保存本地音频文件。
@@ -119,7 +281,11 @@ async def create_interview(
         project_id:     项目 ID，对应 bh_project.id，写入 bh_project_interview.parse_project_id。
         name:           访谈名称，对应 bh_project_interview.name。
         interview_date: 访谈时间字符串（如 '2026-04-15'），写入 bh_project_interview.interview_date。
+        hospital_city:   医院所在城市，写入 bh_project_interview.hospital_city。
+        hospital_decile: 医院 Decile，写入 bh_project_interview.hospital_decile。
+        doctor_level:    医生级别，写入 bh_project_interview.doctor_level。
         file:           单个音频文件，文件名写入 bh_project_interview.file_name。
+        questionnaire_file:  可选 Word 问卷文件，仅支持 .docx。
 
     返回:
         {
@@ -128,7 +294,11 @@ async def create_interview(
             "name": name,
             "interview_date": interview_date,
             "file_name": 原始文件名,
-            "local_path": "project_{project_id}/interview_{interview_id}/{文件名}"
+            "local_path": "project_{project_id}/interview_{interview_id}/{文件名}",
+            "questionnaire_file_name": 问卷原始文件名（如果上传了）,
+            "questionnaire_backup_path": data 下备份相对路径（如果上传了）,
+            "questionnaire_md_path": md 相对路径（如果上传了）,
+            "questionnaire_json_path": json 相对路径（如果上传了）
         }
 
     说明:
@@ -138,16 +308,22 @@ async def create_interview(
     if not clean_name:
         raise HTTPException(status_code=400, detail="访谈名称不能为空")
 
+    _get_owned_project_or_404(project_id, current_user_id)
+
     original_name = file.filename or ""
     if not original_name:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
 
+    interview_id: int | None = None
     try:
         interview_id = insert_interview(
             parse_project_id=project_id,
             name=clean_name,
             interview_date=interview_date,
             file_name=original_name,
+            hospital_city=hospital_city.strip(),
+            hospital_decile=hospital_decile,
+            doctor_level=doctor_level.strip(),
         )
         keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
         if keys:
@@ -156,6 +332,35 @@ async def create_interview(
         raise HTTPException(status_code=500, detail=f"insert interview failed: {e}")
 
     local_path = _save_uploaded_audio_file(project_id, interview_id, file)
+    backup_audio_path = _save_backup_audio_file(project_id, interview_id, _get_audio_root() / f"project_{project_id}" / f"interview_{interview_id}" / original_name, original_name)
+
+    questionnaire_name: str | None = None
+    questionnaire_backup_path: str | None = None
+    questionnaire_md_path: str | None = None
+    questionnaire_json_path: str | None = None
+    if questionnaire_file is not None and questionnaire_file.filename:
+        questionnaire_name = questionnaire_file.filename
+        try:
+            saved_questionnaire_path = _save_uploaded_questionnaire_file(project_id, interview_id, questionnaire_file)
+            convert_result = convert_docx_questionnaire(
+                saved_questionnaire_path,
+                _get_interview_backup_dir(project_id, interview_id),
+            )
+            questionnaire_backup_path = str(saved_questionnaire_path.relative_to(_get_data_root()))
+            questionnaire_md_path = str(convert_result["markdown_path"].relative_to(_get_data_root()))
+            questionnaire_json_path = str(convert_result["json_path"].relative_to(_get_data_root()))
+            questionnaire_document = convert_result.get("document") or {}
+            question_rows = build_question_insert_rows(questionnaire_document)
+            if not question_rows:
+                raise ValueError("no questions extracted from questionnaire")
+            try:
+                insert_questions_for_interview(interview_id, question_rows)
+            except Exception as exc:
+                raise RuntimeError(f"insert questions failed: {exc}") from exc
+        except Exception as e:
+            if interview_id is not None:
+                _cleanup_failed_interview(project_id, interview_id)
+            raise HTTPException(status_code=500, detail=f"questionnaire processing failed: {e}")
 
     background_tasks.add_task(_trigger_workflow_background, interview_id)
 
@@ -164,13 +369,24 @@ async def create_interview(
         "project_id": project_id,
         "name": clean_name,
         "interview_date": interview_date,
+        "hospital_city": hospital_city.strip(),
+        "hospital_decile": hospital_decile,
+        "doctor_level": doctor_level.strip(),
         "file_name": original_name,
         "local_path": local_path,
+        "audio_backup_path": backup_audio_path,
+        "questionnaire_file_name": questionnaire_name,
+        "questionnaire_backup_path": questionnaire_backup_path,
+        "questionnaire_md_path": questionnaire_md_path,
+        "questionnaire_json_path": questionnaire_json_path,
     }
 
 
 @router.get("/{project_id}/interviews", response_model=list[Dict[str, Any]])
-def list_project_interviews(project_id: int) -> list[Dict[str, Any]]:
+def list_project_interviews(
+    project_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> list[Dict[str, Any]]:
     """
     查询指定项目下的所有访谈记录。
 
@@ -180,5 +396,9 @@ def list_project_interviews(project_id: int) -> list[Dict[str, Any]]:
     返回:
         访谈记录字典列表，每项至少包含 id、name、interview_date、file_name。
     """
-    rows = fetch_interviews_by_project(parse_project_id=project_id)
+    _get_owned_project_or_404(project_id, current_user_id)
+    rows = fetch_interviews_by_project(
+        parse_project_id=project_id,
+        created_by_user_id=current_user_id,
+    )
     return rows

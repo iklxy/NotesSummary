@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   Layout,
   Typography,
@@ -18,7 +24,15 @@ import {
   Select,
   Slider,
 } from "antd";
-import { DownloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import {
+  AudioMutedOutlined,
+  DownloadOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  SoundOutlined,
+  StepBackwardOutlined,
+  StepForwardOutlined,
+} from "@ant-design/icons";
 import {
   createInterviewQuestions,
   deleteQuestion,
@@ -137,10 +151,64 @@ function createEmptyFewshotDraft(intentId?: number): FewshotDraft {
   };
 }
 
+/**
+ * 将秒级时间换算为音频播放器常见的 mm:ss 或 h:mm:ss 显示。
+ */
+function formatAudioDuration(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+/**
+ * 将解码后的音频缓冲区压缩成固定数量的峰值条。
+ * 这里直接基于音频文件本身的采样数据计算轮廓，而不是依赖播放时的实时分析器。
+ */
+function buildWaveformPeaksFromAudioBuffer(
+  audioBuffer: AudioBuffer,
+  barCount: number,
+): number[] {
+  const safeBarCount = Math.max(24, barCount);
+  const totalSamples = audioBuffer.length;
+  const bucketSize = Math.max(1, Math.floor(totalSamples / safeBarCount));
+  const channelCount = Math.max(1, audioBuffer.numberOfChannels);
+  const channels = Array.from({ length: channelCount }, (_, channelIndex) =>
+    audioBuffer.getChannelData(channelIndex),
+  );
+  const levels: number[] = [];
+
+  for (let barIndex = 0; barIndex < safeBarCount; barIndex += 1) {
+    const start = barIndex * bucketSize;
+    const end = barIndex === safeBarCount - 1 ? totalSamples : Math.min(totalSamples, start + bucketSize);
+    let peak = 0;
+    const step = Math.max(1, Math.floor((end - start) / 180));
+    for (let index = start; index < end; index += step) {
+      let mixedSample = 0;
+      for (let channelIndex = 0; channelIndex < channels.length; channelIndex += 1) {
+        mixedSample += Math.abs(channels[channelIndex]?.[index] ?? 0);
+      }
+      const normalizedSample = mixedSample / channelCount;
+      if (normalizedSample > peak) {
+        peak = normalizedSample;
+      }
+    }
+    const normalized = Math.min(1, Math.max(0.08, Math.pow(peak, 0.85)));
+    levels.push(normalized);
+  }
+
+  return levels;
+}
+
 export default function InterviewDetailClient({ interviewId }: Props) {
   const interviewIdNum = interviewId;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pendingSeekRef = useRef<{ seekMs: number; autoplay: boolean } | null>(null);
+  const waveformLoadTokenRef = useRef(0);
 
   const [summary, setSummary] = useState<InterviewSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -153,6 +221,11 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [audioIsPlaying, setAudioIsPlaying] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [audioSeeking, setAudioSeeking] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.85);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [waveformPeaks, setWaveformPeaks] = useState<number[]>(
+    Array.from({ length: 96 }, () => 0.12),
+  );
 
   const [notes, setNotes] = useState<InterviewNotesResponse | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -184,15 +257,11 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     Array<{
       uid: string;
       question_text: string;
-      question_type: string;
-      intent_id?: number;
     }>
   >([
     {
       uid: "draft-0",
       question_text: "",
-      question_type: "OPEN",
-      intent_id: undefined,
     },
   ]);
 
@@ -223,8 +292,34 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     setAudioIsPlaying(false);
     setAudioError(null);
     setAudioSeeking(false);
+    setAudioVolume(0.85);
+    setPlaybackRate(1);
+    setWaveformPeaks(Array.from({ length: 96 }, (_, index) => (index % 7 === 0 ? 0.72 : 0.18)));
     pendingSeekRef.current = null;
+    waveformLoadTokenRef.current += 1;
   }, [interviewIdNum]);
+
+  useEffect(() => {
+    return () => {
+      waveformLoadTokenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    audio.volume = Math.min(1, Math.max(0, audioVolume));
+  }, [audioVolume]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    audio.playbackRate = Math.min(2, Math.max(0.5, playbackRate));
+  }, [playbackRate]);
 
   useEffect(() => {
     const loadNotes = async () => {
@@ -295,22 +390,11 @@ export default function InterviewDetailClient({ interviewId }: Props) {
         setQuestionIntentsLoading(true);
         const data = await getQuestionIntents();
         setQuestionIntents(data);
-        setQuestionDrafts((prev) =>
-          prev.map((draft, index) => {
-            if (draft.intent_id || data.length === 0) {
-              return draft;
-            }
-            if (index === 0) {
-              return { ...draft, intent_id: data[0].id };
-            }
-            return draft;
-          }),
-        );
       } catch (e) {
         if (e instanceof Error) {
           message.error(e.message);
         } else {
-          message.error("加载问题类型失败");
+          message.error("加载 few-shot intent 失败");
         }
       } finally {
         setQuestionIntentsLoading(false);
@@ -366,6 +450,70 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   }, [summary]);
 
   const audioUrl = useMemo(() => getInterviewAudioUrl(interviewIdNum), [interviewIdNum]);
+
+  useEffect(() => {
+    const loadWaveformPeaks = async () => {
+      if (!audioUrl || typeof window === "undefined") {
+        return;
+      }
+
+      const token = waveformLoadTokenRef.current + 1;
+      waveformLoadTokenRef.current = token;
+      const fallbackPeaks = Array.from({ length: 96 }, (_, index) =>
+        index % 7 === 0 ? 0.72 : index % 5 === 0 ? 0.42 : 0.18,
+      );
+      setWaveformPeaks(fallbackPeaks);
+
+      const AudioContextCtor =
+        window.AudioContext ||
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) {
+        return;
+      }
+
+      try {
+        const response = await fetch(audioUrl, { cache: "force-cache" });
+        if (!response.ok) {
+          throw new Error(`音频文件请求失败: ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        if (waveformLoadTokenRef.current !== token) {
+          return;
+        }
+
+        const context = new AudioContextCtor();
+        const decodedBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+        const peaks = buildWaveformPeaksFromAudioBuffer(decodedBuffer, 96);
+        if (waveformLoadTokenRef.current === token) {
+          setWaveformPeaks(peaks);
+        }
+        await context.close();
+      } catch {
+        if (waveformLoadTokenRef.current === token) {
+          setWaveformPeaks(fallbackPeaks);
+        }
+      }
+    };
+
+    void loadWaveformPeaks();
+  }, [audioUrl]);
+
+  const audioTickMarks = useMemo(() => {
+    const duration = Math.max(0, audioDuration || 0);
+    if (!duration) {
+      return [0, 120, 240, 360, 480, 600];
+    }
+    const step = duration > 20 * 60 ? 120 : duration > 10 * 60 ? 60 : duration > 5 * 60 ? 30 : 15;
+    const marks: number[] = [];
+    for (let pos = 0; pos <= duration; pos += step) {
+      marks.push(pos);
+    }
+    if (marks[marks.length - 1] !== duration) {
+      marks.push(duration);
+    }
+    return marks;
+  }, [audioDuration]);
 
   const summaryAudioRanges = useMemo(() => {
     return (summary?.items || [])
@@ -603,6 +751,48 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     setAudioError("音频加载失败，请确认原始文件仍可访问");
   };
 
+  const handleAudioVolumeChange = (value: number) => {
+    const nextVolume = Math.min(1, Math.max(0, value));
+    setAudioVolume(nextVolume);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.volume = nextVolume;
+    }
+  };
+
+  const handlePlaybackRateChange = (rate: number) => {
+    const nextRate = Math.min(2, Math.max(0.5, rate));
+    setPlaybackRate(nextRate);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.playbackRate = nextRate;
+    }
+  };
+
+  const handleWaveformSeek = async (ratio: number) => {
+    if (!audioDuration || audioDuration <= 0) {
+      return;
+    }
+    const seekTime = Math.min(audioDuration, Math.max(0, audioDuration * ratio));
+    await seekAudioToMs(seekTime * 1000, audioIsPlaying);
+  };
+
+  const handleWaveformClick = async (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!audioDuration || audioDuration <= 0) {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offsetX = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
+    const ratio = rect.width > 0 ? offsetX / rect.width : 0;
+    await handleWaveformSeek(ratio);
+  };
+
+  const handleSkipSeconds = async (deltaSeconds: number) => {
+    const nextTime = Math.min(audioDuration || 0, Math.max(0, audioCurrentTime + deltaSeconds));
+    await seekAudioToMs(nextTime * 1000, audioIsPlaying);
+  };
+
+  const isMuted = audioVolume <= 0.01;
   const beginEditSummary = (summaryId: number, text: string) => {
     setEditingSummaryId(summaryId);
     setDraftSummaryText(text);
@@ -649,21 +839,18 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   };
 
   const addQuestionDraft = () => {
-    const defaultIntentId = questionIntents[0]?.id;
     setQuestionDrafts((prev) => [
       ...prev,
       {
         uid: `${Date.now()}-${prev.length}`,
         question_text: "",
-        question_type: "OPEN",
-        intent_id: defaultIntentId,
       },
     ]);
   };
 
   const updateQuestionDraft = (
     uid: string,
-    patch: Partial<{ question_text: string; question_type: string; intent_id?: number }>,
+    patch: Partial<{ question_text: string }>,
   ) => {
     setQuestionDrafts((prev) =>
       prev.map((draft) => (draft.uid === uid ? { ...draft, ...patch } : draft)),
@@ -673,12 +860,10 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const clearQuestionDraft = (uid: string) => {
     setQuestionDrafts((prev) =>
       prev.map((draft) =>
-        draft.uid === uid
+      draft.uid === uid
           ? {
               ...draft,
               question_text: "",
-              question_type: "OPEN",
-              intent_id: questionIntents[0]?.id,
             }
           : draft,
       ),
@@ -686,14 +871,8 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   };
 
   const saveQuestionDrafts = async () => {
-    if (questionIntentsLoading) {
-      message.info("问题类型正在加载中，请稍候");
-      return;
-    }
     const cleaned = questionDrafts.map((draft) => ({
       question_text: draft.question_text.trim(),
-      question_type: (draft.question_type || "OPEN").trim().toUpperCase(),
-      intent_id: draft.intent_id,
     }));
 
     if (cleaned.length === 0) {
@@ -704,25 +883,14 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       message.error("请先补全所有需总结的问题");
       return;
     }
-    if (cleaned.some((item) => !item.intent_id)) {
-      message.error("请先为每个问题选择 intent");
-      return;
-    }
-
     try {
       setSavingQuestions(true);
-      await createInterviewQuestions(interviewIdNum, cleaned as Array<{
-        question_text: string;
-        question_type: string;
-        intent_id: number;
-      }>);
+      await createInterviewQuestions(interviewIdNum, cleaned);
       message.success("问题已保存");
       setQuestionDrafts([
         {
           uid: `${Date.now()}-0`,
           question_text: "",
-          question_type: "OPEN",
-          intent_id: questionIntents[0]?.id,
         },
       ]);
       setQuestionsReloadToken((v) => v + 1);
@@ -801,7 +969,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       return;
     }
     if (questionIntentsLoading) {
-      message.info("问题类型正在加载中，请稍候");
+      message.info("few-shot intent 正在加载中，请稍候");
       return;
     }
     const intentId = fewshotDraft.intent_id ?? fewshotTargetQuestion.intent_id ?? questionIntents[0]?.id;
@@ -933,8 +1101,6 @@ export default function InterviewDetailClient({ interviewId }: Props) {
           project_interview_id: interviewIdNum,
           question_order: 0,
           question_text: questionText,
-          question_type: "OPEN",
-          intent_id: undefined,
         },
       );
     } catch (e) {
@@ -1004,51 +1170,6 @@ export default function InterviewDetailClient({ interviewId }: Props) {
             padding: "24px 24px 40px",
           }}
         >
-          <div
-            style={{
-              marginBottom: 20,
-              borderRadius: 24,
-              padding: 20,
-              background:
-                "linear-gradient(135deg, rgba(15,23,42,1) 0%, rgba(30,41,59,1) 48%, rgba(15,118,110,1) 100%)",
-              color: "#fff",
-              boxShadow: "0 20px 60px -24px rgba(15,23,42,0.45)",
-            }}
-          >
-            <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
-              <div>
-                <Text style={{ color: "rgba(255,255,255,0.72)", letterSpacing: 2 }}>
-                  SUMMARYNOTES
-                </Text>
-                <Title level={3} style={{ color: "#fff", marginTop: 8, marginBottom: 8 }}>
-                  访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
-                </Title>
-                <Text style={{ color: "rgba(255,255,255,0.75)" }}>
-                  左侧查看原文，右侧补充问题与 Notes。问题保存后可单题生成分析结果。
-                </Text>
-              </div>
-              <Card
-                size="small"
-                style={{
-                  minWidth: 220,
-                  background: "rgba(255,255,255,0.12)",
-                  borderColor: "rgba(255,255,255,0.12)",
-                  color: "#fff",
-                }}
-              >
-                <Space direction="vertical" size={2}>
-                  <Text style={{ color: "rgba(255,255,255,0.72)" }}>当前状态</Text>
-                  <Title level={4} style={{ color: "#fff", margin: 0 }}>
-                    {notes?.questions?.length ? "可分析" : "等待问题"}
-                  </Title>
-                  <Text style={{ color: "rgba(255,255,255,0.72)" }}>
-                    原文条数：{summary?.items?.length ?? 0}
-                  </Text>
-                </Space>
-              </Card>
-            </Space>
-          </div>
-
           <div
             style={{
               display: "grid",
@@ -1224,57 +1345,225 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                           onError={handleAudioError}
                           onPlay={() => setAudioIsPlaying(true)}
                           onPause={() => setAudioIsPlaying(false)}
+                          style={{ display: "none" }}
                         />
-                        <Space
-                          style={{ width: "100%", justifyContent: "space-between", marginBottom: 12 }}
-                          align="center"
-                        >
-                          <div>
-                            <Text type="secondary">音频播放器</Text>
-                            <Title level={5} style={{ margin: 0 }}>
-                              点击 summary 自动跳转
-                            </Title>
-                          </div>
-                          <Tag color={audioIsPlaying ? "green" : "default"}>
-                            {audioIsPlaying ? "播放中" : "已暂停"}
-                          </Tag>
-                        </Space>
                         {audioError ? <Alert type="warning" message={audioError} /> : null}
-                        <Space style={{ width: "100%", alignItems: "center", marginTop: 12 }}>
-                          <Button
-                            type="primary"
-                            shape="circle"
-                            icon={audioIsPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-                            onClick={() => void handleAudioToggle()}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <Slider
-                              min={0}
-                              max={Math.max(audioDuration || 0, 1)}
-                              step={0.1}
-                              value={Math.min(audioCurrentTime, Math.max(audioDuration || 0, 1))}
-                              tooltip={{
-                                formatter: (value) =>
-                                  formatAudioClock(Number(value ?? 0) * 1000),
+
+                        <div
+                          style={{
+                            borderRadius: 16,
+                            background: "linear-gradient(180deg, #f7fbff 0%, #edf4fb 100%)",
+                            border: "1px solid #dbe7f3",
+                            padding: "8px 10px 8px",
+                            marginTop: 8,
+                            boxShadow: "0 12px 30px -24px rgba(15, 23, 42, 0.32)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 8,
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                minWidth: 132,
                               }}
-                              onChange={(value) => handleAudioSeekChange(Number(value))}
-                              onAfterChange={(value) =>
-                                void handleAudioSeekAfterChange(Number(value))
-                              }
-                            />
-                            <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                              <Text type="secondary">
-                                当前：{formatAudioClock(audioCurrentTime * 1000)}
-                              </Text>
-                              <Text type="secondary">
-                                总时长：{formatAudioClock((audioDuration || 0) * 1000)}
-                              </Text>
-                            </Space>
+                            >
+                                {isMuted ? (
+                                  <AudioMutedOutlined style={{ fontSize: 16, color: "#475569" }} />
+                                ) : (
+                                <SoundOutlined style={{ fontSize: 16, color: "#475569" }} />
+                              )}
+                              <div style={{ width: 92 }}>
+                                <Slider
+                                  min={0}
+                                  max={1}
+                                  step={0.01}
+                                  value={audioVolume}
+                                  tooltip={{
+                                    formatter: (value) => `${Math.round(Number(value ?? 0) * 100)}%`,
+                                  }}
+                                  onChange={(value) => handleAudioVolumeChange(Number(value))}
+                                  />
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  flex: 1,
+                                  display: "flex",
+                                  justifyContent: "center",
+                                  alignItems: "center",
+                                }}
+                              >
+                                <Space align="center" size={8}>
+                                  <Button
+                                    type="text"
+                                    icon={<StepBackwardOutlined />}
+                                    onClick={() => void handleSkipSeconds(-10)}
+                                  />
+                                  <Button
+                                    type="primary"
+                                    shape="circle"
+                                    size="large"
+                                    icon={
+                                      audioIsPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />
+                                    }
+                                    onClick={() => void handleAudioToggle()}
+                                  />
+                                  <Button
+                                    type="text"
+                                    icon={<StepForwardOutlined />}
+                                    onClick={() => void handleSkipSeconds(10)}
+                                  />
+                                </Space>
+                              </div>
+
+                              <div
+                                style={{
+                                  minWidth: 156,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "flex-end",
+                                  gap: 4,
+                                }}
+                              >
+                                <Space size={6} wrap style={{ justifyContent: "flex-end" }}>
+                                  {[1, 1.5, 2].map((rate) => (
+                                    <Button
+                                      key={rate}
+                                      size="small"
+                                      type={playbackRate === rate ? "primary" : "default"}
+                                      onClick={() => handlePlaybackRateChange(rate)}
+                                    >
+                                      {rate.toFixed(1)}x
+                                    </Button>
+                                  ))}
+                                </Space>
+                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                  {formatAudioDuration(audioCurrentTime)} / {formatAudioDuration(audioDuration)}
+                                </Text>
+                              </div>
                           </div>
-                        </Space>
-                        <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-                          点击任意 summary 可跳到对应开始时间，播放器会自动同步进度。
-                        </Text>
+
+                          <div
+                            onClick={(event) => void handleWaveformClick(event)}
+                            style={{
+                              position: "relative",
+                              height: 50,
+                              borderRadius: 12,
+                              background: "linear-gradient(180deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.58) 100%)",
+                              border: "1px solid rgba(148, 163, 184, 0.22)",
+                              overflow: "hidden",
+                              cursor: "pointer",
+                              padding: "7px 10px 6px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: `${audioDuration > 0 ? (audioCurrentTime / audioDuration) * 100 : 0}%`,
+                                background: "rgba(96, 165, 250, 0.18)",
+                                pointerEvents: "none",
+                              }}
+                            />
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "flex-end",
+                                gap: 2,
+                                height: "100%",
+                                position: "relative",
+                                zIndex: 1,
+                              }}
+                            >
+                              {waveformPeaks.map((level, index) => {
+                                const activeRatio = audioDuration > 0 ? audioCurrentTime / audioDuration : 0;
+                                const barRatio = waveformPeaks.length > 1 ? index / (waveformPeaks.length - 1) : 0;
+                                const isActive = barRatio <= activeRatio;
+                                const baseHeight = 0.16 + level * 0.74;
+                                const height = isActive ? Math.min(1, baseHeight + 0.08) : baseHeight;
+                                return (
+                                  <div
+                                    key={`${audioUrl}-${index}`}
+                                    style={{
+                                      flex: 1,
+                                      minWidth: 2,
+                                      maxWidth: 7,
+                                      display: "flex",
+                                      alignItems: "flex-end",
+                                      justifyContent: "center",
+                                      height: "100%",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        width: "100%",
+                                        borderRadius: 999,
+                                        height: `${Math.round(height * 100)}%`,
+                                        minHeight: 6,
+                                        background: isActive ? "#60a5fa" : "#cbd5e1",
+                                        boxShadow: isActive
+                                          ? "0 0 0 1px rgba(59, 130, 246, 0.12)"
+                                          : "none",
+                                        transition: "height 0.15s ease, background 0.15s ease",
+                                      }}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 6 }}>
+                            <div
+                              style={{
+                                position: "relative",
+                                height: 18,
+                                fontSize: 10,
+                                color: "#64748b",
+                              }}
+                            >
+                              {audioTickMarks.map((tick) => {
+                                const left = audioDuration > 0 ? Math.min(100, (tick / audioDuration) * 100) : 0;
+                                return (
+                                  <div
+                                    key={tick}
+                                    style={{
+                                      position: "absolute",
+                                      left: `${left}%`,
+                                      top: 0,
+                                      transform: "translateX(-50%)",
+                                      whiteSpace: "nowrap",
+                                      textAlign: "center",
+                                    }}
+                                  >
+                                    <div
+                                    style={{
+                                      width: 1,
+                                      height: 8,
+                                      margin: "0 auto 2px",
+                                      background: "#1f2937",
+                                    }}
+                                    />
+                                    <span>{formatAudioDuration(tick)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
                       </div>
                     </>
                   ) : (
@@ -1353,38 +1642,8 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                 updateQuestionDraft(draft.uid, { question_text: e.target.value })
                               }
                             />
-                            <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                              <Select
-                                style={{ flex: 0.8 }}
-                                value={draft.question_type}
-                                onChange={(value) =>
-                                  updateQuestionDraft(draft.uid, { question_type: value })
-                                }
-                                options={[
-                                  { label: "OPEN", value: "OPEN" },
-                                  { label: "SUMMARY", value: "SUMMARY" },
-                                  { label: "QUERY", value: "QUERY" },
-                                ]}
-                              />
-                              <Select
-                                style={{ flex: 1.2 }}
-                                value={draft.intent_id}
-                                placeholder="请选择 intent"
-                                loading={questionIntentsLoading}
-                                onChange={(value) =>
-                                  updateQuestionDraft(draft.uid, { intent_id: value })
-                                }
-                                options={questionIntents.map((intent) => ({
-                                  label: `${intent.id} - ${intent.name || intent.code}`,
-                                  value: intent.id,
-                                }))}
-                                showSearch
-                                optionFilterProp="label"
-                              />
-                              <Button
-                                danger
-                                onClick={() => clearQuestionDraft(draft.uid)}
-                              >
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                              <Button danger onClick={() => clearQuestionDraft(draft.uid)}>
                                 清空
                               </Button>
                             </div>
@@ -1414,10 +1673,8 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                 const questionFewshots = fewshotSamplesByQuestion[question.id] || [];
                                 return (
                               <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                                <Space size={8} wrap>
+                              <Space size={8} wrap>
                                   <Tag color="geekblue">#{question.question_order}</Tag>
-                                  <Tag>{question.question_type || "OPEN"}</Tag>
-                                  <Tag>intent_id: {question.intent_id ?? "未知"}</Tag>
                                 </Space>
                                 <Text>{question.question_text}</Text>
                                 <Space size={8} wrap>
@@ -1695,8 +1952,6 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                 <Tag color="geekblue">
                   #{fewshotTargetQuestion?.question_order ?? "-"}
                 </Tag>
-                <Tag>{fewshotTargetQuestion?.question_type || "OPEN"}</Tag>
-                <Tag>intent_id: {fewshotTargetQuestion?.intent_id ?? "未知"}</Tag>
               </Space>
             </Space>
           </Card>
@@ -1848,8 +2103,6 @@ export default function InterviewDetailClient({ interviewId }: Props) {
               <Text>{questionToDelete?.question_text}</Text>
               <Space size={8} wrap>
                 <Tag color="geekblue">#{questionToDelete?.question_order ?? "-"}</Tag>
-                <Tag>{questionToDelete?.question_type || "OPEN"}</Tag>
-                <Tag>intent_id: {questionToDelete?.intent_id ?? "未知"}</Tag>
               </Space>
             </Space>
           </Card>

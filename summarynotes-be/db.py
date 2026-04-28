@@ -42,7 +42,12 @@ def get_connection() -> pymysql.connections.Connection:
     return connection
 
 
-def insert_project(name: str, keywords: Optional[str], core_problem: Optional[str]) -> int:
+def insert_project(
+    name: str,
+    keywords: Optional[str],
+    core_problem: Optional[str],
+    created_by_user_id: int,
+) -> int:
     """
     插入一条项目记录到 bh_project 表。
 
@@ -55,13 +60,13 @@ def insert_project(name: str, keywords: Optional[str], core_problem: Optional[st
         新插入记录的自增 ID。
     """
     sql = """
-        INSERT INTO bh_project (name, keywords, core_problem)
-        VALUES (%s, %s, %s)
+        INSERT INTO bh_project (name, keywords, core_problem, created_by_user_id)
+        VALUES (%s, %s, %s, %s)
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (name, keywords, core_problem))
+            cursor.execute(sql, (name, keywords, core_problem, created_by_user_id))
             new_id = cursor.lastrowid
         conn.commit()
     except Exception:
@@ -72,7 +77,7 @@ def insert_project(name: str, keywords: Optional[str], core_problem: Optional[st
     return new_id
 
 
-def fetch_projects() -> list[dict]:
+def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
     """
     从 bh_project 表中查询所有项目的基础信息。
 
@@ -88,21 +93,26 @@ def fetch_projects() -> list[dict]:
             id,
             name,
             keywords,
-            core_problem
+            core_problem,
+            created_by_user_id
         FROM bh_project
+        WHERE (%s IS NULL OR created_by_user_id = %s)
         ORDER BY id DESC
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql)
+            cursor.execute(sql, (created_by_user_id, created_by_user_id))
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
     return rows
 
 
-def fetch_project_by_id(project_id: int) -> dict | None:
+def fetch_project_by_id(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> dict | None:
     """
     根据项目 ID 查询单条项目记录。
 
@@ -117,15 +127,79 @@ def fetch_project_by_id(project_id: int) -> dict | None:
             id,
             name,
             keywords,
-            core_problem
+            core_problem,
+            created_by_user_id
         FROM bh_project
+        WHERE id = %s
+          AND (%s IS NULL OR created_by_user_id = %s)
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_user_by_username(username: str) -> dict | None:
+    """
+    根据用户名查询单条用户记录。
+
+    参数:
+        username: 登录用户名，对应 bh_user.username。
+
+    返回:
+        如果存在则返回用户记录字典，否则返回 None。
+    """
+    sql = """
+        SELECT
+            id,
+            username,
+            password_hash,
+            created_at,
+            updated_at
+        FROM bh_user
+        WHERE username = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (username,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_user_by_id(user_id: int) -> dict | None:
+    """
+    根据用户 ID 查询单条用户记录。
+
+    参数:
+        user_id: 用户主键 ID，对应 bh_user.id。
+
+    返回:
+        如果存在则返回用户记录字典，否则返回 None。
+    """
+    sql = """
+        SELECT
+            id,
+            username,
+            password_hash,
+            created_at,
+            updated_at
+        FROM bh_user
         WHERE id = %s
         LIMIT 1
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id,))
+            cursor.execute(sql, (user_id,))
             row = cursor.fetchone()
     finally:
         conn.close()
@@ -162,6 +236,9 @@ def insert_interview(
     name: str,
     interview_date: Optional[str],
     file_name: str,
+    hospital_city: Optional[str],
+    hospital_decile: Optional[int],
+    doctor_level: Optional[str],
 ) -> int:
     """
     插入一条访谈记录到 bh_project_interview 表。
@@ -171,18 +248,42 @@ def insert_interview(
         name:             访谈名称，对应 bh_project_interview.name。
         interview_date:   访谈时间字符串（例如 '2026-04-15'），对应 bh_project_interview.interview_date。
         file_name:        音频文件名，对应 bh_project_interview.file_name。
+        hospital_city:    医院所在城市，对应 bh_project_interview.hospital_city。
+        hospital_decile:  医院 Decile，对应 bh_project_interview.hospital_decile。
+        doctor_level:     医生级别，对应 bh_project_interview.doctor_level。
 
     返回:
         新插入访谈记录的自增 ID。
     """
     sql = """
-        INSERT INTO bh_project_interview (parse_project_id, name, interview_date, file_name, status)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO bh_project_interview (
+            parse_project_id,
+            name,
+            interview_date,
+            file_name,
+            hospital_city,
+            hospital_decile,
+            doctor_level,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (parse_project_id, name, interview_date, file_name, 0))
+            cursor.execute(
+                sql,
+                (
+                    parse_project_id,
+                    name,
+                    interview_date,
+                    file_name,
+                    hospital_city,
+                    hospital_decile,
+                    doctor_level,
+                    0,
+                ),
+            )
             new_id = cursor.lastrowid
         conn.commit()
     except Exception:
@@ -218,7 +319,10 @@ def update_interview_status(interview_id: int, status: int) -> None:
         conn.close()
 
 
-def fetch_interview_by_id(interview_id: int) -> dict | None:
+def fetch_interview_by_id(
+    interview_id: int,
+    created_by_user_id: int | None = None,
+) -> dict | None:
     """
     根据访谈 ID 查询访谈基础信息。
 
@@ -228,26 +332,34 @@ def fetch_interview_by_id(interview_id: int) -> dict | None:
         - name
         - interview_date
         - file_name
+        - hospital_city
+        - hospital_decile
+        - doctor_level
         - file_path
         - status
     """
     sql = """
         SELECT
-            id,
-            parse_project_id,
-            name,
-            interview_date,
-            file_name,
-            file_path,
-            status
-        FROM bh_project_interview
-        WHERE id = %s
+            i.id,
+            i.parse_project_id,
+            i.name,
+            i.interview_date,
+            i.file_name,
+            i.hospital_city,
+            i.hospital_decile,
+            i.doctor_level,
+            i.file_path,
+            i.status
+        FROM bh_project_interview i
+        INNER JOIN bh_project p ON p.id = i.parse_project_id
+        WHERE i.id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
         LIMIT 1
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (interview_id,))
+            cursor.execute(sql, (interview_id, created_by_user_id, created_by_user_id))
             row = cursor.fetchone()
     finally:
         conn.close()
@@ -612,7 +724,10 @@ def delete_fewshot_sample(
     return row
 
 
-def fetch_interviews_by_project(parse_project_id: int) -> list[dict]:
+def fetch_interviews_by_project(
+    parse_project_id: int,
+    created_by_user_id: int | None = None,
+) -> list[dict]:
     """
     根据项目 ID 查询该项目下的所有访谈记录。
 
@@ -626,23 +741,31 @@ def fetch_interviews_by_project(parse_project_id: int) -> list[dict]:
             - name
             - interview_date
             - file_name
+            - hospital_city
+            - hospital_decile
+            - doctor_level
             - file_path
     """
     sql = """
         SELECT
-            id,
-            parse_project_id,
-            name,
-            interview_date,
-            file_name
-        FROM bh_project_interview
-        WHERE parse_project_id = %s
-        ORDER BY id DESC
+            i.id,
+            i.parse_project_id,
+            i.name,
+            i.interview_date,
+            i.file_name
+            , i.hospital_city
+            , i.hospital_decile
+            , i.doctor_level
+        FROM bh_project_interview i
+        INNER JOIN bh_project p ON p.id = i.parse_project_id
+        WHERE i.parse_project_id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY i.id DESC
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (parse_project_id,))
+            cursor.execute(sql, (parse_project_id, created_by_user_id, created_by_user_id))
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
