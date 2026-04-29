@@ -116,6 +116,7 @@ export interface CreatedInterview {
   id: number;
   project_id: number;
   name: string;
+  core_problem?: string | null;
   interview_date?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
@@ -128,6 +129,7 @@ export interface ProjectInterviewDTO {
   id: number;
   parse_project_id: number;
   name: string;
+  core_problem?: string | null;
   interview_date?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;

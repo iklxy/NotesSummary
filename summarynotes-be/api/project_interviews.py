@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from typing import Any, Dict, Optional
@@ -216,6 +217,58 @@ def _save_uploaded_questionnaire_file(
     return target_path
 
 
+def _normalize_core_problem_json(raw_value: str) -> str:
+    """
+    将前端提交的 key BQ 内容统一归一化为 JSON 字符串。
+
+    规则:
+        - 优先接受已经是 JSON 的内容
+        - 如果是多行纯文本，则按行拆分为 key_bq_list
+        - 每条问题保留 order 和 text
+
+    参数:
+        raw_value: 前端提交的原始 key BQ 文本。
+
+    返回:
+        规范化后的 JSON 字符串。
+    """
+    text = (raw_value or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="key BQ 不能为空")
+
+    payload: Dict[str, Any] | None = None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and isinstance(parsed.get("key_bq_list"), list):
+            items = []
+            for idx, item in enumerate(parsed.get("key_bq_list") or [], start=1):
+                if isinstance(item, dict):
+                    item_text = str(item.get("text") or "").strip()
+                else:
+                    item_text = str(item).strip()
+                if not item_text:
+                    continue
+                items.append({"order": idx, "text": item_text})
+            if not items:
+                raise ValueError("key BQ 列表不能为空")
+            payload = {"key_bq_list": items}
+    except Exception:
+        payload = None
+
+    if payload is None:
+        items = []
+        for idx, line in enumerate(text.splitlines(), start=1):
+            line_text = line.strip()
+            if not line_text:
+                continue
+            items.append({"order": idx, "text": line_text})
+        if not items:
+            raise HTTPException(status_code=400, detail="key BQ 不能为空")
+        payload = {"key_bq_list": items}
+
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _delete_interview_backup_dir(project_id: int, interview_id: int) -> None:
     """
     删除 data 目录下该访谈对应的备份目录。
@@ -266,6 +319,7 @@ async def create_interview(
     background_tasks: BackgroundTasks,
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
+    core_problem: str = Form(...),
     interview_date: Optional[str] = Form(None),
     hospital_city: str = Form(...),
     hospital_decile: int = Form(...),
@@ -280,6 +334,7 @@ async def create_interview(
     参数:
         project_id:     项目 ID，对应 bh_project.id，写入 bh_project_interview.parse_project_id。
         name:           访谈名称，对应 bh_project_interview.name。
+        core_problem:    访谈 key BQ，写入 bh_project_interview.core_problem（JSON 字符串）。
         interview_date: 访谈时间字符串（如 '2026-04-15'），写入 bh_project_interview.interview_date。
         hospital_city:   医院所在城市，写入 bh_project_interview.hospital_city。
         hospital_decile: 医院 Decile，写入 bh_project_interview.hospital_decile。
@@ -307,6 +362,7 @@ async def create_interview(
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="访谈名称不能为空")
+    normalized_core_problem = _normalize_core_problem_json(core_problem)
 
     _get_owned_project_or_404(project_id, current_user_id)
 
@@ -324,6 +380,7 @@ async def create_interview(
             hospital_city=hospital_city.strip(),
             hospital_decile=hospital_decile,
             doctor_level=doctor_level.strip(),
+            core_problem=normalized_core_problem,
         )
         keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
         if keys:
@@ -368,6 +425,7 @@ async def create_interview(
         "id": interview_id,
         "project_id": project_id,
         "name": clean_name,
+        "core_problem": normalized_core_problem,
         "interview_date": interview_date,
         "hospital_city": hospital_city.strip(),
         "hospital_decile": hospital_decile,

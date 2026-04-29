@@ -1,5 +1,5 @@
 import { request } from "./apiClient";
-import type { Project } from "./types";
+import type { DeleteProjectResponse, Project } from "./types";
 
 interface CreateProjectPayload {
   name: string;
@@ -16,4 +16,10 @@ export function createProject(payload: CreateProjectPayload): Promise<Project> {
 
 export function getProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
+}
+
+export function deleteProject(projectId: number): Promise<DeleteProjectResponse> {
+  return request<DeleteProjectResponse>(`/api/projects/${projectId}`, {
+    method: "DELETE",
+  });
 }

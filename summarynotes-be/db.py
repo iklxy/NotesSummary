@@ -239,6 +239,7 @@ def insert_interview(
     hospital_city: Optional[str],
     hospital_decile: Optional[int],
     doctor_level: Optional[str],
+    core_problem: Optional[str],
 ) -> int:
     """
     插入一条访谈记录到 bh_project_interview 表。
@@ -251,6 +252,7 @@ def insert_interview(
         hospital_city:    医院所在城市，对应 bh_project_interview.hospital_city。
         hospital_decile:  医院 Decile，对应 bh_project_interview.hospital_decile。
         doctor_level:     医生级别，对应 bh_project_interview.doctor_level。
+        core_problem:     访谈 key BQ 的 JSON 字符串，对应 bh_project_interview.core_problem。
 
     返回:
         新插入访谈记录的自增 ID。
@@ -264,9 +266,10 @@ def insert_interview(
             hospital_city,
             hospital_decile,
             doctor_level,
+            core_problem,
             status
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     conn = get_connection()
     try:
@@ -281,6 +284,7 @@ def insert_interview(
                     hospital_city,
                     hospital_decile,
                     doctor_level,
+                    core_problem,
                     0,
                 ),
             )
@@ -335,6 +339,7 @@ def fetch_interview_by_id(
         - hospital_city
         - hospital_decile
         - doctor_level
+        - core_problem
         - file_path
         - status
     """
@@ -348,6 +353,7 @@ def fetch_interview_by_id(
             i.hospital_city,
             i.hospital_decile,
             i.doctor_level,
+            i.core_problem,
             i.file_path,
             i.status
         FROM bh_project_interview i
@@ -415,6 +421,92 @@ def delete_interview_graph(interview_id: int) -> dict | None:
         conn.close()
 
     return row
+
+
+def delete_project_graph(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    删除指定项目及其关联数据。
+
+    会删除：
+        - bh_project_fewshot_sample
+        - bh_project_interview_notes
+        - bh_project_interview_summary
+        - bh_project_question
+        - bh_project_interview
+        - bh_project
+
+    参数:
+        project_id: 项目 ID，对应 bh_project.id。
+        created_by_user_id: 可选用户 ID，用于限制只能删除当前用户创建的项目。
+
+    返回:
+        删除前的项目记录，若项目不存在则返回 None。
+    """
+    project = fetch_project_by_id(project_id, created_by_user_id)
+    if not project:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT i.id
+                FROM bh_project_interview i
+                INNER JOIN bh_project p ON p.id = i.parse_project_id
+                WHERE i.parse_project_id = %s
+                  AND (%s IS NULL OR p.created_by_user_id = %s)
+                ORDER BY i.id ASC
+                """,
+                (project_id, created_by_user_id, created_by_user_id),
+            )
+            interview_rows = cursor.fetchall()
+
+            for interview_row in interview_rows:
+                interview_id = int(interview_row["id"])
+                cursor.execute(
+                    "DELETE FROM bh_project_fewshot_sample WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM bh_project_interview_notes WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM bh_project_interview_summary WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM bh_project_question WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM bh_project_interview WHERE id = %s",
+                    (interview_id,),
+                )
+
+            cursor.execute(
+                """
+                DELETE FROM bh_project
+                WHERE id = %s
+                  AND (%s IS NULL OR created_by_user_id = %s)
+                """,
+                (project_id, created_by_user_id, created_by_user_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return project
 
 
 def insert_questions_for_interview(
@@ -741,10 +833,11 @@ def fetch_interviews_by_project(
             - name
             - interview_date
             - file_name
-            - hospital_city
-            - hospital_decile
-            - doctor_level
-            - file_path
+        - hospital_city
+        - hospital_decile
+        - doctor_level
+        - core_problem
+        - file_path
     """
     sql = """
         SELECT
@@ -756,6 +849,7 @@ def fetch_interviews_by_project(
             , i.hospital_city
             , i.hospital_decile
             , i.doctor_level
+            , i.core_problem
         FROM bh_project_interview i
         INNER JOIN bh_project p ON p.id = i.parse_project_id
         WHERE i.parse_project_id = %s

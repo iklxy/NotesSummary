@@ -7,7 +7,7 @@ import { DatePicker, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
 import { DownOutlined } from "@ant-design/icons";
 import { Project } from "../lib/types";
-import { createProject, getProjects } from "../lib/projectsApi";
+import { createProject, deleteProject, getProjects } from "../lib/projectsApi";
 import {
   deleteInterview,
   createInterview,
@@ -36,6 +36,15 @@ export default function Home() {
   const [selectedInterviewHotwordValues, setSelectedInterviewHotwordValues] = useState<string[]>(
     [],
   );
+
+  const buildKeyBqJson = (rawValue: string): string => {
+    const items = rawValue
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((text, index) => ({ order: index + 1, text }));
+    return JSON.stringify({ key_bq_list: items }, null, 2);
+  };
 
   const formatInterviewDate = (value?: string | null) => {
     if (!value) {
@@ -114,6 +123,34 @@ export default function Home() {
     setModalVisible(false);
   };
 
+  const handleDeleteProject = (project: Project) => {
+    Modal.confirm({
+      title: "确认删除项目",
+      content: `确定要删除项目「${project.name}」吗？该操作会同时删除该项目下的所有访谈、问题、summary、Notes、few-shot 样本，以及本地/云端音频和向量索引，且不可恢复。`,
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const resp = await deleteProject(project.id);
+          if (resp.warnings && resp.warnings.length > 0) {
+            message.warning(`项目已删除，但部分外部资源清理失败：${resp.warnings.join("；")}`);
+          } else {
+            message.success("项目已删除");
+          }
+          setProjects((prev) => prev.filter((p) => p.id !== project.id));
+          setExpandedProjectIds((prev) => prev.filter((id) => id !== project.id));
+        } catch (e) {
+          if (e instanceof Error) {
+            message.error(e.message);
+          } else {
+            message.error("删除项目失败");
+          }
+        }
+      },
+    });
+  };
+
   const openCreateInterview = (project: Project) => {
     setCurrentProjectForInterview(project);
     interviewForm.resetFields();
@@ -145,8 +182,11 @@ export default function Home() {
       const hospitalCity = String(values.hospital_city || "").trim();
       const hospitalDecile = Number(values.hospital_decile);
       const doctorLevel = String(values.doctor_level || "").trim();
+      const keyBqText = String(values.key_bq_text || "").trim();
+      const coreProblem = buildKeyBqJson(keyBqText);
       const formData = new FormData();
       formData.append("name", values.interview_name as string);
+      formData.append("core_problem", coreProblem);
       if (dateText) {
         formData.append("interview_date", dateText);
       }
@@ -176,6 +216,7 @@ export default function Home() {
           const next = {
             id: created.id,
             name: created.name,
+            core_problem: created.core_problem ?? coreProblem,
             date: created.interview_date ?? dateText,
             hospital_city: created.hospital_city ?? hospitalCity,
             hospital_decile: created.hospital_decile ?? hospitalDecile,
@@ -220,6 +261,7 @@ export default function Home() {
           hospital_decile: item.hospital_decile ?? null,
           doctor_level: item.doctor_level ?? null,
           audioFileName: item.file_name ?? null,
+          core_problem: item.core_problem ?? null,
         }));
         setProjects((prev) =>
           prev.map((p) => (p.id === project.id ? { ...p, interviews: mapped } : p)),
@@ -346,6 +388,9 @@ export default function Home() {
                                 <Button type="default" onClick={() => openEditProject(project)}>
                                   编辑项目
                                 </Button>
+                                <Button danger onClick={() => handleDeleteProject(project)}>
+                                  删除项目
+                                </Button>
                               </Space>
                             </Space>
                             {project.core_problem && (
@@ -458,85 +503,111 @@ export default function Home() {
         onCancel={handleInterviewCancel}
         okText="确定"
         cancelText="取消"
+        width={1040}
         destroyOnHidden
       >
         {currentProjectForInterview ? (
           <Form form={interviewForm} layout="vertical">
-          <Form.Item label="所属项目">
-              <Text>{currentProjectForInterview.name}</Text>
-            </Form.Item>
-            <Form.Item label="访谈级热词">
-              <HotwordSelector
-                title="访谈热词"
-                description="选择本次访谈热词。当前包含原项目级与访谈级词包。"
-                options={INTERVIEW_HOTWORD_OPTIONS}
-                selectedKeys={selectedInterviewHotwordValues}
-                onChange={setSelectedInterviewHotwordValues}
-              />
-            </Form.Item>
-            <Form.Item
-              label="访谈名称"
-              name="interview_name"
-              rules={[{ required: true, message: "请输入访谈名称" }]}
-            >
-              <Input placeholder="请输入访谈名称" />
-            </Form.Item>
-            <Form.Item label="访谈时间" name="interview_date">
-              <DatePicker style={{ width: "100%" }} placeholder="请选择访谈时间" />
-            </Form.Item>
-            <Form.Item
-              label="医院所在城市"
-              name="hospital_city"
-              rules={[{ required: true, message: "请输入医院所在城市" }]}
-            >
-              <Input placeholder="例如：北京" />
-            </Form.Item>
-            <Form.Item
-              label="医院 Decile"
-              name="hospital_decile"
-              rules={[{ required: true, message: "请输入医院 Decile" }]}
-            >
-              <Input type="number" min={0} max={10} placeholder="请输入医院 Decile" />
-            </Form.Item>
-            <Form.Item
-              label="医生级别"
-              name="doctor_level"
-              rules={[{ required: true, message: "请输入医生级别" }]}
-            >
-              <Input placeholder="例如：主任医师" />
-            </Form.Item>
-              <Form.Item label="录音文件上传">
-                <div>
-                  <Upload
-                    beforeUpload={() => false}
-                    maxCount={1}
-                  fileList={fileList}
-                  onChange={({ fileList: newList }) => setFileList(newList)}
-                  accept=".wav,.mp3,.m4a"
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item label="所属项目">
+                  <Text>{currentProjectForInterview.name}</Text>
+                </Form.Item>
+                <Form.Item
+                  label="访谈名称"
+                  name="interview_name"
+                  rules={[{ required: true, message: "请输入访谈名称" }]}
                 >
-                  <Button>选择文件</Button>
-                  </Upload>
-                  <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                    支持上传wav、mp3、m4a格式音频文件，单次仅支持上传一个文件，文件大小不超过1G。
-                  </Text>
-                </div>
-              </Form.Item>
-              <Form.Item label="访谈问卷上传">
-                <div>
-                  <Upload
-                    beforeUpload={() => false}
-                    maxCount={1}
-                    fileList={questionnaireFileList}
-                    onChange={({ fileList: newList }) => setQuestionnaireFileList(newList)}
-                    accept=".docx"
-                  >
-                    <Button>选择问卷</Button>
-                  </Upload>
-                  <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                    仅支持 docx 格式的问卷文件，上传后会作为该访谈的备份文件保存，并自动解析为 md 和 json。
-                  </Text>
-                </div>
-              </Form.Item>
+                  <Input placeholder="请输入访谈名称" />
+                </Form.Item>
+                <Form.Item label="访谈时间" name="interview_date">
+                  <DatePicker style={{ width: "100%" }} placeholder="请选择访谈时间" />
+                </Form.Item>
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <Form.Item
+                      label="医院所在城市"
+                      name="hospital_city"
+                      rules={[{ required: true, message: "请输入医院所在城市" }]}
+                    >
+                      <Input placeholder="例如：北京" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item
+                      label="医院 Decile"
+                      name="hospital_decile"
+                      rules={[{ required: true, message: "请输入医院 Decile" }]}
+                    >
+                      <Input type="number" min={0} max={10} placeholder="请输入医院 Decile" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item
+                  label="医生级别"
+                  name="doctor_level"
+                  rules={[{ required: true, message: "请输入医生级别" }]}
+                >
+                  <Input placeholder="例如：主任医师" />
+                </Form.Item>
+                <Form.Item
+                  label="访谈 key BQ"
+                  name="key_bq_text"
+                  rules={[{ required: true, message: "请输入访谈 key BQ" }]}
+                >
+                  <Input.TextArea
+                    rows={8}
+                    placeholder={`请每行输入一个 key BQ，例如：
+该访谈主要关注哪些伴随诊断靶点？
+国产和进口产品在当前市场中的竞争情况如何？
+未来市场布局和准入障碍有哪些？`}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="访谈级热词">
+                  <HotwordSelector
+                    title="访谈热词"
+                    description="选择本次访谈热词。当前包含原项目级与访谈级词包。"
+                    options={INTERVIEW_HOTWORD_OPTIONS}
+                    selectedKeys={selectedInterviewHotwordValues}
+                    onChange={setSelectedInterviewHotwordValues}
+                  />
+                </Form.Item>
+                <Form.Item label="录音文件上传">
+                  <div>
+                    <Upload
+                      beforeUpload={() => false}
+                      maxCount={1}
+                      fileList={fileList}
+                      onChange={({ fileList: newList }) => setFileList(newList)}
+                      accept=".wav,.mp3,.m4a"
+                    >
+                      <Button>选择文件</Button>
+                    </Upload>
+                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
+                      支持上传wav、mp3、m4a格式音频文件，单次仅支持上传一个文件，文件大小不超过1G。
+                    </Text>
+                  </div>
+                </Form.Item>
+                <Form.Item label="访谈问卷上传">
+                  <div>
+                    <Upload
+                      beforeUpload={() => false}
+                      maxCount={1}
+                      fileList={questionnaireFileList}
+                      onChange={({ fileList: newList }) => setQuestionnaireFileList(newList)}
+                      accept=".docx"
+                    >
+                      <Button>选择问卷</Button>
+                    </Upload>
+                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
+                      仅支持 docx 格式的问卷文件，上传后会作为该访谈的备份文件保存，并自动解析为 md 和 json。
+                    </Text>
+                  </div>
+                </Form.Item>
+              </Col>
+            </Row>
           </Form>
         ) : (
           <Paragraph>请选择一个项目后再新建访谈。</Paragraph>

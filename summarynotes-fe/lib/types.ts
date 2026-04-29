@@ -44,6 +44,14 @@ export interface DeleteInterviewResponse {
   message?: string | null;
 }
 
+export interface DeleteProjectResponse {
+  success: boolean;
+  project_id: number;
+  project_name?: string | null;
+  deleted_interviews?: number | null;
+  warnings?: string[] | null;
+}
+
 export interface QuestionIntentItem {
   id: number;
   code: string;
@@ -164,6 +172,7 @@ export interface Interview {
   id: number;
   name: string;
   date?: string | null;
+  core_problem?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
