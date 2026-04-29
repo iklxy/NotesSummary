@@ -202,7 +202,9 @@ class DbAccess:
                 id,
                 parse_project_id,
                 file_name,
+                core_problem,
                 file_content,
+                note_content,
                 file_path,
                 status
             FROM bh_project_interview
@@ -265,6 +267,7 @@ class DbAccess:
                 question_text,
                 question_type,
                 research_phase,
+                meta,
                 intent_id
             FROM bh_project_question
             WHERE project_interview_id = %s
@@ -386,6 +389,29 @@ class DbAccess:
             WHERE id = %s
         """
         cls._execute_write(sql, (file_content_json, interview_id))
+
+    @classmethod
+    def update_interview_note_content(
+        cls,
+        interview_id: int,
+        note_content: str,
+    ) -> None:
+        """
+        将访谈级整体 summary 写入 `bh_project_interview.note_content`。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            note_content: 需要写入的整体总结文本。
+
+        返回:
+            无返回值。数据库更新失败时抛出异常。
+        """
+        sql = """
+            UPDATE bh_project_interview
+            SET note_content = %s
+            WHERE id = %s
+        """
+        cls._execute_write(sql, (note_content, interview_id))
 
     # ------------------------------------------------------------------
     # Summary 落库

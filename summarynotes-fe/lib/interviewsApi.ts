@@ -8,6 +8,7 @@ import {
   InterviewFewshotSamplesResponse,
   GenerateNotesResponse,
   InterviewNotesResponse,
+  InterviewOverallNotesResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
   QuestionCreateItem,
@@ -38,6 +39,12 @@ export function getQuestionIntents(): Promise<QuestionIntentItem[]> {
 
 export function getInterviewNotes(interviewId: number): Promise<InterviewNotesResponse> {
   return request<InterviewNotesResponse>(`/api/interviews/${interviewId}/notes`);
+}
+
+export function getInterviewOverallNotes(
+  interviewId: number,
+): Promise<InterviewOverallNotesResponse> {
+  return request<InterviewOverallNotesResponse>(`/api/interviews/${interviewId}/overall-notes`);
 }
 
 export function getInterviewQuestions(

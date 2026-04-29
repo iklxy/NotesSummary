@@ -108,6 +108,15 @@ def table_rows_to_markdown(rows: List[List[str]]) -> str:
     divider = ["---"] * width
 
     def render_row(row: List[str]) -> str:
+        """
+        将一行表格单元格渲染为 Markdown 表格行。
+
+        参数:
+            row: 已补齐列宽的一行单元格文本列表；单元格内的换行会被替换为 <br>。
+
+        返回:
+            对应的 Markdown 表格行字符串，形如 "| a | b | c |"。
+        """
         return "| " + " | ".join(cell.replace("\n", "<br>") for cell in row) + " |"
 
     markdown_lines = [render_row(header), render_row(divider)]
@@ -327,6 +336,15 @@ def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
     current_blocks: List[Dict[str, Any]] = []
 
     def flush_domain() -> None:
+        """
+        将当前已经收集到的领域块解析成一棵问题树并写入 domains。
+
+        该闭包依赖外层的 current_domain 与 current_blocks：
+        - current_domain 记录当前领域的标题与元信息
+        - current_blocks 记录当前领域下待解析的原始段落块
+
+        处理结束后会把当前领域追加到 domains，并清空临时状态，等待下一个领域。
+        """
         nonlocal current_domain, current_blocks
         if current_domain is None:
             current_blocks = []

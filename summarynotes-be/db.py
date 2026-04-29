@@ -323,6 +323,31 @@ def update_interview_status(interview_id: int, status: int) -> None:
         conn.close()
 
 
+def update_interview_note_content(interview_id: int, note_content: str) -> None:
+    """
+    更新访谈级整体 summary notes 文本。
+
+    参数:
+        interview_id: 访谈 ID，对应 bh_project_interview.id。
+        note_content: 需要写入的整体 summary notes 文本。
+    """
+    sql = """
+        UPDATE bh_project_interview
+        SET note_content = %s
+        WHERE id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (note_content, interview_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def fetch_interview_by_id(
     interview_id: int,
     created_by_user_id: int | None = None,
@@ -354,6 +379,7 @@ def fetch_interview_by_id(
             i.hospital_decile,
             i.doctor_level,
             i.core_problem,
+            i.note_content,
             i.file_path,
             i.status
         FROM bh_project_interview i
@@ -531,8 +557,8 @@ def insert_questions_for_interview(
 
     sql = """
         INSERT INTO bh_project_question
-            (project_interview_id, question_order, question_text, question_type, research_phase, intent_id)
-        VALUES (%s, %s, %s, %s, %s, %s)
+            (project_interview_id, question_order, question_text, question_type, research_phase, intent_id, meta)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
 
     conn = get_connection()
@@ -545,6 +571,9 @@ def insert_questions_for_interview(
                 question_type = (item.get("question_type") or "OPEN").strip().upper()
                 research_phase = item.get("research_phase")
                 intent_id = item.get("intent_id")
+                meta = item.get("meta")
+                if isinstance(meta, (dict, list)):
+                    meta = json.dumps(meta, ensure_ascii=False)
 
                 if question_order is None:
                     raise ValueError("question_order is required")
@@ -562,6 +591,7 @@ def insert_questions_for_interview(
                         question_type,
                         research_phase,
                         intent_id,
+                        meta,
                     ),
                 )
                 inserted += 1
@@ -648,6 +678,7 @@ def fetch_question_by_id(project_interview_id: int, question_id: int) -> dict | 
             question_text,
             question_type,
             research_phase,
+            meta,
             intent_id
         FROM bh_project_question
         WHERE project_interview_id = %s
@@ -970,6 +1001,7 @@ def fetch_questions_by_interview(project_interview_id: int) -> list[dict]:
             question_text,
             question_type,
             research_phase,
+            meta,
             intent_id
         FROM bh_project_question
         WHERE project_interview_id = %s
@@ -1011,6 +1043,7 @@ def fetch_notes_rows_by_interview(interview_id: int) -> list[dict]:
             q.question_type,
             q.intent_id AS question_intent_id,
             q.research_phase,
+            q.meta,
             n.id AS notes_id,
             n.intent_id AS notes_intent_id,
             n.note_json,

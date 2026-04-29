@@ -232,7 +232,11 @@ def api_run_workflow(interview_id: int) -> Dict[str, Any]:
 # Notes 与题目路由
 # ----------------------------------------------------------------------
 @app.post("/internal/interviews/{interview_id}/generate-notes")
-def api_generate_notes(interview_id: int, question_id: int | None = None) -> Dict[str, Any]:
+def api_generate_notes(
+    interview_id: int,
+    question_id: int | None = None,
+    source_kind: str | None = None,
+) -> Dict[str, Any]:
     """
     为指定访谈生成 Notes；可选择只生成单题，也可生成全部题目。
 
@@ -247,7 +251,11 @@ def api_generate_notes(interview_id: int, question_id: int | None = None) -> Dic
         HTTPException: 当 Notes 工作流执行失败时抛出 500。
     """
     try:
-        return run_notes_generation_for_interview(interview_id, question_id=question_id)
+        return run_notes_generation_for_interview(
+            interview_id,
+            question_id=question_id,
+            source_kind=source_kind,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
 

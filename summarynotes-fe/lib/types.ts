@@ -85,6 +85,27 @@ export interface InterviewNotesResponse {
   questions: QuestionWithNotes[];
 }
 
+export interface InterviewSummaryItem {
+  id: number;
+  project_interview_id: number;
+  timestamp?: string | null;
+  speaker?: string | null;
+  text?: string | null;
+}
+
+export interface InterviewSummaryResponse {
+  interview_id: number;
+  items: InterviewSummaryItem[];
+}
+
+export interface InterviewOverallNotesResponse {
+  interview_id: number;
+  project_id?: number | null;
+  note_content?: string | null;
+  notes: InterviewNotesResponse;
+  summary: InterviewSummaryResponse;
+}
+
 export interface QuestionItem {
   id: number;
   project_interview_id: number;

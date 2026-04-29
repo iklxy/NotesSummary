@@ -12,14 +12,29 @@ from ProjectContext import load_project_context_by_id
 from RagIndex import index_interview_summary, retrieve_segments_for_question
 
 
-def fetch_questions_step(interview_id: int) -> Dict[str, Any]:
+def fetch_questions_step(
+    interview_id: int,
+    source_kind: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     查询某个访谈下的题目列表，并返回统一的 step 结果结构。
+
+    参数:
+        interview_id: 访谈主键 ID。
+        source_kind: 可选题目来源过滤，仅保留指定来源的题目，例如 "auto"。
     """
     try:
         rows = DbAccess.fetch_questions_for_interview(interview_id)
     except Exception as exc:
         return {"success": False, "questions": [], "message": f"fetch questions failed: {exc}"}
+
+    if source_kind:
+        normalized_source_kind = source_kind.strip().lower()
+        rows = [
+            row
+            for row in rows
+            if _get_question_source_kind(row) == normalized_source_kind
+        ]
 
     if not rows:
         return {
@@ -28,6 +43,30 @@ def fetch_questions_step(interview_id: int) -> Dict[str, Any]:
             "message": f"no questions found for interview {interview_id}",
         }
     return {"success": True, "questions": rows}
+
+
+def _get_question_source_kind(row: Dict[str, Any]) -> str:
+    """
+    从题目记录的 meta 字段中读取来源类型。
+
+    参数:
+        row: 题目记录。
+
+    返回:
+        来源类型字符串，默认返回 "manual"。
+    """
+    raw_meta = row.get("meta")
+    meta_obj: Any = raw_meta
+    if isinstance(raw_meta, str):
+        try:
+            meta_obj = json.loads(raw_meta)
+        except Exception:
+            meta_obj = {}
+    if isinstance(meta_obj, dict):
+        source_kind = str(meta_obj.get("source_kind") or "").strip().lower()
+        if source_kind:
+            return source_kind
+    return "manual"
 
 
 def fetch_intent_names_step(intent_ids: List[int]) -> Dict[str, Any]:
@@ -239,6 +278,7 @@ def run_notes_generation_for_interview(
     interview_id: int,
     question_id: Optional[int] = None,
     top_k: int = 10,
+    source_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     对指定访谈执行 RAG + LLM Notes 生成并落库。
@@ -252,7 +292,7 @@ def run_notes_generation_for_interview(
         }
 
     project_id = row.get("parse_project_id") or 0
-    question_result = fetch_questions_step(interview_id)
+    question_result = fetch_questions_step(interview_id, source_kind=source_kind)
     if not question_result.get("success"):
         return {
             "success": False,

@@ -7,6 +7,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { useRouter } from "next/navigation";
 import {
   Layout,
   Typography,
@@ -205,6 +206,7 @@ function buildWaveformPeaksFromAudioBuffer(
 }
 
 export default function InterviewDetailClient({ interviewId }: Props) {
+  const router = useRouter();
   const interviewIdNum = interviewId;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pendingSeekRef = useRef<{ seekMs: number; autoplay: boolean } | null>(null);
@@ -1155,12 +1157,19 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   return (
     <Layout className="min-h-screen">
       <Header className="flex items-center justify-between bg-slate-900 shadow px-6">
-        <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
-          访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
-        </Title>
-        <Button icon={<DownloadOutlined />} onClick={exportSummaryAsTxt}>
-          导出 TXT
-        </Button>
+        <Space>
+          <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
+            访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
+          </Title>
+        </Space>
+        <Space>
+          <Button onClick={() => router.push(`/interviews/${interviewIdNum}/overall-notes`)}>
+            整体 Notes
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={exportSummaryAsTxt}>
+            导出 TXT
+          </Button>
+        </Space>
       </Header>
       <Content className="bg-slate-50">
         <div

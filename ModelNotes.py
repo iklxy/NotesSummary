@@ -301,3 +301,48 @@ def generate_notes_for_question_with_fewshot(
     fewshot_block = build_fewshot_prompt_block(fewshot_samples)
     user_prompt = f"{fewshot_block}\n\n{base_user_prompt}" if fewshot_block else base_user_prompt
     return parse_notes_response(generate_fn, generate_fn(system_prompt, user_prompt))
+
+
+def generate_overall_interview_note(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    interview_context_block: str,
+    key_bq_text: str,
+    transcript_text: str,
+) -> str:
+    """
+    基于整篇访谈转录生成访谈级整体 summary notes。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        interview_context_block: 已格式化好的访谈背景块。
+        key_bq_text: 访谈 key BQ 的文本内容，通常已按行拼好。
+        transcript_text: 经过纠错/清洗后的整篇访谈转录文本。
+
+    返回:
+        一段适合写入 `bh_project_interview.note_content` 的整体 summary 文本。
+    """
+    system_prompt = (
+        "你是一名医学、药学、体外诊断和市场调研领域的访谈总结专家，"
+        "负责根据整篇访谈转录和 key BQ 生成一段访谈级整体总结。"
+        "你必须严格基于给定内容，不要编造，不要分点，输出一段 100 到 200 字的中文总结。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"{interview_context_block}"
+        "下面是该访谈的 key BQ 和整篇转录内容，请综合这些信息生成访谈级整体 summary notes。\n\n"
+        f"【key BQ】\n{key_bq_text or '（未提供 key BQ）'}\n\n"
+        "【整篇访谈转录】\n"
+        f"{transcript_text}\n\n"
+        "要求：\n"
+        "1. 仅输出一段自然语言总结，不要输出标题、列表、JSON 或额外解释。\n"
+        "2. 重点概括这场访谈的主题、主要结论、市场/业务关注点。\n"
+        "3. 长度控制在 100 到 200 字之间，尽量简洁准确。\n"
+        "4. 如果信息不足，仍需尽量给出最接近的概括，不要编造未出现的事实。\n"
+    )
+    content = generate_fn(system_prompt, user_prompt).strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
+    return content

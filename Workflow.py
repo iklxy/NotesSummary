@@ -12,6 +12,7 @@ from Model import ModelClient
 from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
 from DbAccess import DbAccess
 from ProjectContext import load_project_context_by_id
+from NotesWorkflow import run_notes_generation_for_interview
 from config import config
 
 
@@ -210,15 +211,138 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
         return {"success": False, "message": f"write summary failed: {e}"}
 
     return {"success": True, "inserted": inserted}
+
+
+def _extract_key_bq_text(core_problem: Any) -> str:
+    """
+    将访谈 core_problem 字段中的 key BQ JSON 归一化为可直接注入 prompt 的文本。
+
+    参数:
+        core_problem: bh_project_interview.core_problem 的原始值，通常是 JSON 字符串。
+
+    返回:
+        按顺序拼接后的 key BQ 文本。
+    """
+    if core_problem is None:
+        return ""
+    obj: Any = core_problem
+    if isinstance(core_problem, str):
+        try:
+            obj = json.loads(core_problem)
+        except Exception:
+            return core_problem.strip()
+    if not isinstance(obj, dict):
+        return str(core_problem).strip()
+    items = obj.get("key_bq_list") or []
+    if not isinstance(items, list):
+        return ""
+    lines: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _extract_transcript_text(cleaned_json: str) -> str:
+    """
+    将清洗后的 transcript 组织成可用于整体 summary 的纯文本。
+
+    参数:
+        cleaned_json: step_clean_with_llm 返回的 JSON 字符串。
+
+    返回:
+        按说话人顺序拼接的访谈文本。
+    """
+    try:
+        obj = json.loads(cleaned_json)
+    except Exception:
+        return ""
+    speakers = obj.get("result", {}).get("speakers") or []
+    lines: List[str] = []
+    for seg in speakers:
+        if not isinstance(seg, dict):
+            continue
+        speaker_id = str(seg.get("speaker_id") or "").strip() or "unknown"
+        text = (
+            str(seg.get("speaker_content_clean") or "").strip()
+            or str(seg.get("speaker_content_corrected") or "").strip()
+            or str(seg.get("text") or "").strip()
+            or str(seg.get("speaker_content") or "").strip()
+        )
+        if not text:
+            continue
+        lines.append(f"{speaker_id}: {text}")
+    return "\n".join(lines)
+
+
+def step_generate_overall_note(
+    interview_id: int,
+    cleaned_json: str,
+    project_context: str | None = None,
+    interview_context: Dict[str, Any] | str | None = None,
+    core_problem: Any = None,
+) -> Dict[str, Any]:
+    """
+    生成访谈级整体 summary notes，并写入 `bh_project_interview.note_content`。
+
+    参数:
+        interview_id: 访谈 ID。
+        cleaned_json: 已完成纠错/清洗的 transcript JSON。
+        project_context: 可选项目背景。
+        interview_context: 可选访谈背景。
+        core_problem: 访谈 key BQ 原始值或 JSON 字符串。
+
+    返回:
+        包含 success、note_content、warning 的 step 结果。
+    """
+    transcript_text = _extract_transcript_text(cleaned_json)
+    if not transcript_text.strip():
+        return {"success": False, "message": "transcript text is empty"}
+
+    key_bq_text = _extract_key_bq_text(core_problem)
+    client = ModelClient()
+    try:
+        note_content = client.generate_overall_interview_note(
+            key_bq_text=key_bq_text,
+            transcript_text=transcript_text,
+            project_context=project_context,
+            interview_context=interview_context,
+        )
+    except Exception as e:
+        return {"success": False, "message": f"generate overall note failed: {e}"}
+
+    note_content = (note_content or "").strip()
+    if not note_content:
+        return {"success": False, "message": "overall note is empty"}
+
+    try:
+        DbAccess.update_interview_note_content(interview_id, note_content)
+    except Exception as e:
+        return {"success": False, "message": f"write overall note failed: {e}"}
+
+    return {"success": True, "note_content": note_content}
 def run_workflow(interview_id: int) -> Dict[str, Any]:
     """
-    只负责“转录 -> 背景提炼 -> 纠错兜底 -> 写 summary”的工作流。
+    只负责“转录 -> 背景提炼 -> 纠错兜底 -> 写 summary -> 生成整体 Notes -> 自动生成问题 Notes”的工作流。
 
     旧版工作流中的 Notes 生成已拆分出去，后续由独立接口按题目触发。
     当前工作流会先读取访谈所属项目的背景描述，并将其注入到纠错阶段，
     以便后续 summary 的文本更贴合项目语境。
     """
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
+        """
+        统一封装工作流失败返回，并尝试把访谈状态写回失败态。
+
+        参数:
+            stage: 当前失败发生的阶段标识，用于前端和日志定位，例如 load_interview、transcribe。
+            detail: 失败细节，可以是错误说明字符串，也可以是包含更多上下文的字典。
+
+        返回:
+            标准化的失败响应字典，包含 success=False、stage 和 detail。
+        """
         try:
             DbAccess.update_interview_status(interview_id, 3)
         except Exception:
@@ -241,6 +365,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         project_context = load_project_context_by_id(int(project_id))
         term_hints = load_term_hints_from_state(interview_id=interview_id)
         correction_rules = load_correction_rules_from_state(interview_id=interview_id)
+        core_problem = interview_row.get("core_problem")
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)
@@ -289,7 +414,21 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if not ws.get("success"):
             return fail("write_summary", ws)
 
-        row = DbAccess.get_interview_by_id(interview_id)
+        overall_note_result = step_generate_overall_note(
+            interview_id=interview_id,
+            cleaned_json=cleaned_json,
+            project_context=project_context,
+            interview_context=interview_context,
+            core_problem=core_problem,
+        )
+        overall_note_warning = None
+        if not overall_note_result.get("success"):
+            overall_note_warning = overall_note_result.get("message") or "generate overall note failed"
+
+        notes_result = run_notes_generation_for_interview(interview_id, source_kind="auto")
+        notes_warning = None
+        if not notes_result.get("success"):
+            notes_warning = notes_result.get("message") or "generate notes failed"
 
         try:
             DbAccess.update_interview_status(interview_id, 2)
@@ -305,6 +444,13 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
                 "speakers_count": len(asr_result.get("speakers", [])),
             },
             "summary_inserted": ws.get("inserted", 0),
+            "overall_note_written": bool(overall_note_result.get("success")),
+            "notes_inserted": notes_result.get("inserted", 0),
+            "warnings": [
+                warning
+                for warning in [overall_note_warning, notes_warning]
+                if warning
+            ],
         }
     except Exception as e:
         return fail("unexpected", {

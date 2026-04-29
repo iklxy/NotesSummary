@@ -127,6 +127,71 @@ def _get_qdrant_collection_name() -> str:
     return os.getenv("QDRANT_COLLECTION_SUMMARY", "interview_summary")
 
 
+def _build_interview_notes_response(
+    interview_id: int,
+    project_id: int | None,
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    将数据库原始 Notes 行聚合为前端可直接消费的题目-Notes 结构。
+
+    参数:
+        interview_id: 访谈 ID。
+        project_id: 所属项目 ID。
+        rows: fetch_notes_rows_by_interview 返回的原始记录列表。
+
+    返回:
+        包含 interview_id、project_id、questions 的聚合字典。
+    """
+    questions_map: Dict[int, Dict[str, Any]] = {}
+
+    for row in rows:
+        question_id = int(row["question_id"])
+        if question_id not in questions_map:
+            questions_map[question_id] = {
+                "question_id": question_id,
+                "question_order": row["question_order"],
+                "question_text": row["question_text"],
+                "question_type": row["question_type"],
+                "intent_id": row["question_intent_id"],
+                "research_phase": row.get("research_phase"),
+                "notes": [],
+            }
+
+        notes_id = row.get("notes_id")
+        if notes_id is None:
+            continue
+
+        note_json_raw = row.get("note_json")
+        if isinstance(note_json_raw, str):
+            try:
+                note_parsed: Any = json.loads(note_json_raw)
+            except Exception:
+                note_parsed = note_json_raw
+        else:
+            note_parsed = note_json_raw
+
+        questions_map[question_id]["notes"].append(
+            {
+                "notes_id": notes_id,
+                "intent_id": row.get("notes_intent_id"),
+                "note_json": note_parsed,
+                "confidence": row.get("confidence"),
+                "status": row.get("status"),
+            }
+        )
+
+    questions_list = sorted(
+        questions_map.values(),
+        key=lambda x: (x["question_order"], x["question_id"]),
+    )
+    return {
+        "interview_id": interview_id,
+        "project_id": project_id,
+        "questions": questions_list,
+    }
+
+
 def _delete_qdrant_points_for_interview(interview_id: int) -> tuple[bool, str | None]:
     """
     按访谈 ID 删除 Qdrant 中对应的 summary chunk 向量。
@@ -274,8 +339,7 @@ def run_interview_workflow(
     success = bool(data.get("success", False))
     queued = bool(data.get("queued", False))
     summary_inserted = data.get("summary_inserted")
-    notes_db = data.get("notes_db") or {}
-    notes_inserted = notes_db.get("inserted")
+    notes_inserted = data.get("notes_inserted")
     message = None
 
     if not success:
@@ -540,6 +604,7 @@ def get_interview_questions(
             "question_text": row["question_text"],
             "question_type": row.get("question_type"),
             "research_phase": row.get("research_phase"),
+            "meta": row.get("meta"),
             "intent_id": row.get("intent_id"),
         }
         for row in rows
@@ -583,6 +648,7 @@ def create_interview_questions(
                 "question_type": "OPEN",
                 "intent_id": 1,
                 "research_phase": None,
+                "meta": {"source_kind": "manual"},
             }
         )
         next_order += 1
@@ -597,6 +663,44 @@ def create_interview_questions(
         interview_id=interview_id,
         inserted=inserted,
     )
+
+
+@router.get(
+    "/{interview_id}/overall-notes",
+    response_model=Dict[str, Any],
+)
+def get_interview_overall_notes(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    返回整体 Notes 页面所需的聚合数据。
+
+    返回字段包含:
+        - interview_id
+        - project_id
+        - note_content: 访谈级 summary notes
+        - notes: 按题目聚合的 delivery notes
+        - summary: 原始 summary 明细列表
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    notes_rows = fetch_notes_rows_by_interview(interview_id)
+    notes_payload = _build_interview_notes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        rows=notes_rows,
+    )
+    summary_rows = fetch_interview_summary(project_interview_id=interview_id)
+    return {
+        "interview_id": interview_id,
+        "project_id": interview.get("parse_project_id"),
+        "note_content": interview.get("note_content"),
+        "notes": notes_payload,
+        "summary": {
+            "interview_id": interview_id,
+            "items": summary_rows,
+        },
+    }
 
 
 @router.delete(

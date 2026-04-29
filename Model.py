@@ -9,6 +9,7 @@ from ModelNotes import (
     escape_inner_quotes_in_notes_json,
     generate_notes_for_question,
     generate_notes_for_question_with_fewshot,
+    generate_overall_interview_note,
     repair_notes_json,
 )
 from ModelTranscript import (
@@ -387,6 +388,34 @@ class ModelClient:
             intent_name=intent_name,
             question_type=question_type,
             fewshot_samples=fewshot_samples,
+        )
+
+    @classmethod
+    def generate_overall_interview_note(
+        cls,
+        key_bq_text: str,
+        transcript_text: str,
+        project_context: Optional[str] = None,
+        interview_context: Optional[Any] = None,
+    ) -> str:
+        """
+        根据整篇转录和 key BQ 生成访谈级整体 summary notes。
+
+        参数:
+            key_bq_text: 访谈 key BQ 的拼接文本。
+            transcript_text: 经纠错后的整篇访谈转录文本。
+            project_context: 可选项目背景文本。
+            interview_context: 可选访谈背景摘要。
+
+        返回:
+            适合写入 `bh_project_interview.note_content` 的总结文本。
+        """
+        return generate_overall_interview_note(
+            generate_fn=cls.generate,
+            project_context_block=cls._build_project_context_block(project_context),
+            interview_context_block=cls._build_interview_context_block(interview_context),
+            key_bq_text=key_bq_text,
+            transcript_text=transcript_text,
         )
 
     @classmethod

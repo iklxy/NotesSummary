@@ -156,6 +156,11 @@ def build_question_insert_rows(document: Dict[str, Any]) -> List[Dict[str, Any]]
                 "question_type": "OPEN",
                 "intent_id": 1,
                 "research_phase": None,
+                "meta": {
+                    "source_kind": "auto",
+                    "question_title": item.get("title"),
+                    "question_path": item.get("question_path"),
+                },
             }
         )
     return rows
