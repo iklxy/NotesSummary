@@ -44,6 +44,36 @@ export interface DeleteInterviewResponse {
   message?: string | null;
 }
 
+export interface QuestionnaireHotwordCandidate {
+  term: string;
+  normalized_term: string;
+  reason?: string | null;
+  confidence?: number | null;
+}
+
+export interface QuestionnaireHotwordLoadResponse {
+  interview_id: number;
+  project_id: number;
+  review_required?: boolean | null;
+  candidates?: QuestionnaireHotwordCandidate[] | null;
+  reviewed_hotwords?: string[] | null;
+}
+
+export interface QuestionnaireHotwordReviewRequest {
+  hotwords: string[];
+}
+
+export interface QuestionnaireHotwordReviewResponse {
+  success: boolean;
+  interview_id: number;
+  project_id: number;
+  reviewed_count?: number | null;
+  reviewed_path?: string | null;
+  reviewed_json_path?: string | null;
+  workflow_started?: boolean | null;
+  message?: string | null;
+}
+
 export interface DeleteProjectResponse {
   success: boolean;
   project_id: number;
@@ -198,6 +228,28 @@ export interface Interview {
   hospital_decile?: number | null;
   doctor_level?: string | null;
   audioFileName?: string | null;
+}
+
+export interface CreatedInterviewResponse {
+  id: number;
+  project_id: number;
+  name: string;
+  core_problem?: string | null;
+  interview_date?: string | null;
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
+  file_name: string;
+  local_path: string;
+  audio_backup_path?: string | null;
+  questionnaire_file_name?: string | null;
+  questionnaire_backup_path?: string | null;
+  questionnaire_md_path?: string | null;
+  questionnaire_json_path?: string | null;
+  questionnaire_hotword_review_required?: boolean | null;
+  questionnaire_hotword_candidates?: QuestionnaireHotwordCandidate[] | null;
+  questionnaire_hotword_candidates_path?: string | null;
+  workflow_started?: boolean | null;
 }
 
 export interface Project {

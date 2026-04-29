@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Convert a questionnaire DOCX into Markdown and JSON.
+"""
+@Date: 2026-04-29
+@Author: lixinyang
 
-This module is dependency-free and is shared by the backend and local test
-scripts. It keeps the questionnaire structure starting from the Warm-up
-section, groups later blocks into domains, and recursively builds question
-trees using numbering metadata and visible numbering prefixes.
+将问卷 DOCX 解析为 Markdown 和 JSON。
+
+该模块不依赖额外第三方解析库，供后端和本地 test 脚本共用。
+它会从 Warm-up 开始截取问卷内容，按领域分组，并结合编号样式递归构建问题树。
 """
 
 from __future__ import annotations
@@ -24,13 +26,13 @@ NS = {"w": W_NS}
 
 
 def _q(tag: str) -> str:
-    """Return a namespaced WordprocessingML tag name."""
+    """返回 WordprocessingML 命名空间下的完整标签名。"""
 
     return f"{{{W_NS}}}{tag}"
 
 
 def normalize_text(text: str) -> str:
-    """Normalize whitespace extracted from Word XML."""
+    """标准化从 Word XML 中提取出来的空白字符。"""
 
     text = text.replace("\u00a0", " ")
     text = re.sub(r"[ \t]+", " ", text)
@@ -39,7 +41,7 @@ def normalize_text(text: str) -> str:
 
 
 def extract_text_from_paragraph(paragraph: ET.Element) -> str:
-    """Extract visible text from a paragraph node."""
+    """提取段落节点中的可见文本。"""
 
     parts: List[str] = []
     for node in paragraph.iter():
@@ -53,7 +55,7 @@ def extract_text_from_paragraph(paragraph: ET.Element) -> str:
 
 
 def extract_paragraph_meta(paragraph: ET.Element) -> Dict[str, Any]:
-    """Extract style and numbering metadata from a paragraph."""
+    """提取段落的样式和编号元数据。"""
 
     style = None
     num_id = None
@@ -80,7 +82,7 @@ def extract_paragraph_meta(paragraph: ET.Element) -> Dict[str, Any]:
 
 
 def extract_table_rows(table: ET.Element) -> List[List[str]]:
-    """Extract table rows as lists of plain text cells."""
+    """将表格提取为纯文本单元格行列表。"""
 
     rows: List[List[str]] = []
     for row in table.findall("./w:tr", NS):
@@ -97,7 +99,7 @@ def extract_table_rows(table: ET.Element) -> List[List[str]]:
 
 
 def table_rows_to_markdown(rows: List[List[str]]) -> str:
-    """Render a table into Markdown."""
+    """将表格行渲染为 Markdown。"""
 
     if not rows:
         return ""
@@ -125,7 +127,7 @@ def table_rows_to_markdown(rows: List[List[str]]) -> str:
 
 
 def extract_docx_blocks(docx_path: Path) -> List[Dict[str, Any]]:
-    """Extract ordered paragraph/table blocks from the DOCX body."""
+    """按原始顺序提取 DOCX 主体中的段落块和表格块。"""
 
     if not docx_path.exists():
         raise FileNotFoundError(f"DOCX file not found: {docx_path}")
@@ -163,7 +165,7 @@ def extract_docx_blocks(docx_path: Path) -> List[Dict[str, Any]]:
 
 
 def extract_outline_modules(blocks: List[Dict[str, Any]]) -> List[str]:
-    """Extract module names from the outline table."""
+    """从目录表中提取领域模块名称。"""
 
     for block in blocks:
         if block.get("kind") != "table":
@@ -184,7 +186,7 @@ def extract_outline_modules(blocks: List[Dict[str, Any]]) -> List[str]:
 
 
 def find_warmup_anchor_index(blocks: List[Dict[str, Any]]) -> int:
-    """Locate the first Warm-up paragraph."""
+    """定位第一个 Warm-up 段落的位置。"""
 
     for index, block in enumerate(blocks):
         if block.get("kind") == "paragraph" and normalize_text(block.get("text", "")) == "Warm-up":
@@ -193,7 +195,7 @@ def find_warmup_anchor_index(blocks: List[Dict[str, Any]]) -> int:
 
 
 def build_domain_aliases(module_order: List[str]) -> List[str]:
-    """Build aliases that may be used to recognize domain headings."""
+    """构造可用于识别领域标题的别名集合。"""
 
     aliases: List[str] = []
     for module in module_order:
@@ -214,7 +216,7 @@ def build_domain_aliases(module_order: List[str]) -> List[str]:
 
 
 def is_domain_heading(block: Dict[str, Any], module_order: List[str]) -> bool:
-    """Determine whether a paragraph starts a new domain."""
+    """判断某个段落是否开启了新的领域。"""
 
     if block.get("kind") != "paragraph":
         return False
@@ -239,7 +241,7 @@ def is_domain_heading(block: Dict[str, Any], module_order: List[str]) -> bool:
 
 
 def strip_question_prefix(text: str) -> str:
-    """Remove common numbering prefixes from visible question text."""
+    """去掉题目文本中常见的编号前缀。"""
 
     cleaned = normalize_text(text)
     cleaned = re.sub(r"^\(?\d+[\).、．:：]?\s*", "", cleaned)
@@ -249,7 +251,7 @@ def strip_question_prefix(text: str) -> str:
 
 
 def infer_question_level(block: Dict[str, Any]) -> Optional[int]:
-    """Infer the tree level for a questionnaire paragraph."""
+    """推断问卷段落对应的树层级。"""
 
     if block.get("kind") != "paragraph":
         return None
@@ -271,7 +273,7 @@ def infer_question_level(block: Dict[str, Any]) -> Optional[int]:
 
 
 def build_question_tree(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build a recursive question tree for one domain."""
+    """为单个领域构建递归问题树。"""
 
     roots: List[Dict[str, Any]] = []
     notes: List[str] = []
@@ -324,7 +326,7 @@ def build_question_tree(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
-    """Parse a questionnaire and keep only the Warm-up and later content."""
+    """解析问卷，只保留 Warm-up 及其之后的内容。"""
 
     blocks = extract_docx_blocks(docx_path)
     module_order = extract_outline_modules(blocks)
@@ -395,7 +397,7 @@ def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
 
 
 def question_nodes_to_markdown(nodes: List[Dict[str, Any]], indent: int = 0) -> List[str]:
-    """Render question nodes to Markdown lines."""
+    """将问题树节点渲染为 Markdown 行。"""
 
     lines: List[str] = []
     for node in nodes:
@@ -410,7 +412,7 @@ def question_nodes_to_markdown(nodes: List[Dict[str, Any]], indent: int = 0) -> 
 
 
 def render_markdown(document: Dict[str, Any]) -> str:
-    """Render the parsed questionnaire into Markdown."""
+    """将解析后的问卷渲染为 Markdown。"""
 
     lines: List[str] = []
     lines.append(f"# {document.get('questionnaire_title', '').strip()}")
@@ -437,20 +439,20 @@ def render_markdown(document: Dict[str, Any]) -> str:
 
 
 def ensure_output_dir(output_dir: Path) -> None:
-    """Create the output directory if needed."""
+    """在需要时创建输出目录。"""
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def convert_docx_questionnaire(docx_path: Path, out_dir: Path) -> Dict[str, Any]:
-    """Convert a DOCX questionnaire to Markdown and JSON files.
+    """将 DOCX 问卷转换为 Markdown 和 JSON 文件。
 
-    Args:
-        docx_path: Path to the questionnaire DOCX file.
-        out_dir: Output directory where Markdown and JSON files will be written.
+    参数:
+        docx_path: 待解析的问卷 DOCX 文件路径。
+        out_dir: Markdown 和 JSON 文件的输出目录。
 
-    Returns:
-        A dictionary with the parsed document and output file paths.
+    返回:
+        包含解析结果和输出文件路径的字典。
     """
 
     ensure_output_dir(out_dir)
@@ -473,7 +475,7 @@ def convert_docx_questionnaire(docx_path: Path, out_dir: Path) -> Dict[str, Any]
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    """Parse command line arguments."""
+    """解析命令行参数。"""
 
     parser = argparse.ArgumentParser(description="Convert a questionnaire DOCX into Markdown and JSON.")
     parser.add_argument("--input", type=Path, required=True, help="Input DOCX questionnaire path")
@@ -482,7 +484,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry point."""
+    """命令行入口。"""
 
     args = parse_args(argv)
     result = convert_docx_questionnaire(args.input, args.out_dir)

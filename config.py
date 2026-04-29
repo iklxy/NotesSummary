@@ -1,3 +1,10 @@
+"""
+@Date: 2026-04-29
+@Author: lixinyang
+
+工程运行时配置读取与刷新模块。
+"""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 import os

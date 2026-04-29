@@ -1,5 +1,6 @@
 import { getBaseUrl, request } from "./apiClient";
 import {
+  CreatedInterviewResponse,
   DeleteInterviewResponse,
   DeleteQuestionResponse,
   FewshotSampleCreateRequest,
@@ -14,6 +15,9 @@ import {
   QuestionCreateItem,
   QuestionCreateResponse,
   QuestionIntentItem,
+  QuestionnaireHotwordLoadResponse,
+  QuestionnaireHotwordReviewRequest,
+  QuestionnaireHotwordReviewResponse,
   RunInterviewResponse,
 } from "./types";
 
@@ -119,19 +123,6 @@ export function deleteQuestionFewshotSample(
   );
 }
 
-export interface CreatedInterview {
-  id: number;
-  project_id: number;
-  name: string;
-  core_problem?: string | null;
-  interview_date?: string | null;
-  hospital_city?: string | null;
-  hospital_decile?: number | null;
-  doctor_level?: string | null;
-  file_name: string;
-  local_path: string;
-}
-
 export interface ProjectInterviewDTO {
   id: number;
   parse_project_id: number;
@@ -168,7 +159,7 @@ export interface UpdateSummaryResponse {
 export async function createInterview(
   projectId: number,
   formData: FormData,
-): Promise<CreatedInterview> {
+): Promise<CreatedInterviewResponse> {
   const baseUrl = getBaseUrl().replace(/\/$/, "");
   const url = `${baseUrl}/api/projects/${projectId}/interviews`;
   const resp = await fetch(url, {
@@ -185,7 +176,30 @@ export async function createInterview(
     }
     throw new Error(`create interview failed: ${JSON.stringify(detail)}`);
   }
-  return (await resp.json()) as CreatedInterview;
+  return (await resp.json()) as CreatedInterviewResponse;
+}
+
+export function getQuestionnaireHotwords(
+  projectId: number,
+  interviewId: number,
+): Promise<QuestionnaireHotwordLoadResponse> {
+  return request<QuestionnaireHotwordLoadResponse>(
+    `/api/projects/${projectId}/interviews/${interviewId}/questionnaire-hotwords`,
+  );
+}
+
+export function saveQuestionnaireHotwords(
+  projectId: number,
+  interviewId: number,
+  payload: QuestionnaireHotwordReviewRequest,
+): Promise<QuestionnaireHotwordReviewResponse> {
+  return request<QuestionnaireHotwordReviewResponse>(
+    `/api/projects/${projectId}/interviews/${interviewId}/questionnaire-hotwords`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getProjectInterviews(projectId: number): Promise<ProjectInterviewDTO[]> {

@@ -1,5 +1,6 @@
-"@Date:2026-04-10"
-"@Author:lixinyang"
+"@Date: 2026-04-10"
+"@Author: lixinyang"
+
 
 import json
 import traceback
@@ -10,6 +11,7 @@ from VolcengineConversion import run_asr
 from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
+from QuestionnaireHotword import load_reviewed_questionnaire_hotwords
 from DbAccess import DbAccess
 from ProjectContext import load_project_context_by_id
 from NotesWorkflow import run_notes_generation_for_interview
@@ -363,9 +365,14 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if project_id is None:
             return fail("load_project", {"message": "project id missing from interview"})
         project_context = load_project_context_by_id(int(project_id))
-        term_hints = load_term_hints_from_state(interview_id=interview_id)
+        interview_term_hints = load_term_hints_from_state(interview_id=interview_id)
         correction_rules = load_correction_rules_from_state(interview_id=interview_id)
         core_problem = interview_row.get("core_problem")
+        questionnaire_term_hints = load_reviewed_questionnaire_hotwords(
+            int(project_id),
+            interview_id,
+        )
+        term_hints = merge_term_hints(interview_term_hints, questionnaire_term_hints)
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)

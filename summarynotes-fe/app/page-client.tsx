@@ -2,7 +2,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, Col, Form, Input, Layout, List, Modal, Row, Space, Typography, message } from "antd";
+import {
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  Layout,
+  List,
+  Modal,
+  Row,
+  Space,
+  Spin,
+  Typography,
+  message,
+} from "antd";
 import { DatePicker, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
 import { DownOutlined } from "@ant-design/icons";
@@ -12,8 +26,10 @@ import {
   deleteInterview,
   createInterview,
   getProjectInterviews,
+  saveQuestionnaireHotwords,
 } from "../lib/interviewsApi";
 import HotwordSelector from "../components/HotwordSelector";
+import QuestionnaireHotwordReviewModal from "../components/QuestionnaireHotwordReviewModal";
 import { INTERVIEW_HOTWORD_OPTIONS } from "../lib/hotwordOptions";
 
 const { Header, Content } = Layout;
@@ -36,6 +52,23 @@ export default function Home() {
   const [selectedInterviewHotwordValues, setSelectedInterviewHotwordValues] = useState<string[]>(
     [],
   );
+  const [questionnaireHotwordReviewVisible, setQuestionnaireHotwordReviewVisible] =
+    useState(false);
+  const [interviewSubmitting, setInterviewSubmitting] = useState(false);
+  const [questionnaireHotwordReviewSaving, setQuestionnaireHotwordReviewSaving] =
+    useState(false);
+  const [pendingQuestionnaireHotwordInterview, setPendingQuestionnaireHotwordInterview] =
+    useState<{
+      projectId: number;
+      interviewId: number;
+      interviewName: string;
+      candidates: Array<{
+        term: string;
+        normalized_term: string;
+        reason?: string | null;
+        confidence?: number | null;
+      }>;
+    } | null>(null);
 
   const buildKeyBqJson = (rawValue: string): string => {
     const items = rawValue
@@ -157,20 +190,61 @@ export default function Home() {
     setFileList([]);
     setQuestionnaireFileList([]);
     setSelectedInterviewHotwordValues([]);
+    setQuestionnaireHotwordReviewVisible(false);
+    setInterviewSubmitting(false);
+    setQuestionnaireHotwordReviewSaving(false);
+    setPendingQuestionnaireHotwordInterview(null);
     setInterviewModalVisible(true);
   };
 
   const handleInterviewCancel = () => {
+    if (interviewSubmitting) {
+      return;
+    }
     setInterviewModalVisible(false);
     setSelectedInterviewHotwordValues([]);
     setQuestionnaireFileList([]);
   };
 
+  const handleQuestionnaireHotwordReviewCancel = () => {
+    setQuestionnaireHotwordReviewVisible(false);
+    setPendingQuestionnaireHotwordInterview(null);
+  };
+
+  const handleQuestionnaireHotwordReviewConfirm = async (hotwords: string[]) => {
+    if (!pendingQuestionnaireHotwordInterview) {
+      message.error("缺少待确认的访谈信息");
+      return;
+    }
+    setQuestionnaireHotwordReviewSaving(true);
+    try {
+      await saveQuestionnaireHotwords(
+        pendingQuestionnaireHotwordInterview.projectId,
+        pendingQuestionnaireHotwordInterview.interviewId,
+        { hotwords },
+      );
+      message.success("问卷热词已确认，访谈已开始处理");
+      setQuestionnaireHotwordReviewVisible(false);
+      setPendingQuestionnaireHotwordInterview(null);
+      router.push(`/interviews/${pendingQuestionnaireHotwordInterview.interviewId}/processing`);
+    } catch (e) {
+      if (e instanceof Error) {
+        message.error(e.message);
+      } else {
+        message.error("保存问卷热词失败");
+      }
+    } finally {
+      setQuestionnaireHotwordReviewSaving(false);
+    }
+  };
+
   const handleInterviewOk = async () => {
     try {
+      setInterviewSubmitting(true);
       await interviewForm.validateFields();
       if (!currentProjectForInterview) {
         message.error("缺少项目信息");
+        setInterviewSubmitting(false);
         return;
       }
       const values = interviewForm.getFieldsValue();
@@ -196,6 +270,7 @@ export default function Home() {
       const file = fileList[0];
       if (!file || !file.originFileObj) {
         message.error("请先选择音频文件");
+        setInterviewSubmitting(false);
         return;
       }
       formData.append("file", file.originFileObj as File);
@@ -231,10 +306,22 @@ export default function Home() {
           ? prev
           : [...prev, currentProjectForInterview.id],
       );
-      message.success("访谈信息已填写");
       setInterviewModalVisible(false);
       setSelectedInterviewHotwordValues([]);
       setQuestionnaireFileList([]);
+      if (created.questionnaire_hotword_review_required) {
+        setPendingQuestionnaireHotwordInterview({
+          projectId: created.project_id,
+          interviewId: created.id,
+          interviewName: created.name,
+          candidates: created.questionnaire_hotword_candidates ?? [],
+        });
+        setQuestionnaireHotwordReviewVisible(true);
+        message.success("访谈已创建，请先确认问卷热词");
+        setInterviewSubmitting(false);
+        return;
+      }
+      message.success("访谈信息已填写");
       router.push(`/interviews/${created.id}/processing`);
     } catch (e) {
       if (e instanceof Error) {
@@ -242,6 +329,8 @@ export default function Home() {
       } else {
         message.warning("请完善访谈信息");
       }
+    } finally {
+      setInterviewSubmitting(false);
     }
   };
 
@@ -496,6 +585,14 @@ export default function Home() {
           </Form.Item>
         </Form>
       </Modal>
+      <QuestionnaireHotwordReviewModal
+        open={questionnaireHotwordReviewVisible}
+        interviewName={pendingQuestionnaireHotwordInterview?.interviewName}
+        candidates={pendingQuestionnaireHotwordInterview?.candidates ?? []}
+        loading={questionnaireHotwordReviewSaving}
+        onCancel={handleQuestionnaireHotwordReviewCancel}
+        onConfirm={handleQuestionnaireHotwordReviewConfirm}
+      />
       <Modal
         open={interviewModalVisible}
         title="新建访谈"
@@ -503,6 +600,10 @@ export default function Home() {
         onCancel={handleInterviewCancel}
         okText="确定"
         cancelText="取消"
+        confirmLoading={interviewSubmitting}
+        cancelButtonProps={{ disabled: interviewSubmitting }}
+        closable={!interviewSubmitting}
+        maskClosable={!interviewSubmitting}
         width={1040}
         destroyOnHidden
       >
@@ -612,6 +713,24 @@ export default function Home() {
         ) : (
           <Paragraph>请选择一个项目后再新建访谈。</Paragraph>
         )}
+      </Modal>
+      <Modal
+        open={interviewSubmitting}
+        title="正在处理问卷"
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        centered
+        width={520}
+        destroyOnHidden
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 4px" }}>
+          <Spin size="large" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Text strong>正在上传音频并解析问卷热词</Text>
+            <Text type="secondary">请稍候，完成后会自动进入热词确认或转录流程。</Text>
+          </div>
+        </div>
       </Modal>
     </Layout>
   );

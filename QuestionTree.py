@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Expand parsed questionnaire trees into flat leaf questions.
+"""
+@Date: 2026-04-29
+@Author: lixinyang
 
-This module converts the questionnaire JSON produced by ``DocxToMd.py`` into
-the minimal question format used by the interview creation flow:
-``uid / order / text / title``.
+将问卷树展开为叶子问题列表。
+
+该模块负责把 ``DocxToMd.py`` 生成的问卷 JSON 转成后续访谈创建流程
+使用的最小问题格式：``uid / order / text / title``。
 """
 
 from __future__ import annotations
@@ -14,13 +17,13 @@ from typing import Any, Dict, List, Tuple
 
 
 def load_questionnaire_document(json_path: Path) -> Dict[str, Any]:
-    """Load a parsed questionnaire JSON document from disk.
+    """从磁盘加载已解析的问卷 JSON。
 
-    Parameters:
-        json_path: Path to the questionnaire JSON produced by ``DocxToMd.py``.
+    参数:
+        json_path: ``DocxToMd.py`` 生成的问卷 JSON 文件路径。
 
-    Returns:
-        Parsed questionnaire document.
+    返回:
+        解析后的问卷文档字典。
     """
 
     if not json_path.exists():
@@ -29,13 +32,13 @@ def load_questionnaire_document(json_path: Path) -> Dict[str, Any]:
 
 
 def node_display_text(node: Dict[str, Any]) -> str:
-    """Render a questionnaire tree node into visible text.
+    """将问卷树节点渲染为可见文本。
 
-    Parameters:
-        node: Tree node with ``text`` and optional ``continuations`` fields.
+    参数:
+        node: 包含 ``text`` 与可选 ``continuations`` 字段的树节点。
 
-    Returns:
-        Concatenated node text.
+    返回:
+        拼接后的节点文本。
     """
 
     text = str(node.get("text") or "").strip()
@@ -55,19 +58,19 @@ def flatten_leaf_questions(
     path_texts: List[str] | None = None,
     order_start: int = 1,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Flatten a recursive question tree and keep only leaf nodes.
+    """递归展开问题树，仅保留叶子节点。
 
-    Parameters:
-        nodes: Current layer tree nodes.
-        title: Domain title to attach to every emitted leaf question.
-        domain_index: Zero-based domain index used to build stable UIDs.
-        path_texts: Ancestor question texts from root to the parent node.
-        order_start: Starting order number for the current subtree.
+    参数:
+        nodes: 当前层级的树节点列表。
+        title: 领域标题，会附加到每条输出的叶子问题上。
+        domain_index: 从 0 开始的领域索引，用于生成稳定 UID。
+        path_texts: 从根节点到当前节点父级的祖先问题文本路径。
+        order_start: 当前子树的起始序号。
 
-    Returns:
-        A tuple of:
-        - leaf question rows in DFS order
-        - next order counter after processing this subtree
+    返回:
+        一个二元组：
+        - DFS 顺序下的叶子问题列表
+        - 处理完该子树后的下一个序号
     """
 
     flat_items: List[Dict[str, Any]] = []
@@ -107,13 +110,13 @@ def flatten_leaf_questions(
 
 
 def expand_questionnaire_document(document: Dict[str, Any]) -> Dict[str, Any]:
-    """Expand a parsed questionnaire document into flat questions only.
+    """将解析后的问卷文档展开为仅包含叶子问题的结果。
 
-    Parameters:
-        document: Parsed questionnaire document with a ``domains`` tree.
+    参数:
+        document: 包含 ``domains`` 树结构的问卷文档。
 
-    Returns:
-        A minimal JSON-compatible payload containing only ``flat_questions``.
+    返回:
+        仅包含 ``flat_questions`` 的 JSON 兼容字典。
     """
 
     flat_questions: List[Dict[str, Any]] = []
@@ -134,13 +137,13 @@ def expand_questionnaire_document(document: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_question_insert_rows(document: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Convert questionnaire JSON into database-ready question rows.
+    """将问卷 JSON 转换为可直接入库的问题行。
 
-    Parameters:
-        document: Parsed questionnaire document with a ``domains`` tree.
+    参数:
+        document: 包含 ``domains`` 树结构的问卷文档。
 
-    Returns:
-        Rows ready for ``insert_questions_for_interview``.
+    返回:
+        可直接传入 ``insert_questions_for_interview`` 的题目行列表。
     """
 
     expanded = expand_questionnaire_document(document)
@@ -167,14 +170,14 @@ def build_question_insert_rows(document: Dict[str, Any]) -> List[Dict[str, Any]]
 
 
 def save_flat_questions_json(document: Dict[str, Any], out_path: Path) -> Dict[str, Any]:
-    """Save the flat-question payload to disk.
+    """将扁平化后的问题结果保存到磁盘。
 
-    Parameters:
-        document: Parsed questionnaire document.
-        out_path: Target JSON path.
+    参数:
+        document: 已解析的问卷文档。
+        out_path: 目标 JSON 文件路径。
 
-    Returns:
-        The saved payload.
+    返回:
+        已保存的扁平问题结果。
     """
 
     payload = expand_questionnaire_document(document)

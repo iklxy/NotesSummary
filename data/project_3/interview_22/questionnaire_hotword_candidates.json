@@ -1,0 +1,371 @@
+{
+  "project_id": 3,
+  "interview_id": 22,
+  "hotword_candidates": [
+    {
+      "term": "CLL",
+      "normalized_term": "CLL",
+      "reason": "疾病缩写，慢性淋巴细胞白血病",
+      "confidence": 1.0
+    },
+    {
+      "term": "SLL",
+      "normalized_term": "SLL",
+      "reason": "疾病缩写，小淋巴细胞淋巴瘤",
+      "confidence": 1.0
+    },
+    {
+      "term": "MCL",
+      "normalized_term": "MCL",
+      "reason": "疾病缩写，套细胞淋巴瘤",
+      "confidence": 1.0
+    },
+    {
+      "term": "BTK抑制剂",
+      "normalized_term": "BTK抑制剂",
+      "reason": "靶点药物类别",
+      "confidence": 1.0
+    },
+    {
+      "term": "BTK",
+      "normalized_term": "BTK",
+      "reason": "靶点名称",
+      "confidence": 1.0
+    },
+    {
+      "term": "BCL2",
+      "normalized_term": "BCL-2",
+      "reason": "靶点名称，常见写法归一化",
+      "confidence": 1.0
+    },
+    {
+      "term": "BCL-2抑制剂",
+      "normalized_term": "BCL-2抑制剂",
+      "reason": "药物类别",
+      "confidence": 1.0
+    },
+    {
+      "term": "伊布替尼",
+      "normalized_term": "伊布替尼",
+      "reason": "药物名，一代BTK抑制剂",
+      "confidence": 1.0
+    },
+    {
+      "term": "阿卡替尼",
+      "normalized_term": "阿卡替尼",
+      "reason": "药物名，Calquence，二代BTK抑制剂",
+      "confidence": 1.0
+    },
+    {
+      "term": "AZ",
+      "normalized_term": "阿斯利康",
+      "reason": "公司缩写",
+      "confidence": 1.0
+    },
+    {
+      "term": "利妥昔单抗",
+      "normalized_term": "利妥昔单抗",
+      "reason": "药物名，CD20单抗",
+      "confidence": 1.0
+    },
+    {
+      "term": "DLBCL",
+      "normalized_term": "DLBCL",
+      "reason": "疾病缩写，弥漫大B细胞淋巴瘤",
+      "confidence": 1.0
+    },
+    {
+      "term": "TP53mt",
+      "normalized_term": "TP53突变",
+      "reason": "基因位点突变，缩写归一化",
+      "confidence": 1.0
+    },
+    {
+      "term": "TP53",
+      "normalized_term": "TP53",
+      "reason": "抑癌基因",
+      "confidence": 1.0
+    },
+    {
+      "term": "del17p",
+      "normalized_term": "del(17p)",
+      "reason": "染色体缺失，常见写法",
+      "confidence": 1.0
+    },
+    {
+      "term": "Ki-67",
+      "normalized_term": "Ki-67",
+      "reason": "增殖指数",
+      "confidence": 1.0
+    },
+    {
+      "term": "sMIPI",
+      "normalized_term": "sMIPI",
+      "reason": "预后评分系统，简化套细胞淋巴瘤国际预后指数",
+      "confidence": 1.0
+    },
+    {
+      "term": "PFS",
+      "normalized_term": "PFS",
+      "reason": "无进展生存期",
+      "confidence": 1.0
+    },
+    {
+      "term": "OS",
+      "normalized_term": "OS",
+      "reason": "总生存期",
+      "confidence": 1.0
+    },
+    {
+      "term": "CR",
+      "normalized_term": "CR",
+      "reason": "完全缓解",
+      "confidence": 1.0
+    },
+    {
+      "term": "PR",
+      "normalized_term": "PR",
+      "reason": "部分缓解",
+      "confidence": 1.0
+    },
+    {
+      "term": "DOT",
+      "normalized_term": "DOT",
+      "reason": "用药持续时间",
+      "confidence": 1.0
+    },
+    {
+      "term": "CSCO指南",
+      "normalized_term": "CSCO指南",
+      "reason": "中国临床肿瘤学会指南",
+      "confidence": 1.0
+    },
+    {
+      "term": "NCCN指南",
+      "normalized_term": "NCCN指南",
+      "reason": "美国国立综合癌症网络指南",
+      "confidence": 1.0
+    },
+    {
+      "term": "TRIANGLE研究",
+      "normalized_term": "TRIANGLE研究",
+      "reason": "临床试验名称",
+      "confidence": 1.0
+    },
+    {
+      "term": "诱导方案",
+      "normalized_term": "诱导方案",
+      "reason": "治疗阶段术语",
+      "confidence": 0.95
+    },
+    {
+      "term": "维持治疗",
+      "normalized_term": "维持治疗",
+      "reason": "治疗阶段术语",
+      "confidence": 0.95
+    },
+    {
+      "term": "移植",
+      "normalized_term": "移植",
+      "reason": "治疗方法",
+      "confidence": 0.95
+    },
+    {
+      "term": "难治患者",
+      "normalized_term": "难治患者",
+      "reason": "临床分类",
+      "confidence": 0.95
+    },
+    {
+      "term": "复发患者",
+      "normalized_term": "复发患者",
+      "reason": "临床分类",
+      "confidence": 0.95
+    },
+    {
+      "term": "一线治疗",
+      "normalized_term": "一线治疗",
+      "reason": "治疗线数",
+      "confidence": 0.95
+    },
+    {
+      "term": "二线治疗",
+      "normalized_term": "二线治疗",
+      "reason": "治疗线数",
+      "confidence": 0.95
+    },
+    {
+      "term": "耐药突变",
+      "normalized_term": "耐药突变",
+      "reason": "检测术语",
+      "confidence": 1.0
+    },
+    {
+      "term": "母细胞型",
+      "normalized_term": "母细胞型",
+      "reason": "病理分型",
+      "confidence": 1.0
+    },
+    {
+      "term": "经典性",
+      "normalized_term": "经典性",
+      "reason": "病理分型",
+      "confidence": 0.9
+    },
+    {
+      "term": "特殊亚型",
+      "normalized_term": "特殊亚型",
+      "reason": "临床分类",
+      "confidence": 0.95
+    },
+    {
+      "term": "联合方案",
+      "normalized_term": "联合方案",
+      "reason": "治疗策略",
+      "confidence": 0.95
+    },
+    {
+      "term": "单药",
+      "normalized_term": "单药",
+      "reason": "治疗策略",
+      "confidence": 0.95
+    },
+    {
+      "term": "R/R",
+      "normalized_term": "复发/难治",
+      "reason": "临床缩写，指复发难治",
+      "confidence": 1.0
+    },
+    {
+      "term": "医保报销",
+      "normalized_term": "医保报销",
+      "reason": "政策相关术语",
+      "confidence": 0.95
+    },
+    {
+      "term": "集采",
+      "normalized_term": "国家集中采购",
+      "reason": "政策相关缩写",
+      "confidence": 0.95
+    },
+    {
+      "term": "专利过期",
+      "normalized_term": "专利过期",
+      "reason": "药物生命周期术语",
+      "confidence": 0.95
+    },
+    {
+      "term": "胶囊",
+      "normalized_term": "胶囊",
+      "reason": "剂型",
+      "confidence": 0.9
+    },
+    {
+      "term": "片剂",
+      "normalized_term": "片剂",
+      "reason": "剂型",
+      "confidence": 0.9
+    },
+    {
+      "term": "一代BTK抑制剂",
+      "normalized_term": "一代BTK抑制剂",
+      "reason": "药物代际",
+      "confidence": 1.0
+    },
+    {
+      "term": "二代BTK抑制剂",
+      "normalized_term": "二代BTK抑制剂",
+      "reason": "药物代际",
+      "confidence": 1.0
+    }
+  ],
+  "seed_terms": [
+    "SLL",
+    "CLL/",
+    "PR",
+    "PFS",
+    "BTK",
+    "MCL",
+    "一线治疗患者细分与方案",
+    "临床上您会如何分类制定治疗方案",
+    "特殊亚型",
+    "病理分型",
+    "哪些类型的患者可以看作同类患者考虑治疗方案",
+    "在病理分型",
+    "适合移植患者方案",
+    "诱导方案",
+    "您通常选择什么样的诱导方案",
+    "选择诱导方案",
+    "更换方案",
+    "您是否会处方BTK抑制剂",
+    "若使用BTK抑制剂",
+    "您选择BTK抑制剂方案",
+    "维持阶段BTK抑制剂",
+    "若处方BTK抑制剂",
+    "在BTK抑制剂",
+    "是否会基于二代BTK抑制剂",
+    "优先选择联合二代BTK抑制剂",
+    "同个产品是否也有不同的联用方案",
+    "选择不同联用方案",
+    "您会选择什么方案",
+    "两药",
+    "停药",
+    "不适合或未能移植患者方案",
+    "您会给患者处方什么方案",
+    "不同方案",
+    "维持阶段的方案与诱导阶段的方案",
+    "会选择什么方案",
+    "对于BTK抑制剂",
+    "此时处方BTK抑制剂",
+    "对初治患者一般是是推荐BTK单药",
+    "通常联合方案",
+    "您认为适合BTK抑制剂",
+    "其中在您推荐BTK抑制剂",
+    "诱导阶段接受了BTK抑制剂",
+    "他们是否会用原BTK抑制剂",
+    "在接受BTK抑制剂",
+    "或者有无停药",
+    "是否有治疗过程中对BTK抑制剂",
+    "出现了这些BTK抑制剂",
+    "二线治疗患者细分与方案",
+    "一线治疗方案",
+    "启动的下一套系统性治疗方案",
+    "但是更换过方案",
+    "新方案",
+    "前序治疗方案",
+    "老年患者合并多种基础疾病是您选择治疗方案",
+    "您觉得现有治疗药",
+    "治疗方案",
+    "通常处方什么方案",
+    "您会分别给各类患者处方什么方案",
+    "若患者一线使用过BTK抑制剂",
+    "您认为引起患者BTK抑制剂耐药",
+    "对应耐药靶点是否会检测",
+    "查耐药突变",
+    "多少比例的患者会检测",
+    "耐药突变",
+    "您会如何根据检测结果选择治疗方案",
+    "还是应该转换为其他类型的治疗方案",
+    "若患者一线未使用过BTK抑制剂",
+    "您在二线会给他们处方什么方案",
+    "如存在不同方案",
+    "请问各类方案",
+    "其中您会对哪些患者处方BTK抑制剂",
+    "有多少患者实际接受了BTK抑制剂",
+    "一般是推荐BTK单药",
+    "联合方案",
+    "单药",
+    "对BTK抑制剂",
+    "对您在BTK抑制剂",
+    "使用BTK抑制剂药",
+    "如何评价它相比于其他BTK抑制剂",
+    "这些患者当前正在使用什么方案",
+    "该方案",
+    "2位您觉得非常适合产品X方案",
+    "当前用的什么方案",
+    "之前用的什么方案",
+    "您在制定个体化诊疗方案",
+    "在与药"
+  ],
+  "created_at": "2026-04-29T14:21:51.933188Z"
+}

@@ -1,7 +1,7 @@
 import json
 import os
 import shutil
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 import requests
@@ -11,6 +11,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from api.auth import require_current_user_id
 from DocxToMd import convert_docx_questionnaire
 from Hotword import save_hotword_state
+from QuestionnaireHotword import (
+    extract_questionnaire_hotword_candidates,
+    has_reviewed_questionnaire_hotwords,
+    load_questionnaire_hotword_candidates,
+    load_reviewed_questionnaire_hotwords,
+    save_questionnaire_hotword_candidates,
+    save_reviewed_questionnaire_hotwords,
+)
 from QuestionTree import build_question_insert_rows
 from db import (
     delete_interview_graph,
@@ -19,6 +27,11 @@ from db import (
     insert_interview,
     insert_questions_for_interview,
     update_interview_status,
+)
+from schemas.interviews import (
+    QuestionnaireHotwordLoadResponse,
+    QuestionnaireHotwordReviewRequest,
+    QuestionnaireHotwordReviewResponse,
 )
 
 
@@ -217,6 +230,21 @@ def _save_uploaded_questionnaire_file(
     return target_path
 
 
+def _read_text_file(path: Path) -> str:
+    """
+    读取文本文件内容；不存在时返回空字符串。
+
+    参数:
+        path: 待读取的文本文件路径。
+
+    返回:
+        文件内容字符串。
+    """
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
 def _normalize_core_problem_json(raw_value: str) -> str:
     """
     将前端提交的 key BQ 内容统一归一化为 JSON 字符串。
@@ -364,7 +392,7 @@ async def create_interview(
         raise HTTPException(status_code=400, detail="访谈名称不能为空")
     normalized_core_problem = _normalize_core_problem_json(core_problem)
 
-    _get_owned_project_or_404(project_id, current_user_id)
+    project_row = _get_owned_project_or_404(project_id, current_user_id)
 
     original_name = file.filename or ""
     if not original_name:
@@ -419,7 +447,34 @@ async def create_interview(
                 _cleanup_failed_interview(project_id, interview_id)
             raise HTTPException(status_code=500, detail=f"questionnaire processing failed: {e}")
 
-    background_tasks.add_task(_trigger_workflow_background, interview_id)
+    workflow_started = False
+    questionnaire_hotword_candidates: list[Dict[str, Any]] = []
+    questionnaire_hotword_candidates_path: str | None = None
+    questionnaire_hotword_review_required = False
+
+    if questionnaire_file is not None and questionnaire_file.filename:
+        questionnaire_hotword_review_required = True
+        try:
+            questionnaire_md_text = ""
+            if questionnaire_md_path:
+                questionnaire_md_text = _read_text_file(_get_data_root() / questionnaire_md_path)
+            questionnaire_hotword_result = extract_questionnaire_hotword_candidates(
+                markdown_text=questionnaire_md_text,
+                project_context=str(project_row.get("core_problem") or ""),
+            )
+            questionnaire_hotword_candidates = questionnaire_hotword_result.get("hotword_candidates") or []
+            questionnaire_hotword_candidates_path = str(
+                save_questionnaire_hotword_candidates(
+                    project_id=project_id,
+                    interview_id=interview_id,
+                    payload=questionnaire_hotword_result,
+                ).relative_to(_get_data_root())
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"questionnaire hotword extraction failed: {e}")
+    else:
+        background_tasks.add_task(_trigger_workflow_background, interview_id)
+        workflow_started = True
 
     return {
         "id": interview_id,
@@ -437,7 +492,108 @@ async def create_interview(
         "questionnaire_backup_path": questionnaire_backup_path,
         "questionnaire_md_path": questionnaire_md_path,
         "questionnaire_json_path": questionnaire_json_path,
+        "questionnaire_hotword_review_required": questionnaire_hotword_review_required,
+        "questionnaire_hotword_candidates": questionnaire_hotword_candidates,
+        "questionnaire_hotword_candidates_path": questionnaire_hotword_candidates_path,
+        "workflow_started": workflow_started,
     }
+
+
+@router.get(
+    "/{project_id}/interviews/{interview_id}/questionnaire-hotwords",
+    response_model=QuestionnaireHotwordLoadResponse,
+)
+def get_questionnaire_hotwords(
+    project_id: int,
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> QuestionnaireHotwordLoadResponse:
+    """
+    读取指定访谈的问卷热词候选或已审核热词。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+        current_user_id: 当前登录用户 ID。
+
+    返回:
+        问卷热词候选列表以及是否仍然需要 review。
+    """
+    _get_owned_project_or_404(project_id, current_user_id)
+    interview = fetch_interviews_by_project(project_id, current_user_id)
+    if not any(int(row["id"]) == interview_id for row in interview):
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    reviewed_exists = has_reviewed_questionnaire_hotwords(project_id, interview_id)
+    reviewed_hotwords = load_reviewed_questionnaire_hotwords(project_id, interview_id)
+    candidates_payload = load_questionnaire_hotword_candidates(project_id, interview_id)
+    candidates_raw = candidates_payload.get("hotword_candidates") or []
+    candidates: List[Dict[str, Any]] = []
+    for item in candidates_raw:
+        if not isinstance(item, dict):
+            continue
+        candidates.append(
+            {
+                "term": str(item.get("term") or "").strip(),
+                "normalized_term": str(item.get("normalized_term") or "").strip(),
+                "reason": str(item.get("reason") or "").strip() or None,
+                "confidence": item.get("confidence"),
+            }
+        )
+    return QuestionnaireHotwordLoadResponse(
+        interview_id=interview_id,
+        project_id=project_id,
+        review_required=not reviewed_exists,
+        candidates=candidates,
+        reviewed_hotwords=reviewed_hotwords,
+    )
+
+
+@router.post(
+    "/{project_id}/interviews/{interview_id}/questionnaire-hotwords",
+    response_model=QuestionnaireHotwordReviewResponse,
+)
+def save_questionnaire_hotwords_review(
+    project_id: int,
+    interview_id: int,
+    payload: QuestionnaireHotwordReviewRequest,
+    background_tasks: BackgroundTasks,
+    current_user_id: int = Depends(require_current_user_id),
+) -> QuestionnaireHotwordReviewResponse:
+    """
+    保存人工 review 后的问卷热词，并触发访谈工作流。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+        payload: review 后的热词列表。
+        background_tasks: FastAPI 后台任务队列。
+        current_user_id: 当前登录用户 ID。
+
+    返回:
+        保存结果与工作流触发状态。
+    """
+    _get_owned_project_or_404(project_id, current_user_id)
+    interview_rows = fetch_interviews_by_project(project_id, current_user_id)
+    if not any(int(row["id"]) == interview_id for row in interview_rows):
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    hotwords = [str(item).strip() for item in (payload.hotwords or []) if str(item).strip()]
+    reviewed_path = save_reviewed_questionnaire_hotwords(project_id, interview_id, hotwords)
+    reviewed_json_path = reviewed_path.with_suffix(".json")
+
+    background_tasks.add_task(_trigger_workflow_background, interview_id)
+
+    return QuestionnaireHotwordReviewResponse(
+        success=True,
+        interview_id=interview_id,
+        project_id=project_id,
+        reviewed_count=len(hotwords),
+        reviewed_path=str(reviewed_path.relative_to(_get_data_root())),
+        reviewed_json_path=str(reviewed_json_path.relative_to(_get_data_root())),
+        workflow_started=True,
+        message=None,
+    )
 
 
 @router.get("/{project_id}/interviews", response_model=list[Dict[str, Any]])

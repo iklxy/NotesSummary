@@ -56,6 +56,48 @@ class QuestionIntentItem(BaseModel):
     status: Optional[int] = None
 
 
+class QuestionnaireHotwordCandidateItem(BaseModel):
+    """
+    问卷解析得到的单条热词候选。
+    """
+    term: str
+    normalized_term: str
+    reason: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class QuestionnaireHotwordLoadResponse(BaseModel):
+    """
+    读取问卷热词候选或已审核热词的返回结果。
+    """
+    interview_id: int
+    project_id: int
+    review_required: bool = False
+    candidates: List[QuestionnaireHotwordCandidateItem] = Field(default_factory=list)
+    reviewed_hotwords: List[str] = Field(default_factory=list)
+
+
+class QuestionnaireHotwordReviewRequest(BaseModel):
+    """
+    保存人工 review 后的问卷热词请求体。
+    """
+    hotwords: List[str] = Field(default_factory=list)
+
+
+class QuestionnaireHotwordReviewResponse(BaseModel):
+    """
+    保存人工 review 后的问卷热词返回结果。
+    """
+    success: bool
+    interview_id: int
+    project_id: int
+    reviewed_count: int = 0
+    reviewed_path: Optional[str] = None
+    reviewed_json_path: Optional[str] = None
+    workflow_started: bool = False
+    message: Optional[str] = None
+
+
 class InterviewStatusResponse(BaseModel):
     """
     /api/interviews/{interview_id}/status 接口的返回结果模型。
