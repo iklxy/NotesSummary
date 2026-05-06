@@ -298,6 +298,179 @@ def insert_interview(
     return new_id
 
 
+def insert_key_bq_rows_for_interview(
+    project_id: int,
+    project_interview_id: int,
+    key_bq_items: list[dict],
+) -> int:
+    """
+    为指定访谈批量写入 key BQ 明细到 `bh_project_interview_key_bq`。
+
+    参数:
+        project_id: 项目 ID，对应 `bh_project.id`。
+        project_interview_id: 访谈 ID，对应 `bh_project_interview.id`。
+        key_bq_items: key BQ 列表，每项至少应包含:
+            - order: 顺序号
+            - text: key BQ 文本
+            可选包含:
+            - dimension_json
+            - note_json
+            - status
+
+    返回:
+        实际写入或更新的条数。
+    """
+    if not key_bq_items:
+        return 0
+
+    sql = """
+        INSERT INTO bh_project_interview_key_bq
+            (project_id, project_interview_id, bq_order, bq_text, dimension_json, note_json, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            project_id = VALUES(project_id),
+            bq_text = VALUES(bq_text),
+            dimension_json = VALUES(dimension_json),
+            note_json = VALUES(note_json),
+            status = VALUES(status)
+    """
+
+    def _json_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        return text or None
+
+    conn = get_connection()
+    written = 0
+    try:
+        with conn.cursor() as cursor:
+            for item in key_bq_items:
+                order_value = item.get("order")
+                text_value = str(item.get("text") or "").strip()
+                if order_value is None or not text_value:
+                    continue
+                cursor.execute(
+                    sql,
+                    (
+                        project_id,
+                        project_interview_id,
+                        int(order_value),
+                        text_value,
+                        _json_or_none(item.get("dimension_json")),
+                        _json_or_none(item.get("note_json")),
+                        str(item.get("status") or "pending"),
+                    ),
+                )
+                written += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return written
+
+
+def delete_key_bq_rows_for_interview(project_interview_id: int) -> int:
+    """
+    删除指定访谈下全部 key BQ 明细。
+
+    参数:
+        project_interview_id: 访谈 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        实际删除的行数。
+    """
+    sql = """
+        DELETE FROM bh_project_interview_key_bq
+        WHERE project_interview_id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_interview_id,))
+            affected = cursor.rowcount
+        conn.commit()
+        return affected
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def replace_key_bq_rows_for_interview(
+    project_id: int,
+    project_interview_id: int,
+    key_bq_items: list[dict],
+) -> int:
+    """
+    原子性替换指定访谈下全部 key BQ 明细。
+
+    参数:
+        project_id: 项目 ID。
+        project_interview_id: 访谈 ID，对应 `bh_project_interview.id`。
+        key_bq_items: 新的 key BQ 列表。
+
+    返回:
+        实际写入或更新的条数。
+    """
+    if not key_bq_items:
+        return 0
+
+    delete_sql = """
+        DELETE FROM bh_project_interview_key_bq
+        WHERE project_interview_id = %s
+    """
+    insert_sql = """
+        INSERT INTO bh_project_interview_key_bq
+            (project_id, project_interview_id, bq_order, bq_text, dimension_json, note_json, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+
+    def _json_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        return text or None
+
+    conn = get_connection()
+    written = 0
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(delete_sql, (project_interview_id,))
+            for item in key_bq_items:
+                order_value = item.get("order")
+                text_value = str(item.get("text") or "").strip()
+                if order_value is None or not text_value:
+                    continue
+                cursor.execute(
+                    insert_sql,
+                    (
+                        project_id,
+                        project_interview_id,
+                        int(order_value),
+                        text_value,
+                        _json_or_none(item.get("dimension_json")),
+                        _json_or_none(item.get("note_json")),
+                        str(item.get("status") or "pending"),
+                    ),
+                )
+                written += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return written
+
+
 def update_interview_status(interview_id: int, status: int) -> None:
     """
     更新访谈处理状态。
@@ -420,6 +593,10 @@ def delete_interview_graph(interview_id: int) -> dict | None:
     try:
         with conn.cursor() as cursor:
             cursor.execute(
+                "DELETE FROM bh_project_interview_key_bq WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
                 "DELETE FROM bh_project_fewshot_sample WHERE project_interview_id = %s",
                 (interview_id,),
             )
@@ -493,6 +670,10 @@ def delete_project_graph(
 
             for interview_row in interview_rows:
                 interview_id = int(interview_row["id"])
+                cursor.execute(
+                    "DELETE FROM bh_project_interview_key_bq WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
                 cursor.execute(
                     "DELETE FROM bh_project_fewshot_sample WHERE project_interview_id = %s",
                     (interview_id,),
@@ -927,6 +1108,47 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
     try:
         with conn.cursor() as cursor:
             cursor.execute(sql, (project_interview_id,))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def fetch_key_bq_rows_by_interview(interview_id: int) -> list[dict]:
+    """
+    根据访谈 ID 查询该访谈下所有 key BQ 明细。
+
+    返回:
+        明细记录字典列表，字段至少包括:
+            - id
+            - project_id
+            - project_interview_id
+            - bq_order
+            - bq_text
+            - dimension_json
+            - note_json
+            - status
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            project_interview_id,
+            bq_order,
+            bq_text,
+            dimension_json,
+            note_json,
+            status,
+            created_at,
+            updated_at
+        FROM bh_project_interview_key_bq
+        WHERE project_interview_id = %s
+        ORDER BY bq_order ASC, id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()

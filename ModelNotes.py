@@ -346,3 +346,312 @@ def generate_overall_interview_note(
         lines = content.splitlines()
         content = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
     return content
+
+
+def _parse_json_with_repair(
+    generate_fn: Callable[[str, str], str],
+    content: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    尝试将模型输出解析为 JSON；必要时调用 LLM 做语法修复。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        content: 模型输出原文。
+
+    返回:
+        解析成功时返回字典，否则返回 None。
+    """
+    content_stripped = content.strip()
+    if content_stripped.startswith("```"):
+        lines = content_stripped.splitlines()
+        content_stripped = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
+    try:
+        try:
+            return json.loads(content_stripped)
+        except json.JSONDecodeError:
+            start = content_stripped.find("{")
+            end = content_stripped.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                return json.loads(content_stripped[start : end + 1])
+            raise
+    except json.JSONDecodeError:
+        repaired = repair_notes_json(generate_fn, content_stripped)
+        if repaired is not None:
+            return repaired
+    return None
+
+
+def _normalize_dimension_items(raw_dimensions: Any) -> List[Dict[str, Any]]:
+    """
+    将模型返回的维度列表归一化为统一结构。
+
+    参数:
+        raw_dimensions: 模型原始返回的 dimensions 字段。
+
+    返回:
+        规范化后的维度列表，每项包含 name 与 description。
+    """
+    if not isinstance(raw_dimensions, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in raw_dimensions:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("dimension") or item.get("title") or "").strip()
+            description = str(item.get("description") or item.get("summary") or "").strip()
+        else:
+            name = str(item or "").strip()
+            description = ""
+        if not name:
+            continue
+        normalized.append(
+            {
+                "name": name,
+                "description": description or None,
+            }
+        )
+    return normalized
+
+
+def _normalize_kbq_evidence(raw_evidence: Any) -> List[Dict[str, Any]]:
+    """
+    归一化 KBQ Notes 中的证据列表。
+
+    参数:
+        raw_evidence: 模型返回的 evidence 字段。
+
+    返回:
+        规范化后的证据列表。
+    """
+    if not isinstance(raw_evidence, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in raw_evidence:
+        if not isinstance(item, dict):
+            continue
+        summary_id = item.get("summary_id")
+        speaker = item.get("speaker")
+        text = str(item.get("text") or "").strip()
+        normalized.append(
+            {
+                "summary_id": summary_id,
+                "speaker": str(speaker or "").strip() or None,
+                "text": text,
+            }
+        )
+    return normalized
+
+
+def _normalize_dimension_notes(raw_dimension_notes: Any) -> List[Dict[str, Any]]:
+    """
+    将模型返回的 dimension_notes 归一化为统一结构。
+
+    参数:
+        raw_dimension_notes: 模型原始返回的 dimension_notes 字段。
+
+    返回:
+        规范化后的维度 notes 列表。
+    """
+    if not isinstance(raw_dimension_notes, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in raw_dimension_notes:
+        if not isinstance(item, dict):
+            continue
+        dimension = str(item.get("dimension") or item.get("name") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        analysis = str(item.get("analysis") or "").strip()
+        evidence = _normalize_kbq_evidence(item.get("evidence"))
+        if not dimension:
+            continue
+        normalized.append(
+            {
+                "dimension": dimension,
+                "summary": summary,
+                "analysis": analysis,
+                "evidence": evidence,
+            }
+        )
+    return normalized
+
+
+def parse_kbq_dimensions_response(
+    generate_fn: Callable[[str, str], str],
+    content: str,
+) -> Dict[str, Any]:
+    """
+    将“维度抽取”模型输出解析为结构化字典。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        content: 模型原始输出文本。
+
+    返回:
+        至少包含 `dimensions` 字段的字典。
+    """
+    result = _parse_json_with_repair(generate_fn, content)
+    if not isinstance(result, dict):
+        result = {"dimensions": [], "llm_raw_output": content}
+    result["dimensions"] = _normalize_dimension_items(result.get("dimensions"))
+    result.setdefault("llm_raw_output", content)
+    return result
+
+
+def parse_kbq_notes_response(
+    generate_fn: Callable[[str, str], str],
+    content: str,
+) -> Dict[str, Any]:
+    """
+    将 KBQ Notes 模型输出解析为结构化字典。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        content: 模型原始输出文本。
+
+    返回:
+        至少包含 `key_bq`、`dimension_notes`、`confidence` 的字典。
+    """
+    result = _parse_json_with_repair(generate_fn, content)
+    if not isinstance(result, dict):
+        result = {
+            "key_bq": "",
+            "dimension_notes": [],
+            "confidence": 0.0,
+            "llm_raw_output": content,
+        }
+    result.setdefault("key_bq", "")
+    result["dimension_notes"] = _normalize_dimension_notes(result.get("dimension_notes"))
+    confidence = result.get("confidence")
+    try:
+        result["confidence"] = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        result["confidence"] = 0.0
+    result.setdefault("llm_raw_output", content)
+    return result
+
+
+def generate_kbq_dimensions(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    interview_context_block: str,
+    key_bq_text: str,
+) -> Dict[str, Any]:
+    """
+    先从单条 key BQ 中抽取后续回答所需的分析维度。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        interview_context_block: 已格式化好的访谈背景块。
+        key_bq_text: 单条 key BQ 文本。
+
+    返回:
+        包含 `dimensions` 的字典。
+    """
+    system_prompt = (
+        "你是一名医学、药学、体外诊断和市场调研领域的访谈分析专家。"
+        "你的任务是：针对单条 key BQ 抽取后续生成答案所需的分析维度。"
+        "你必须只输出语法完全合法、可以被 json.loads 直接解析的 JSON。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"{interview_context_block}"
+        "下面是一条 key BQ，请你抽取 2 到 4 个适合后续生成 notes 的分析维度。"
+        "维度应当是可操作的分析框架，而不是空泛标签。\n\n"
+        f"【key BQ】\n{key_bq_text or '（未提供 key BQ）'}\n\n"
+        "要求：\n"
+        "1. 优先抽出能覆盖问题核心的 2 到 4 个维度；如果 key BQ 很窄，可以少于 2 个。\n"
+        "2. 维度名称要简洁、明确、可用于后续检索和分段回答。\n"
+        "3. 维度说明要指出该维度关注的具体信息点。\n"
+        "4. 只输出 JSON，不要添加解释性文字。\n"
+        "JSON 的参考结构如下：\n"
+        "{\n"
+        '  "dimensions": [\n'
+        '    {"name": "疾病构成", "description": "关注患者疾病类型、构成和分布情况"},\n'
+        '    {"name": "患者规模", "description": "关注患者规模、覆盖范围和病例量"}\n'
+        "  ]\n"
+        "}\n"
+    )
+    content = generate_fn(system_prompt, user_prompt)
+    return parse_kbq_dimensions_response(generate_fn, content)
+
+
+def generate_kbq_notes(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    interview_context_block: str,
+    key_bq_text: str,
+    dimensions: List[Dict[str, Any]],
+    segments: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    基于 key BQ、分析维度与检索片段生成 KBQ Notes。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        interview_context_block: 已格式化好的访谈背景块。
+        key_bq_text: 单条 key BQ 文本。
+        dimensions: 第一步抽取得到的维度列表。
+        segments: RAG 检索得到的相关片段。
+
+    返回:
+        包含 `key_bq`、`dimension_notes`、`confidence` 的字典。
+    """
+    context_lines: List[str] = []
+    for idx, seg in enumerate(segments, start=1):
+        sid = seg.get("summary_id", "")
+        speaker = seg.get("speaker", "")
+        text = str(seg.get("text", "")).replace("\n", " ")
+        score = seg.get("score", 0.0)
+        context_lines.append(f"[{idx}] summary_id={sid} speaker={speaker} score={score:.4f}\n{text}")
+    context_block = "\n\n".join(context_lines) if context_lines else "（当前没有检索到相关片段）"
+
+    dimension_lines: List[str] = []
+    for idx, item in enumerate(dimensions, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not name:
+            continue
+        dimension_lines.append(f"[{idx}] {name}" + (f"：{description}" if description else ""))
+    dimensions_block = "\n".join(dimension_lines) if dimension_lines else "（未抽取到维度）"
+
+    system_prompt = (
+        "你是一名医学、药学、体外诊断和市场调研领域的访谈分析专家，"
+        "负责根据 key BQ、分析维度和检索到的访谈片段生成结构化的 KBQ Notes。"
+        "你必须严格基于给定的片段和维度，不要编造事实，并且必须输出语法完全合法、"
+        "可以被 json.loads 直接解析的 JSON。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"{interview_context_block}"
+        "下面是一条 key BQ、已抽取的分析维度，以及相关访谈片段。请按照维度生成 KBQ Notes。\n\n"
+        f"【key BQ】\n{key_bq_text or '（未提供 key BQ）'}\n\n"
+        "【分析维度】\n"
+        f"{dimensions_block}\n\n"
+        "【相关访谈片段】\n"
+        f"{context_block}\n\n"
+        "要求：\n"
+        "1. 只使用上述片段中的信息；如果某个维度没有原文证据，就不要输出该维度。\n"
+        "2. summary 只写 1 到 3 句高度概括；analysis 负责更详细的分析。\n"
+        "3. evidence 中尽量引用与该维度直接相关的原文短片段。\n"
+        "4. 请给出一个 0 到 1 之间的置信度 confidence。\n"
+        "5. 只输出 JSON，不要包含额外说明。\n"
+        "JSON 的参考结构如下：\n"
+        "{\n"
+        '  "key_bq": "原始 key BQ",\n'
+        '  "dimension_notes": [\n'
+        '    {\n'
+        '      "dimension": "疾病构成",\n'
+        '      "summary": "一句话或几句话的概括",\n'
+        '      "analysis": "更详细的分析和解释",\n'
+        '      "evidence": [{"summary_id": 0, "speaker": "speaker1", "text": "与该维度直接相关的原文片段"}]\n'
+        '    }\n'
+        "  ],\n"
+        '  "confidence": 0.0\n'
+        "}\n"
+    )
+    content = generate_fn(system_prompt, user_prompt)
+    return parse_kbq_notes_response(generate_fn, content)

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 
 from DbAccess import DbAccess
+from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
 from RagIndex import index_interview_summary
 from Workflow import run_workflow
@@ -210,6 +211,41 @@ def _build_interview_notes_response(
     }
 
 
+def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
+    """
+    从访谈 core_problem 中提取 key BQ 明细。
+
+    参数:
+        core_problem: 访谈记录里的 `core_problem` 字段，通常是 JSON 字符串。
+
+    返回:
+        可直接写入 `bh_project_interview_key_bq` 的 key BQ 明细列表。
+    """
+    if core_problem is None:
+        return []
+    obj: Any = core_problem
+    if isinstance(core_problem, str):
+        try:
+            obj = json.loads(core_problem)
+        except Exception:
+            return []
+    if not isinstance(obj, dict):
+        return []
+    items = obj.get("key_bq_list") or []
+    result: List[Dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            order = item.get("order") or idx
+        else:
+            text = str(item or "").strip()
+            order = idx
+        if not text:
+            continue
+        result.append({"order": int(order), "text": text, "status": "pending"})
+    return result
+
+
 # ----------------------------------------------------------------------
 # 转录与工作流路由
 # ----------------------------------------------------------------------
@@ -258,6 +294,44 @@ def api_generate_notes(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
+
+
+@app.post("/internal/interviews/{interview_id}/refresh-kbq-notes")
+def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
+    """
+    重新从访谈的 core_problem 回填 key BQ，并立即重建 KBQ Notes。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        KBQ 刷新结果，包含回填条数、生成条数以及 warnings。
+    """
+    interview = _load_interview_or_404(interview_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    key_bq_items = _extract_key_bq_items(interview.get("core_problem"))
+    if not key_bq_items:
+        raise HTTPException(status_code=400, detail="no key BQ found in interview core_problem")
+
+    try:
+        written = DbAccess.replace_key_bq_rows_for_interview(
+            project_id=project_id,
+            interview_id=interview_id,
+            key_bq_items=key_bq_items,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh key bq failed: {e}")
+
+    try:
+        kbq_result = run_kbq_notes_generation_for_interview(interview_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh kbq notes failed: {e}")
+
+    if not isinstance(kbq_result, dict):
+        kbq_result = {"success": False, "message": "invalid kbq result"}
+    kbq_result["key_bq_inserted"] = written
+    kbq_result["refreshed_from_core_problem"] = True
+    return kbq_result
 
 
 @app.get("/internal/interviews/{interview_id}/notes")

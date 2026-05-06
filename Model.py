@@ -7,6 +7,8 @@ from LLMProviders import BaseLLMProvider, build_provider
 from ModelNotes import (
     escape_inner_quotes_in_field,
     escape_inner_quotes_in_notes_json,
+    generate_kbq_dimensions,
+    generate_kbq_notes,
     generate_notes_for_question,
     generate_notes_for_question_with_fewshot,
     generate_overall_interview_note,
@@ -416,6 +418,62 @@ class ModelClient:
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
             transcript_text=transcript_text,
+        )
+
+    @classmethod
+    def generate_kbq_dimensions(
+        cls,
+        key_bq_text: str,
+        project_context: Optional[str] = None,
+        interview_context: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        先从单条 key BQ 中抽取后续回答所需的分析维度。
+
+        参数:
+            key_bq_text: 单条 key BQ 的原文文本。
+            project_context: 可选项目背景文本。
+            interview_context: 可选访谈背景摘要。
+
+        返回:
+            包含 `dimensions` 的字典。
+        """
+        return generate_kbq_dimensions(
+            generate_fn=cls.generate,
+            project_context_block=cls._build_project_context_block(project_context),
+            interview_context_block=cls._build_interview_context_block(interview_context),
+            key_bq_text=key_bq_text,
+        )
+
+    @classmethod
+    def generate_kbq_notes(
+        cls,
+        key_bq_text: str,
+        dimensions: List[Dict[str, Any]],
+        segments: List[Dict[str, Any]],
+        project_context: Optional[str] = None,
+        interview_context: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        根据 key BQ、抽取维度与检索片段生成 KBQ Notes。
+
+        参数:
+            key_bq_text: 单条 key BQ 的原文文本。
+            dimensions: 第一步抽取出的维度列表。
+            segments: RAG 检索到的相关片段。
+            project_context: 可选项目背景文本。
+            interview_context: 可选访谈背景摘要。
+
+        返回:
+            包含 `key_bq`、`dimension_notes`、`confidence` 的字典。
+        """
+        return generate_kbq_notes(
+            generate_fn=cls.generate,
+            project_context_block=cls._build_project_context_block(project_context),
+            interview_context_block=cls._build_interview_context_block(interview_context),
+            key_bq_text=key_bq_text,
+            dimensions=dimensions,
+            segments=segments,
         )
 
     @classmethod

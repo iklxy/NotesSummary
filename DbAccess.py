@@ -414,6 +414,199 @@ class DbAccess:
         """
         cls._execute_write(sql, (note_content, interview_id))
 
+    @classmethod
+    def upsert_key_bq_rows_for_interview(
+        cls,
+        project_id: int,
+        interview_id: int,
+        key_bq_items: List[Dict[str, Any]],
+    ) -> int:
+        """
+        将访谈的 key BQ 明细写入或更新到 `bh_project_interview_key_bq`。
+
+        参数:
+            project_id: 项目主键 ID，对应 `bh_project.id`。
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+            key_bq_items: key BQ 明细列表。每条记录至少应包含：
+                - order: 顺序号
+                - text: key BQ 原文
+                可选包含：
+                - dimension_json
+                - note_json
+                - status
+
+        返回:
+            实际写入或更新的条数。
+        """
+        if not key_bq_items:
+            return 0
+
+        sql = """
+            INSERT INTO bh_project_interview_key_bq
+                (project_id, project_interview_id, bq_order, bq_text, dimension_json, note_json, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                project_id = VALUES(project_id),
+                bq_text = VALUES(bq_text),
+                dimension_json = VALUES(dimension_json),
+                note_json = VALUES(note_json),
+                status = VALUES(status)
+        """
+
+        def _json_or_none(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False)
+            text = str(value).strip()
+            return text or None
+
+        conn = cls.get_connection()
+        written = 0
+        try:
+            with conn.cursor() as cursor:
+                for item in key_bq_items:
+                    order_value = item.get("order")
+                    text_value = str(item.get("text") or "").strip()
+                    if order_value is None or not text_value:
+                        continue
+                    cursor.execute(
+                        sql,
+                        (
+                            project_id,
+                            interview_id,
+                            int(order_value),
+                            text_value,
+                            _json_or_none(item.get("dimension_json")),
+                            _json_or_none(item.get("note_json")),
+                            str(item.get("status") or "pending"),
+                        ),
+                    )
+                    written += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return written
+
+    @classmethod
+    def delete_key_bq_rows_for_interview(cls, interview_id: int) -> int:
+        """
+        删除指定访谈下全部 key BQ 明细。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+        返回:
+            实际删除的行数。
+        """
+        sql = """
+            DELETE FROM bh_project_interview_key_bq
+            WHERE project_interview_id = %s
+        """
+        return cls._execute_write(sql, (interview_id,))
+
+    @classmethod
+    def replace_key_bq_rows_for_interview(
+        cls,
+        project_id: int,
+        interview_id: int,
+        key_bq_items: List[Dict[str, Any]],
+    ) -> int:
+        """
+        原子性替换指定访谈的 key BQ 明细。
+
+        参数:
+            project_id: 项目主键 ID。
+            interview_id: 访谈主键 ID。
+            key_bq_items: 新的 key BQ 明细列表。
+
+        返回:
+            最终写入或更新的条数。
+        """
+        if not key_bq_items:
+            return 0
+
+        delete_sql = """
+            DELETE FROM bh_project_interview_key_bq
+            WHERE project_interview_id = %s
+        """
+        insert_sql = """
+            INSERT INTO bh_project_interview_key_bq
+                (project_id, project_interview_id, bq_order, bq_text, dimension_json, note_json, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+
+        def _json_or_none(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False)
+            text = str(value).strip()
+            return text or None
+
+        conn = cls.get_connection()
+        written = 0
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(delete_sql, (interview_id,))
+                for item in key_bq_items:
+                    order_value = item.get("order")
+                    text_value = str(item.get("text") or "").strip()
+                    if order_value is None or not text_value:
+                        continue
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            project_id,
+                            interview_id,
+                            int(order_value),
+                            text_value,
+                            _json_or_none(item.get("dimension_json")),
+                            _json_or_none(item.get("note_json")),
+                            str(item.get("status") or "pending"),
+                        ),
+                    )
+                    written += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return written
+
+    @classmethod
+    def fetch_key_bq_rows_by_interview(cls, interview_id: int) -> List[Dict[str, Any]]:
+        """
+        查询某个访谈下的 key BQ 明细。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+        返回:
+            key BQ 明细记录列表，按 `bq_order` 升序排列。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                project_interview_id,
+                bq_order,
+                bq_text,
+                dimension_json,
+                note_json,
+                status,
+                created_at,
+                updated_at
+            FROM bh_project_interview_key_bq
+            WHERE project_interview_id = %s
+            ORDER BY bq_order ASC, id ASC
+        """
+        return cls._fetch_all(sql, (interview_id,))
+
     # ------------------------------------------------------------------
     # Summary 落库
     # ------------------------------------------------------------------

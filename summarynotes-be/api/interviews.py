@@ -17,6 +17,7 @@ from db import (
     fetch_interview_by_id,
     fetch_fewshot_samples_by_interview,
     fetch_interview_summary,
+    fetch_key_bq_rows_by_interview,
     fetch_question_by_id,
     fetch_question_intents,
     fetch_notes_rows_by_interview,
@@ -189,6 +190,64 @@ def _build_interview_notes_response(
         "interview_id": interview_id,
         "project_id": project_id,
         "questions": questions_list,
+    }
+
+
+def _build_interview_kbq_notes_response(
+    interview_id: int,
+    project_id: int | None,
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    将 key BQ 明细聚合为前端可直接消费的 KBQ Notes 结构。
+
+    参数:
+        interview_id: 访谈 ID。
+        project_id: 所属项目 ID。
+        rows: fetch_key_bq_rows_by_interview 返回的原始记录列表。
+
+    返回:
+        包含 interview_id、project_id、items 的聚合字典。
+    """
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        dimension_json_raw = row.get("dimension_json")
+        note_json_raw = row.get("note_json")
+        if isinstance(dimension_json_raw, str):
+            try:
+                dimension_json = json.loads(dimension_json_raw)
+            except Exception:
+                dimension_json = dimension_json_raw
+        else:
+            dimension_json = dimension_json_raw
+        if isinstance(note_json_raw, str):
+            try:
+                note_json = json.loads(note_json_raw)
+            except Exception:
+                note_json = note_json_raw
+        else:
+            note_json = note_json_raw
+
+        items.append(
+            {
+                "id": row.get("id"),
+                "project_id": row.get("project_id"),
+                "project_interview_id": row.get("project_interview_id"),
+                "bq_order": row.get("bq_order"),
+                "bq_text": row.get("bq_text"),
+                "dimension_json": dimension_json,
+                "note_json": note_json,
+                "status": row.get("status"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+
+    items.sort(key=lambda item: (item.get("bq_order") or 0, item.get("id") or 0))
+    return {
+        "interview_id": interview_id,
+        "project_id": project_id,
+        "items": items,
     }
 
 
@@ -684,23 +743,65 @@ def get_interview_overall_notes(
         - summary: 原始 summary 明细列表
     """
     interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    kbq_rows = fetch_key_bq_rows_by_interview(interview_id)
     notes_rows = fetch_notes_rows_by_interview(interview_id)
     notes_payload = _build_interview_notes_response(
         interview_id=interview_id,
         project_id=interview.get("parse_project_id"),
         rows=notes_rows,
     )
+    kbq_payload = _build_interview_kbq_notes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        rows=kbq_rows,
+    )
     summary_rows = fetch_interview_summary(project_interview_id=interview_id)
     return {
         "interview_id": interview_id,
         "project_id": interview.get("parse_project_id"),
         "note_content": interview.get("note_content"),
+        "kbq_notes": kbq_payload,
         "notes": notes_payload,
         "summary": {
             "interview_id": interview_id,
             "items": summary_rows,
         },
     }
+
+
+@router.post(
+    "/{interview_id}/kbq-notes/refresh",
+    response_model=Dict[str, Any],
+)
+def refresh_interview_kbq_notes(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    重新从访谈 core_problem 回填 key BQ，并触发 KBQ Notes 重建。
+
+    返回:
+        内部引擎服务返回的刷新结果。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+
+    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/refresh-kbq-notes"
+    try:
+        resp = requests.post(url, timeout=600)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh kbq notes request failed: {e}")
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    try:
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"parse refresh kbq notes response failed: {e}")
 
 
 @router.delete(

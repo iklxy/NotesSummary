@@ -87,6 +87,7 @@ def generate_notes_step(
     questions: List[Dict[str, Any]],
     top_k: int = 10,
     project_context: Optional[str] = None,
+    ensure_index: bool = True,
 ) -> Dict[str, Any]:
     """
     对一组题目执行 RAG 检索和 Notes 生成。
@@ -107,12 +108,13 @@ def generate_notes_step(
         project_context = load_project_context_by_id(project_id)
 
     index_warning = None
-    try:
-        print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
-        index_interview_summary(interview_id)
-    except Exception as exc:
-        index_warning = f"index summary failed: {exc}"
-        print(f"[NOTES] {index_warning}，将降级为不依赖向量索引继续生成 Notes")
+    if ensure_index:
+        try:
+            print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
+            index_interview_summary(interview_id)
+        except Exception as exc:
+            index_warning = f"index summary failed: {exc}"
+            print(f"[NOTES] {index_warning}，将降级为不依赖向量索引继续生成 Notes")
 
     intent_ids = [int(row["intent_id"]) for row in questions if row.get("intent_id") is not None]
     intent_name_map: Dict[int, str] = {}
@@ -280,6 +282,7 @@ def run_notes_generation_for_interview(
     question_id: Optional[int] = None,
     top_k: int = 10,
     source_kind: Optional[str] = None,
+    ensure_index: bool = True,
 ) -> Dict[str, Any]:
     """
     对指定访谈执行 RAG + LLM Notes 生成并落库。
@@ -336,6 +339,7 @@ def run_notes_generation_for_interview(
         interview_id=interview_id,
         questions=questions,
         top_k=top_k,
+        ensure_index=ensure_index,
     )
     if not notes_result.get("success"):
         return notes_result

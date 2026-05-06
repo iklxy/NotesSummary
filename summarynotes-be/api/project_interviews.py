@@ -25,6 +25,7 @@ from db import (
     fetch_project_by_id,
     fetch_interviews_by_project,
     insert_interview,
+    insert_key_bq_rows_for_interview,
     insert_questions_for_interview,
     update_interview_status,
 )
@@ -297,6 +298,35 @@ def _normalize_core_problem_json(raw_value: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _extract_key_bq_items(core_problem_json: str) -> list[Dict[str, Any]]:
+    """
+    从归一化后的 core_problem JSON 中提取 key BQ 列表。
+
+    参数:
+        core_problem_json: `_normalize_core_problem_json` 的输出结果。
+
+    返回:
+        可直接写入 `bh_project_interview_key_bq` 的明细列表。
+    """
+    try:
+        obj = json.loads(core_problem_json)
+    except Exception:
+        return []
+    items = obj.get("key_bq_list") or []
+    result: list[Dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            order = item.get("order") or idx
+        else:
+            text = str(item or "").strip()
+            order = idx
+        if not text:
+            continue
+        result.append({"order": int(order), "text": text, "status": "pending"})
+    return result
+
+
 def _delete_interview_backup_dir(project_id: int, interview_id: int) -> None:
     """
     删除 data 目录下该访谈对应的备份目录。
@@ -391,6 +421,9 @@ async def create_interview(
     if not clean_name:
         raise HTTPException(status_code=400, detail="访谈名称不能为空")
     normalized_core_problem = _normalize_core_problem_json(core_problem)
+    key_bq_items = _extract_key_bq_items(normalized_core_problem)
+    if not key_bq_items:
+        raise HTTPException(status_code=400, detail="key BQ 不能为空")
 
     project_row = _get_owned_project_or_404(project_id, current_user_id)
 
@@ -410,10 +443,18 @@ async def create_interview(
             doctor_level=doctor_level.strip(),
             core_problem=normalized_core_problem,
         )
+        inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
+        if inserted_key_bq <= 0:
+            raise RuntimeError("no key BQ rows inserted")
         keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
         if keys:
             save_hotword_state("interview", interview_id, keys)
     except Exception as e:
+        if interview_id is not None:
+            try:
+                delete_interview_graph(interview_id)
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"insert interview failed: {e}")
 
     local_path = _save_uploaded_audio_file(project_id, interview_id, file)

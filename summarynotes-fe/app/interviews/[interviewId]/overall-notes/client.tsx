@@ -2,19 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Alert,
-  Button,
-  Card,
-  Collapse,
-  Layout,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-} from "antd";
+import { Alert, Button, Card, Collapse, Layout, message, Space, Spin, Tag, Typography } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
-import { getInterviewOverallNotes } from "../../../../lib/interviewsApi";
+import { getInterviewOverallNotes, refreshInterviewKbqNotes } from "../../../../lib/interviewsApi";
 import type {
   InterviewOverallNotesResponse,
   QuestionWithNotes,
@@ -70,31 +60,32 @@ function getSummaryIds(item: Record<string, unknown>): string[] {
   return [];
 }
 
-function formatSummaryClock(timestamp?: string | null): string {
-  if (!timestamp) {
-    return "";
+function getKbqObject(noteJson: unknown): Record<string, unknown> | null {
+  if (noteJson && typeof noteJson === "object" && !Array.isArray(noteJson)) {
+    return noteJson as Record<string, unknown>;
   }
-  const match = timestamp.trim().match(/^(\d+)(?:-(\d+))?$/);
-  if (!match) {
-    return timestamp.trim();
+  return null;
+}
+
+function getKbqDimensionNotes(noteJson: unknown): Array<Record<string, unknown>> {
+  const noteObj = getKbqObject(noteJson);
+  if (!noteObj) {
+    return [];
   }
-  const startMs = Number(match[1]);
-  const endMs = match[2] ? Number(match[2]) : startMs;
-  const toClock = (ms: number) => {
-    const totalSeconds = Math.floor(Math.max(0, Math.floor(ms)) / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
-  };
-  const start = toClock(startMs);
-  const end = toClock(endMs);
-  return start === end ? start : `${start} - ${end}`;
+  const dimensionNotes = noteObj.dimension_notes;
+  if (!Array.isArray(dimensionNotes)) {
+    return [];
+  }
+  return dimensionNotes.filter((item): item is Record<string, unknown> => {
+    return item !== null && typeof item === "object" && !Array.isArray(item);
+  });
 }
 
 export default function OverallNotesClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [kbqRefreshing, setKbqRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -118,8 +109,25 @@ export default function OverallNotesClient({ interviewId }: Props) {
     }
   }, [interviewId, reloadToken]);
 
+  const handleRefreshKbqNotes = async () => {
+    try {
+      setKbqRefreshing(true);
+      const resp = await refreshInterviewKbqNotes(interviewId);
+      if (!resp.success) {
+        throw new Error(resp.message || "刷新 KBQ Notes 失败");
+      }
+      message.success(
+        `KBQ Notes 已刷新：回填 ${resp.key_bq_inserted ?? 0} 条，生成 ${resp.generated ?? 0} 条，写入 ${resp.inserted ?? 0} 条`,
+      );
+      setReloadToken((v) => v + 1);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "刷新 KBQ Notes 失败");
+    } finally {
+      setKbqRefreshing(false);
+    }
+  };
+
   const notesQuestions = useMemo(() => data?.notes?.questions ?? [], [data]);
-  const summaryItems = useMemo(() => data?.summary?.items ?? [], [data]);
 
   return (
     <Layout className="min-h-screen bg-slate-50">
@@ -135,13 +143,18 @@ export default function OverallNotesClient({ interviewId }: Props) {
             整体 Notes #{interviewId > 0 ? interviewId : "无效"}
           </Title>
         </Space>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => setReloadToken((v) => v + 1)}
-          loading={loading}
-        >
-          刷新
-        </Button>
+        <Space>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => setReloadToken((v) => v + 1)}
+            loading={loading}
+          >
+            刷新页面
+          </Button>
+          <Button onClick={handleRefreshKbqNotes} loading={kbqRefreshing} type="primary">
+            刷新 KBQ Notes
+          </Button>
+        </Space>
       </Header>
       <Content>
         <div style={{ maxWidth: 1680, margin: "0 auto", padding: "24px" }}>
@@ -163,7 +176,73 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }} title="B. 问题级 Delivery Notes">
+              <Card style={{ borderRadius: 20 }} title="B. KBQ Notes">
+                {data?.kbq_notes?.items?.length ? (
+                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                    {data.kbq_notes.items.map((item) => {
+                      const noteObj = getKbqObject(item.note_json);
+                      const dimensionNotes = getKbqDimensionNotes(item.note_json);
+                      const confidenceText =
+                        typeof noteObj?.confidence === "number"
+                          ? `置信度：${noteObj.confidence.toFixed(2)}`
+                          : typeof noteObj?.confidence === "string"
+                            ? `置信度：${noteObj.confidence}`
+                            : "";
+                      return (
+                        <Card key={item.id} size="small" style={{ borderRadius: 16 }}>
+                          <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                            <Title level={5} style={{ marginBottom: 0 }}>
+                              {item.bq_order}. {item.bq_text}
+                            </Title>
+                            {confidenceText ? (
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                {confidenceText}
+                              </Text>
+                            ) : null}
+                            {dimensionNotes.length > 0 ? (
+                              <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                                {dimensionNotes.map((dimensionNote, index) => {
+                                  const dimensionName =
+                                    typeof dimensionNote.dimension === "string"
+                                      ? dimensionNote.dimension
+                                      : `维度 ${index + 1}`;
+                                  const summaryText = getNoteStringField(dimensionNote, "summary");
+                                  return (
+                                    <Card
+                                      key={`${item.id}-${index}-${dimensionName}`}
+                                      size="small"
+                                      style={{
+                                        borderRadius: 14,
+                                        background: "#fafafa",
+                                        borderColor: "#ececec",
+                                      }}
+                                      title={dimensionName}
+                                    >
+                                      {summaryText ? (
+                                        <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                          {summaryText}
+                                        </Paragraph>
+                                      ) : (
+                                        <Text type="secondary">该维度暂无可展示的 Summary。</Text>
+                                      )}
+                                    </Card>
+                                  );
+                                })}
+                              </Space>
+                            ) : (
+                              <Text type="secondary">该条 key BQ 暂无可展示的维度 notes。</Text>
+                            )}
+                          </Space>
+                        </Card>
+                      );
+                    })}
+                  </Space>
+                ) : (
+                  <Text type="secondary">暂无 KBQ Notes。</Text>
+                )}
+              </Card>
+
+              <Card style={{ borderRadius: 20 }} title="C. 问题级 Delivery Notes">
                 {notesQuestions.length > 0 ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                     {notesQuestions.map((question: QuestionWithNotes) => {
@@ -252,27 +331,6 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }} title="C. Summary 对话流">
-                {summaryItems.length > 0 ? (
-                  <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                    {summaryItems.map((item) => (
-                      <Card key={item.id} size="small" style={{ background: "#fafafa" }}>
-                        <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                          <Space size={8} wrap>
-                            <Tag color="blue">{item.speaker || "unknown"}</Tag>
-                            <Tag color="default">{formatSummaryClock(item.timestamp)}</Tag>
-                          </Space>
-                          <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                            {item.text}
-                          </Paragraph>
-                        </Space>
-                      </Card>
-                    ))}
-                  </Space>
-                ) : (
-                  <Text type="secondary">暂无 summary 对话内容。</Text>
-                )}
-              </Card>
             </Space>
           )}
         </div>

@@ -44,6 +44,18 @@ export interface DeleteInterviewResponse {
   message?: string | null;
 }
 
+export interface RefreshKbqNotesResponse {
+  success: boolean;
+  interview_id: number;
+  project_id?: number | null;
+  key_bq_inserted?: number | null;
+  generated?: number | null;
+  inserted?: number | null;
+  warnings?: string[] | null;
+  refreshed_from_core_problem?: boolean | null;
+  message?: string | null;
+}
+
 export interface QuestionnaireHotwordCandidate {
   term: string;
   normalized_term: string;
@@ -132,8 +144,40 @@ export interface InterviewOverallNotesResponse {
   interview_id: number;
   project_id?: number | null;
   note_content?: string | null;
+  kbq_notes: InterviewKbqNotesResponse;
   notes: InterviewNotesResponse;
   summary: InterviewSummaryResponse;
+}
+
+export interface KbqDimensionItem {
+  name: string;
+  description?: string | null;
+}
+
+export interface KbqDimensionNoteItem {
+  dimension: string;
+  summary?: string | null;
+  analysis?: string | null;
+  evidence?: FewshotEvidenceItem[];
+}
+
+export interface KbqNoteItem {
+  id: number;
+  project_id: number;
+  project_interview_id: number;
+  bq_order: number;
+  bq_text: string;
+  dimension_json?: unknown;
+  note_json?: unknown;
+  status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface InterviewKbqNotesResponse {
+  interview_id: number;
+  project_id?: number | null;
+  items: KbqNoteItem[];
 }
 
 export interface QuestionItem {

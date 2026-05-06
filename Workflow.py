@@ -13,6 +13,7 @@ from Model import ModelClient
 from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
 from QuestionnaireHotword import load_reviewed_questionnaire_hotwords
 from DbAccess import DbAccess
+from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from ProjectContext import load_project_context_by_id
 from NotesWorkflow import run_notes_generation_for_interview
 from config import config
@@ -432,7 +433,20 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if not overall_note_result.get("success"):
             overall_note_warning = overall_note_result.get("message") or "generate overall note failed"
 
-        notes_result = run_notes_generation_for_interview(interview_id, source_kind="auto")
+        kbq_result = run_kbq_notes_generation_for_interview(
+            interview_id,
+            project_context=project_context,
+            interview_context=interview_context,
+        )
+        kbq_warning = None
+        if not kbq_result.get("success"):
+            kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
+
+        notes_result = run_notes_generation_for_interview(
+            interview_id,
+            source_kind="auto",
+            ensure_index=False,
+        )
         notes_warning = None
         if not notes_result.get("success"):
             notes_warning = notes_result.get("message") or "generate notes failed"
@@ -452,10 +466,11 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             },
             "summary_inserted": ws.get("inserted", 0),
             "overall_note_written": bool(overall_note_result.get("success")),
+            "kbq_notes_inserted": kbq_result.get("inserted", 0),
             "notes_inserted": notes_result.get("inserted", 0),
             "warnings": [
                 warning
-                for warning in [overall_note_warning, notes_warning]
+                for warning in [overall_note_warning, kbq_warning, notes_warning]
                 if warning
             ],
         }

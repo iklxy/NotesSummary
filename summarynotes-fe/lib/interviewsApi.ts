@@ -12,6 +12,7 @@ import {
   InterviewOverallNotesResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
+  RefreshKbqNotesResponse,
   QuestionCreateItem,
   QuestionCreateResponse,
   QuestionIntentItem,
@@ -49,6 +50,14 @@ export function getInterviewOverallNotes(
   interviewId: number,
 ): Promise<InterviewOverallNotesResponse> {
   return request<InterviewOverallNotesResponse>(`/api/interviews/${interviewId}/overall-notes`);
+}
+
+export function refreshInterviewKbqNotes(
+  interviewId: number,
+): Promise<RefreshKbqNotesResponse> {
+  return request<RefreshKbqNotesResponse>(`/api/interviews/${interviewId}/kbq-notes/refresh`, {
+    method: "POST",
+  });
 }
 
 export function getInterviewQuestions(
