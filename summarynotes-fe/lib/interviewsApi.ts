@@ -8,6 +8,7 @@ import {
   FewshotSampleDeleteResponse,
   InterviewFewshotSamplesResponse,
   GenerateNotesResponse,
+  GenerateMinutesResponse,
   InterviewNotesResponse,
   InterviewOverallNotesResponse,
   InterviewQuestionsResponse,
@@ -64,6 +65,14 @@ export function refreshInterviewDeliveryNotes(
   interviewId: number,
 ): Promise<GenerateNotesResponse> {
   return request<GenerateNotesResponse>(`/api/interviews/${interviewId}/notes/refresh`, {
+    method: "POST",
+  });
+}
+
+export function refreshInterviewMinutes(
+  interviewId: number,
+): Promise<GenerateMinutesResponse> {
+  return request<GenerateMinutesResponse>(`/api/interviews/${interviewId}/minutes/refresh`, {
     method: "POST",
   });
 }
@@ -225,6 +234,33 @@ export function getProjectInterviews(projectId: number): Promise<ProjectIntervie
 
 export function getInterviewSummary(interviewId: number): Promise<InterviewSummaryResponse> {
   return request<InterviewSummaryResponse>(`/api/interviews/${interviewId}/summary`);
+}
+
+export async function exportInterviewTransWord(
+  interviewId: number,
+): Promise<{ blob: Blob; filename: string }> {
+  const baseUrl = getBaseUrl().replace(/\/$/, "");
+  const url = `${baseUrl}/api/interviews/${interviewId}/trans/export-word`;
+  const resp = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`export trans word failed: ${JSON.stringify(detail)}`);
+  }
+  const contentDisposition = resp.headers.get("content-disposition") || "";
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  const filename = filenameMatch?.[1] || `interview_${interviewId}_trans.docx`;
+  return {
+    blob: await resp.blob(),
+    filename,
+  };
 }
 
 export function getInterviewAudioUrl(interviewId: number): string {

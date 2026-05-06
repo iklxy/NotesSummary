@@ -2,12 +2,14 @@ from pathlib import Path
 import mimetypes
 import shutil
 import json
+from datetime import datetime
+from urllib.parse import quote
 from typing import Any, Dict, List
 
 import os
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from api.auth import require_current_user_id
 from db import (
@@ -15,8 +17,10 @@ from db import (
     delete_fewshot_sample,
     delete_question_and_notes,
     fetch_interview_by_id,
+    fetch_interview_minutes_by_interview,
     fetch_fewshot_samples_by_interview,
     fetch_interview_summary,
+    fetch_project_by_id,
     fetch_key_bq_rows_by_interview,
     fetch_question_by_id,
     fetch_question_intents,
@@ -46,6 +50,7 @@ from schemas.interviews import (
     SummaryUpdateResponse,
 )
 from storage import delete_remote_object
+from docx_export import build_transcript_docx_bytes, DOCX_MIME_TYPE
 
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -84,6 +89,12 @@ def _get_internal_base() -> str:
 
 
 def _get_audio_root() -> Path:
+    """
+    获取本地音频备份根目录。
+
+    返回:
+        项目根目录下的 `audio/` 路径。
+    """
     api_dir = Path(__file__).resolve().parent
     project_root = api_dir.parent.parent
     return project_root / "audio"
@@ -117,6 +128,12 @@ def _resolve_audio_file(interview_id: int, current_user_id: int) -> tuple[Path, 
 
 
 def _get_qdrant_base_url() -> str:
+    """
+    获取 Qdrant 服务基地址。
+
+    返回:
+        形如 `http://127.0.0.1:6333` 的字符串。
+    """
     host_env = os.getenv("QDRANT_HOST", "localhost")
     port_env = int(os.getenv("QDRANT_PORT", "6333"))
     if host_env.startswith("http://") or host_env.startswith("https://"):
@@ -125,6 +142,12 @@ def _get_qdrant_base_url() -> str:
 
 
 def _get_qdrant_collection_name() -> str:
+    """
+    获取用于访谈 summary 向量的 Qdrant 集合名。
+
+    返回:
+        集合名称字符串。
+    """
     return os.getenv("QDRANT_COLLECTION_SUMMARY", "interview_summary")
 
 
@@ -251,6 +274,91 @@ def _build_interview_kbq_notes_response(
     }
 
 
+def _build_interview_minutes_response(
+    interview_id: int,
+    project_id: int | None,
+    row: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """
+    将数据库中的智能纪要记录整理为前端可直接消费的结构。
+
+    参数:
+        interview_id: 访谈 ID。
+        project_id: 所属项目 ID。
+        row: fetch_interview_minutes_by_interview 返回的单条记录。
+
+    返回:
+        包含 interview_id、project_id、outline、sections、status 等字段的聚合字典。
+    """
+    if not row:
+        return {
+            "interview_id": interview_id,
+            "project_id": project_id,
+            "outline": None,
+            "sections": [],
+            "status": None,
+            "generated_at": None,
+        }
+
+    outline_json_raw = row.get("outline_json")
+    minutes_json_raw = row.get("minutes_json")
+    if isinstance(outline_json_raw, str):
+        try:
+            outline_json = json.loads(outline_json_raw)
+        except Exception:
+            outline_json = outline_json_raw
+    else:
+        outline_json = outline_json_raw
+    if isinstance(minutes_json_raw, str):
+        try:
+            minutes_json = json.loads(minutes_json_raw)
+        except Exception:
+            minutes_json = minutes_json_raw
+    else:
+        minutes_json = minutes_json_raw
+
+    sections = []
+    if isinstance(minutes_json, dict):
+        raw_sections = minutes_json.get("sections") or []
+        if isinstance(raw_sections, list):
+            sections = raw_sections
+
+    return {
+        "interview_id": interview_id,
+        "project_id": project_id,
+        "outline": outline_json,
+        "sections": sections,
+        "status": row.get("status"),
+        "error_message": row.get("error_message"),
+        "generated_at": row.get("generated_at"),
+        "minutes_json": minutes_json,
+    }
+
+
+def _build_transcript_export_filename(interview_name: str | None, interview_id: int) -> str:
+    """
+    生成全文 trans 的导出文件名。
+
+    参数:
+        interview_name: 访谈名称。
+        interview_id: 访谈 ID。
+
+    返回:
+        适合作为下载文件名的字符串。
+    """
+    base_name = (interview_name or f"interview_{interview_id}").strip() or f"interview_{interview_id}"
+    safe_chars: List[str] = []
+    for ch in base_name:
+        if ch.isalnum() or ch in {"-", "_", " ", "(", ")", "[", "]", "【", "】", "、", ".", ","}:
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    cleaned = "".join(safe_chars).strip().replace(" ", "_")
+    if not cleaned:
+        cleaned = f"interview_{interview_id}"
+    return f"{cleaned}_全文trans.docx"
+
+
 def _delete_qdrant_points_for_interview(interview_id: int) -> tuple[bool, str | None]:
     """
     按访谈 ID 删除 Qdrant 中对应的 summary chunk 向量。
@@ -296,6 +404,16 @@ def _delete_qdrant_points_for_interview(interview_id: int) -> tuple[bool, str | 
 
 
 def _delete_local_audio_dir(project_id: int, interview_id: int) -> tuple[bool, str | None]:
+    """
+    删除本地 audio 目录下该访谈对应的文件夹。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+
+    返回:
+        (是否删除成功, 失败原因)。
+    """
     target_dir = _get_audio_root() / f"project_{project_id}" / f"interview_{interview_id}"
     if not target_dir.exists():
         return True, None
@@ -323,6 +441,15 @@ def _delete_local_backup_dir(project_id: int, interview_id: int) -> tuple[bool, 
 
 
 def _delete_cloud_audio_object(object_key: str | None) -> tuple[bool, str | None]:
+    """
+    删除云端音频对象。
+
+    参数:
+        object_key: TOS 对象 key；为空时表示无需删除。
+
+    返回:
+        (是否删除成功, 失败原因)。
+    """
     if not object_key:
         return True, None
     result = delete_remote_object(object_key)
@@ -336,6 +463,19 @@ def _delete_cloud_audio_object(object_key: str | None) -> tuple[bool, str | None
 
 
 def _parse_sample_json(raw: Any) -> tuple[Any, str | None, str | None, int]:
+    """
+    解析 Notes 的 JSON 样本内容。
+
+    参数:
+        raw: 数据库原始返回值，可能是 JSON 字符串、字典或其他类型。
+
+    返回:
+        一个四元组:
+            - 解析后的对象
+            - summary 文本或 None
+            - analysis 文本或 None
+            - evidence 条数
+    """
     if isinstance(raw, str):
         try:
             parsed: Any = json.loads(raw)
@@ -398,7 +538,10 @@ def run_interview_workflow(
     success = bool(data.get("success", False))
     queued = bool(data.get("queued", False))
     summary_inserted = data.get("summary_inserted")
+    minutes_inserted = data.get("minutes_inserted")
     notes_inserted = data.get("notes_inserted")
+    if minutes_inserted is not None and notes_inserted is None:
+        notes_inserted = minutes_inserted
     message = None
 
     if not success:
@@ -416,6 +559,7 @@ def run_interview_workflow(
         queued=queued,
         summary_inserted=summary_inserted,
         notes_inserted=notes_inserted,
+        minutes_inserted=minutes_inserted,
         message=message,
     )
 
@@ -739,21 +883,21 @@ def get_interview_overall_notes(
         - interview_id
         - project_id
         - note_content: 访谈级 summary notes
-        - notes: 按题目聚合的 delivery notes
+        - minutes: 智能纪要
         - summary: 原始 summary 明细列表
     """
     interview = _get_owned_interview_or_404(interview_id, current_user_id)
     kbq_rows = fetch_key_bq_rows_by_interview(interview_id)
-    notes_rows = fetch_notes_rows_by_interview(interview_id)
-    notes_payload = _build_interview_notes_response(
-        interview_id=interview_id,
-        project_id=interview.get("parse_project_id"),
-        rows=notes_rows,
-    )
     kbq_payload = _build_interview_kbq_notes_response(
         interview_id=interview_id,
         project_id=interview.get("parse_project_id"),
         rows=kbq_rows,
+    )
+    minutes_row = fetch_interview_minutes_by_interview(interview_id)
+    minutes_payload = _build_interview_minutes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        row=minutes_row,
     )
     summary_rows = fetch_interview_summary(project_interview_id=interview_id)
     return {
@@ -761,7 +905,7 @@ def get_interview_overall_notes(
         "project_id": interview.get("parse_project_id"),
         "note_content": interview.get("note_content"),
         "kbq_notes": kbq_payload,
-        "notes": notes_payload,
+        "minutes": minutes_payload,
         "summary": {
             "interview_id": interview_id,
             "items": summary_rows,
@@ -805,26 +949,26 @@ def refresh_interview_kbq_notes(
 
 
 @router.post(
-    "/{interview_id}/notes/refresh",
+    "/{interview_id}/minutes/refresh",
     response_model=Dict[str, Any],
 )
-def refresh_interview_notes(
+def refresh_interview_minutes(
     interview_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
     """
-    重新生成该访谈下所有 Delivery Notes。
+    重新生成该访谈下的智能纪要。
 
     返回:
-        内部引擎服务返回的批量 Notes 生成结果。
+        内部引擎服务返回的智能纪要生成结果。
     """
     _get_owned_interview_or_404(interview_id, current_user_id)
 
-    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-notes"
+    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-minutes"
     try:
         resp = requests.post(url, timeout=600)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"refresh delivery notes request failed: {e}")
+        raise HTTPException(status_code=500, detail=f"refresh minutes request failed: {e}")
 
     if resp.status_code >= 400:
         try:
@@ -836,7 +980,7 @@ def refresh_interview_notes(
     try:
         return resp.json()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"parse refresh delivery notes response failed: {e}")
+        raise HTTPException(status_code=500, detail=f"parse refresh minutes response failed: {e}")
 
 
 @router.delete(
@@ -1058,6 +1202,53 @@ def get_interview_summary(
     _get_owned_interview_or_404(interview_id, current_user_id)
     rows: List[Dict[str, Any]] = fetch_interview_summary(project_interview_id=interview_id)
     return {"interview_id": interview_id, "items": rows}
+
+
+@router.get("/{interview_id}/trans/export-word")
+def export_interview_trans_word(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Response:
+    """
+    导出当前访谈的全文 trans 为 Word 文档。
+
+    导出的内容和全文 trans 页面保持一致，直接基于 summary 明细组装。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
+    summary_rows = fetch_interview_summary(project_interview_id=interview_id)
+
+    transcript_items: List[Dict[str, Any]] = []
+    for row in summary_rows:
+        transcript_items.append(
+            {
+                "speaker": row.get("speaker"),
+                "timestamp": row.get("timestamp"),
+                "text": row.get("text"),
+            }
+        )
+
+    project_name = None
+    if project_row:
+        project_name = project_row.get("name")
+    interview_name = interview.get("name")
+    interview_date = interview.get("interview_date")
+    subtitle_lines = [
+        f"项目：{project_name or interview.get('parse_project_id')}",
+        f"访谈：{interview_name or interview_id}",
+        f"访谈日期：{interview_date or '未填写'}",
+        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+    docx_bytes = build_transcript_docx_bytes(
+        title=f"全文 trans - {interview_name or interview_id}",
+        subtitle_lines=subtitle_lines,
+        transcript_items=transcript_items,
+    )
+    filename = _build_transcript_export_filename(interview_name, interview_id)
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}",
+    }
+    return Response(content=docx_bytes, media_type=DOCX_MIME_TYPE, headers=headers)
 
 
 def _reindex_summary_chunks(interview_id: int) -> tuple[bool, int | None, str | None]:

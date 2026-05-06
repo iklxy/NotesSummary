@@ -18,7 +18,9 @@ class RunInterviewResponse(BaseModel):
         summary_inserted:
             可选，写入 bh_project_interview_summary 的记录数。
         notes_inserted:
-            可选，写入 bh_project_interview_notes 的记录数。
+            可选，保留兼容字段，旧版 Notes 工作流的写入数。
+        minutes_inserted:
+            可选，写入智能纪要表的记录数。
         message:
             可选，在失败或部分失败时的人类可读错误信息。
     """
@@ -26,6 +28,7 @@ class RunInterviewResponse(BaseModel):
     queued: bool = False
     summary_inserted: Optional[int] = None
     notes_inserted: Optional[int] = None
+    minutes_inserted: Optional[int] = None
     message: Optional[str] = None
 
 
@@ -38,6 +41,20 @@ class GenerateNotesResponse(BaseModel):
     question_id: Optional[int] = None
     project_id: Optional[int] = None
     total_questions: int = 0
+    generated: int = 0
+    inserted: int = 0
+    warnings: List[str] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class GenerateMinutesResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/minutes/refresh 接口返回值。
+    """
+    success: bool
+    interview_id: int
+    project_id: Optional[int] = None
+    outline_generated: int = 0
     generated: int = 0
     inserted: int = 0
     warnings: List[str] = Field(default_factory=list)
@@ -371,6 +388,38 @@ class InterviewSummaryResponse(BaseModel):
     """
     interview_id: int
     items: List[InterviewSummaryItem]
+
+
+class InterviewMinutesItem(BaseModel):
+    """
+    单个纪要小点的展示结构。
+    """
+    order: int
+    title: str
+    summary: Optional[str] = None
+
+
+class InterviewMinutesSection(BaseModel):
+    """
+    单个纪要章节的展示结构。
+    """
+    order: int
+    title: str
+    summary: Optional[str] = None
+    items: List[InterviewMinutesItem] = Field(default_factory=list)
+
+
+class InterviewMinutesResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/overall-notes 中的智能纪要结构。
+    """
+    interview_id: int
+    project_id: Optional[int] = None
+    outline: Any = None
+    sections: List[InterviewMinutesSection] = Field(default_factory=list)
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+    generated_at: Optional[str] = None
 
 
 class SummaryUpdateRequest(BaseModel):

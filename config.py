@@ -66,6 +66,16 @@ class RuntimeConfig:
     LLM_MODEL_NAME: str | None = None
     LLM_PROVIDER: str = "anthropic"
 
+    TRANSCRIPT_LLM_API_KEY: str | None = None
+    TRANSCRIPT_LLM_BASE_URL: str | None = None
+    TRANSCRIPT_LLM_MODEL_NAME: str | None = None
+    TRANSCRIPT_LLM_PROVIDER: str = "openai"
+
+    NOTES_LLM_API_KEY: str | None = None
+    NOTES_LLM_BASE_URL: str | None = None
+    NOTES_LLM_MODEL_NAME: str | None = None
+    NOTES_LLM_PROVIDER: str = "openai"
+
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL_NAME: str = "bge-m3:latest"
     TERM_HINTS_FILE: str | None = None
@@ -116,6 +126,18 @@ class RuntimeConfig:
         self.LLM_BASE_URL = _get_env_str("LLM_BASE_URL")
         self.LLM_MODEL_NAME = _get_env_str("LLM_MODEL_NAME")
         self.LLM_PROVIDER = _get_env_str("LLM_PROVIDER", "anthropic") or "anthropic"
+
+        # Transcript / correction / cleaning 配置
+        self.TRANSCRIPT_LLM_API_KEY = _get_env_str("TRANSCRIPT_LLM_API_KEY")
+        self.TRANSCRIPT_LLM_BASE_URL = _get_env_str("TRANSCRIPT_LLM_BASE_URL")
+        self.TRANSCRIPT_LLM_MODEL_NAME = _get_env_str("TRANSCRIPT_LLM_MODEL_NAME")
+        self.TRANSCRIPT_LLM_PROVIDER = _get_env_str("TRANSCRIPT_LLM_PROVIDER", "openai") or "openai"
+
+        # Notes / KBQ / Minutes 配置
+        self.NOTES_LLM_API_KEY = _get_env_str("NOTES_LLM_API_KEY")
+        self.NOTES_LLM_BASE_URL = _get_env_str("NOTES_LLM_BASE_URL")
+        self.NOTES_LLM_MODEL_NAME = _get_env_str("NOTES_LLM_MODEL_NAME")
+        self.NOTES_LLM_PROVIDER = _get_env_str("NOTES_LLM_PROVIDER", "openai") or "openai"
 
         # Embedding / Ollama 配置
         self.OLLAMA_HOST = _get_env_str("OLLAMA_HOST", "http://localhost:11434") or "http://localhost:11434"

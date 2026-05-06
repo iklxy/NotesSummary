@@ -253,7 +253,7 @@ def extract_questionnaire_hotword_candidates(
     client = ModelClient()
     raw_output = ""
     try:
-        raw_output = client.generate(system_prompt, user_prompt)
+        raw_output = client.generate_transcript(system_prompt, user_prompt)
     except Exception:
         raw_output = ""
     try:

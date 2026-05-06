@@ -23,6 +23,18 @@ CODE_INTERNAL_UNKNOWN_ERROR = 5000
 
 
 def make_response(success: bool, code: int, message: str, data: dict | None = None) -> dict:
+    """
+    构造统一的 TOS 存储层返回结果。
+
+    参数:
+        success: 是否成功。
+        code: 业务返回码。
+        message: 对结果的简短说明。
+        data: 附加数据；为空时自动归一化为空字典。
+
+    返回:
+        标准化的结果字典，方便上层 API 直接透传。
+    """
     if data is None:
         data = {}
     return {
@@ -34,6 +46,15 @@ def make_response(success: bool, code: int, message: str, data: dict | None = No
 
 
 def get_tos_client() -> tos.TosClientV2:
+    """
+    创建并返回一个 TOS 客户端。
+
+    返回:
+        已初始化的 TosClientV2 实例。
+
+    异常:
+        ValueError: 当 AK/SK、endpoint 或 region 未配置时抛出。
+    """
     if not ak or not sk:
         raise ValueError("TOS credentials missing")
     if not endpoint or not region:

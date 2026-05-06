@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Button, Card, Layout, Space, Spin, Tag, Typography } from "antd";
-import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
-import { getInterviewSummary } from "../../../../lib/interviewsApi";
+import { Alert, Button, Card, Layout, Space, Spin, Tag, Typography, message } from "antd";
+import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import { exportInterviewTransWord, getInterviewSummary } from "../../../../lib/interviewsApi";
 import type { InterviewSummaryResponse } from "../../../../lib/interviewsApi";
 
 const { Header, Content } = Layout;
@@ -41,6 +41,7 @@ export default function TransClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewSummaryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -78,6 +79,25 @@ export default function TransClient({ interviewId }: Props) {
     return map;
   }, [data]);
 
+  const handleExportWord = async () => {
+    try {
+      setExporting(true);
+      const resp = await exportInterviewTransWord(interviewId);
+      const url = URL.createObjectURL(resp.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = resp.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导出 Word 失败");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Layout className="min-h-screen bg-slate-50">
       <Header className="flex items-center justify-between bg-slate-900 px-6 shadow">
@@ -89,9 +109,14 @@ export default function TransClient({ interviewId }: Props) {
             全文 trans #{interviewId > 0 ? interviewId : "无效"}
           </Title>
         </Space>
-        <Button icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)} loading={loading}>
-          刷新
-        </Button>
+        <Space>
+          <Button icon={<DownloadOutlined />} onClick={handleExportWord} loading={exporting}>
+            导出 Word
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)} loading={loading}>
+            刷新
+          </Button>
+        </Space>
       </Header>
       <Content>
         <div style={{ maxWidth: 1680, margin: "0 auto", padding: "24px" }}>

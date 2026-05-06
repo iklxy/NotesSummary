@@ -35,6 +35,12 @@ def _detect_primary_ip() -> str | None:
 
 
 def setup_cors(app: FastAPI) -> None:
+    """
+    为 FastAPI 应用注册跨域中间件。
+
+    参数:
+        app: 需要安装 CORS 的 FastAPI 实例。
+    """
     origins = {
         "http://localhost",
         "http://localhost:3000",

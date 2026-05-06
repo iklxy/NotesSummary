@@ -2,18 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Button, Card, Collapse, Layout, message, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Button, Card, Layout, message, Space, Spin, Typography } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
   getInterviewOverallNotes,
-  refreshInterviewDeliveryNotes,
   refreshInterviewKbqNotes,
+  refreshInterviewMinutes,
 } from "../../../../lib/interviewsApi";
-import type {
-  InterviewOverallNotesResponse,
-  NoteItem,
-  QuestionWithNotes,
-} from "../../../../lib/types";
+import type { InterviewOverallNotesResponse } from "../../../../lib/types";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -29,51 +25,8 @@ function getNoteObject(noteJson: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function getEvidenceItems(noteJson: unknown): Array<Record<string, unknown>> {
-  const noteObj = getNoteObject(noteJson);
-  if (!noteObj) {
-    return [];
-  }
-  const evidence = noteObj.evidence;
-  if (!Array.isArray(evidence)) {
-    return [];
-  }
-  return evidence.filter((item): item is Record<string, unknown> => {
-    return item !== null && typeof item === "object" && !Array.isArray(item);
-  });
-}
-
-function getNoteStringField(noteJson: unknown, fieldName: "summary" | "analysis"): string {
-  const noteObj = getNoteObject(noteJson);
-  if (!noteObj) {
-    return "";
-  }
-  const value = noteObj[fieldName];
-  return typeof value === "string" ? value : "";
-}
-
-function getSummaryIds(item: Record<string, unknown>): string[] {
-  const raw = item.summary_id;
-  if (typeof raw === "number" || typeof raw === "string") {
-    return [String(raw)];
-  }
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((value) => typeof value === "number" || typeof value === "string")
-      .map((value) => String(value));
-  }
-  return [];
-}
-
-function getKbqObject(noteJson: unknown): Record<string, unknown> | null {
-  if (noteJson && typeof noteJson === "object" && !Array.isArray(noteJson)) {
-    return noteJson as Record<string, unknown>;
-  }
-  return null;
-}
-
 function getKbqDimensionNotes(noteJson: unknown): Array<Record<string, unknown>> {
-  const noteObj = getKbqObject(noteJson);
+  const noteObj = getNoteObject(noteJson);
   if (!noteObj) {
     return [];
   }
@@ -86,11 +39,13 @@ function getKbqDimensionNotes(noteJson: unknown): Array<Record<string, unknown>>
   });
 }
 
-function getPrimaryNote(notes?: NoteItem[] | null): NoteItem | null {
-  if (!notes || notes.length === 0) {
-    return null;
+function getNoteSummary(noteJson: unknown): string {
+  const noteObj = getNoteObject(noteJson);
+  if (!noteObj) {
+    return "";
   }
-  return notes[0] ?? null;
+  const value = noteObj.summary;
+  return typeof value === "string" ? value : "";
 }
 
 export default function OverallNotesClient({ interviewId }: Props) {
@@ -98,7 +53,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [kbqRefreshing, setKbqRefreshing] = useState(false);
-  const [deliveryRefreshing, setDeliveryRefreshing] = useState(false);
+  const [minutesRefreshing, setMinutesRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -140,26 +95,25 @@ export default function OverallNotesClient({ interviewId }: Props) {
     }
   };
 
-  const handleRefreshDeliveryNotes = async () => {
+  const handleRefreshMinutes = async () => {
     try {
-      setDeliveryRefreshing(true);
-      const resp = await refreshInterviewDeliveryNotes(interviewId);
+      setMinutesRefreshing(true);
+      const resp = await refreshInterviewMinutes(interviewId);
       if (!resp.success) {
-        throw new Error(resp.message || "刷新 Delivery Notes 失败");
+        throw new Error(resp.message || "刷新智能纪要失败");
       }
       message.success(
-        `Delivery Notes 已刷新：生成 ${resp.generated ?? 0} 条，写入 ${resp.inserted ?? 0} 条`,
+        `智能纪要已刷新：大纲 ${resp.outline_generated ?? 0} 条，生成 ${resp.generated ?? 0} 条，写入 ${resp.inserted ?? 0} 条`,
       );
       setReloadToken((v) => v + 1);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "刷新 Delivery Notes 失败");
+      message.error(e instanceof Error ? e.message : "刷新智能纪要失败");
     } finally {
-      setDeliveryRefreshing(false);
+      setMinutesRefreshing(false);
     }
   };
 
-  const notesQuestions = useMemo(() => data?.notes?.questions ?? [], [data]);
-  const visibleNotesQuestions = useMemo(() => notesQuestions, [notesQuestions]);
+  const minutesSections = useMemo(() => data?.minutes?.sections ?? [], [data]);
 
   return (
     <Layout className="min-h-screen bg-slate-50">
@@ -183,8 +137,8 @@ export default function OverallNotesClient({ interviewId }: Props) {
           >
             刷新页面
           </Button>
-          <Button onClick={handleRefreshDeliveryNotes} loading={deliveryRefreshing}>
-            刷新 Delivery Notes
+          <Button onClick={handleRefreshMinutes} loading={minutesRefreshing}>
+            刷新智能纪要
           </Button>
           <Button onClick={handleRefreshKbqNotes} loading={kbqRefreshing} type="primary">
             刷新 KBQ Notes
@@ -229,7 +183,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                                     typeof dimensionNote.dimension === "string"
                                       ? dimensionNote.dimension
                                       : `维度 ${index + 1}`;
-                                  const summaryText = getNoteStringField(dimensionNote, "summary");
+                                  const summaryText = getNoteSummary(dimensionNote);
                                   return (
                                     <Card
                                       key={`${item.id}-${index}-${dimensionName}`}
@@ -246,7 +200,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                                           {summaryText}
                                         </Paragraph>
                                       ) : (
-                                        <Text type="secondary">该维度暂无可展示的 Summary。</Text>
+                                        <Text type="secondary">该维度暂无可展示的内容。</Text>
                                       )}
                                     </Card>
                                   );
@@ -265,25 +219,56 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }} title="C. 问题级 Delivery Notes">
-                {visibleNotesQuestions.length > 0 ? (
+              <Card style={{ borderRadius: 20 }} title="C. 智能纪要">
+                {minutesSections.length > 0 ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {visibleNotesQuestions.map((question: QuestionWithNotes, index) => {
-                      const primaryNote = getPrimaryNote(question.notes);
-                      const noteJson = primaryNote?.note_json;
-                      const summaryText = getNoteStringField(noteJson, "summary");
+                    {minutesSections.map((section) => {
+                      const sectionTitle =
+                        section.title && section.title.trim()
+                          ? `第${section.order}部分：${section.title.trim()}`
+                          : `第${section.order}部分`;
                       return (
-                        <Card key={question.question_id} size="small" style={{ borderRadius: 16 }}>
+                        <Card key={section.order} size="small" style={{ borderRadius: 16 }}>
                           <Space direction="vertical" size="small" style={{ width: "100%" }}>
                             <Title level={5} style={{ marginBottom: 0 }}>
-                              {index + 1}. {question.question_text}
+                              {sectionTitle}
                             </Title>
-                            {summaryText ? (
+                            {section.summary ? (
                               <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                {summaryText}
+                                {section.summary}
                               </Paragraph>
+                            ) : null}
+                            {section.items?.length ? (
+                              <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                                {section.items.map((item) => {
+                                  const itemTitle =
+                                    item.title && item.title.trim()
+                                      ? `${item.order}. ${item.title.trim()}`
+                                      : `${item.order}`;
+                                  return (
+                                    <Card
+                                      key={`${section.order}-${item.order}-${item.title}`}
+                                      size="small"
+                                      style={{
+                                        borderRadius: 14,
+                                        background: "#fafafa",
+                                        borderColor: "#ececec",
+                                      }}
+                                      title={itemTitle}
+                                    >
+                                      {item.summary ? (
+                                        <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                          {item.summary}
+                                        </Paragraph>
+                                      ) : (
+                                        <Text type="secondary">暂无可展示内容。</Text>
+                                      )}
+                                    </Card>
+                                  );
+                                })}
+                              </Space>
                             ) : (
-                              <Text type="secondary">该题暂无可展示内容。</Text>
+                              <Text type="secondary">该部分暂无小点可展示。</Text>
                             )}
                           </Space>
                         </Card>
@@ -291,10 +276,9 @@ export default function OverallNotesClient({ interviewId }: Props) {
                     })}
                   </Space>
                 ) : (
-                  <Text type="secondary">暂无自动或手工生成的 Notes。</Text>
+                  <Text type="secondary">暂无智能纪要。</Text>
                 )}
               </Card>
-
             </Space>
           )}
         </div>

@@ -5,6 +5,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 from Fewshot import build_fewshot_prompt_block
+from ModelTranscript import parse_json_payload
 
 
 def escape_inner_quotes_in_field(text: str, field_name: str) -> str:
@@ -366,6 +367,288 @@ def generate_overall_interview_note(
     return content
 
 
+def _normalize_minutes_outline_items(raw_items: Any) -> List[Dict[str, Any]]:
+    """
+    将模型返回的纪要大纲小点列表归一化为统一结构。
+
+    参数:
+        raw_items: 模型返回的 items / points / children 原始内容。
+
+    返回:
+        规范化后的 item 列表。
+    """
+    if not isinstance(raw_items, list):
+        return []
+
+    items: List[Dict[str, Any]] = []
+    for item_index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or "").strip()
+        summary = str(item.get("summary") or item.get("content") or "").strip()
+        if not title and not summary:
+            continue
+        items.append(
+            {
+                "order": int(item.get("order") or item_index),
+                "title": title,
+                "summary": summary,
+            }
+        )
+    return items
+
+
+def _normalize_minutes_outline_sections(raw_sections: Any) -> List[Dict[str, Any]]:
+    """
+    将模型返回的纪要大纲章节列表归一化为统一结构。
+
+    参数:
+        raw_sections: 模型返回的 sections / outline 原始内容。
+
+    返回:
+        规范化后的章节列表。
+    """
+    if not isinstance(raw_sections, list):
+        return []
+
+    sections: List[Dict[str, Any]] = []
+    for section_index, section in enumerate(raw_sections, start=1):
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or section.get("name") or "").strip()
+        summary = str(section.get("summary") or section.get("content") or "").strip()
+        items = _normalize_minutes_outline_items(section.get("items") or section.get("points") or section.get("children"))
+        if not title and not summary and not items:
+            continue
+        sections.append(
+            {
+                "order": int(section.get("order") or section_index),
+                "title": title,
+                "summary": summary,
+                "items": items,
+            }
+        )
+    return sections
+
+
+def parse_minutes_outline_response(content: str) -> Dict[str, Any]:
+    """
+    将模型返回的智能纪要大纲文本解析为结构化字典。
+
+    参数:
+        content: 模型原始输出文本。
+
+    返回:
+        归一化后的纪要大纲字典。
+    """
+    try:
+        payload = parse_json_payload(content)
+    except Exception:
+        return {
+            "document_title": "",
+            "core_summary": "",
+            "sections": [],
+            "action_items": [],
+            "highlights": [],
+            "llm_raw_output": content,
+        }
+    if not isinstance(payload, dict):
+        return {
+            "document_title": "",
+            "core_summary": "",
+            "sections": [],
+            "action_items": [],
+            "highlights": [],
+            "llm_raw_output": content,
+        }
+
+    raw_sections = payload.get("sections")
+    if raw_sections is None:
+        raw_sections = payload.get("outline")
+
+    action_items = payload.get("action_items") or []
+    if not isinstance(action_items, list):
+        action_items = []
+    highlights = payload.get("highlights") or []
+    if not isinstance(highlights, list):
+        highlights = []
+
+    normalized_sections = _normalize_minutes_outline_sections(raw_sections)
+    return {
+        "document_title": str(payload.get("document_title") or payload.get("title") or "").strip(),
+        "core_summary": str(payload.get("core_summary") or payload.get("summary") or "").strip(),
+        "sections": normalized_sections,
+        "outline": normalized_sections,
+        "action_items": action_items,
+        "highlights": [str(item).strip() for item in highlights if str(item).strip()],
+        "llm_raw_output": content,
+    }
+
+
+def generate_minutes_outline_from_transcript(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    transcript_text: str,
+) -> Dict[str, Any]:
+    """
+    基于整篇转录文本生成智能纪要大纲。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        transcript_text: 经清洗后的整篇访谈转录全文。
+
+    返回:
+        结构化纪要大纲字典。
+    """
+    system_prompt = (
+        "你是专业的医疗咨询行业专家与信息提炼专家，精通医疗领域专业术语、咨询场景核心要点，"
+        "擅长精准提取转录文本中的关键信息，规避口语化、冗余内容，同时严格遵循以下规则，完成转录文本的结构化总结："
+        "一、核心规则（必严格遵守）"
+        "1. 信息提取范围：仅提取文本中客观事实、明确结论、具体数据、核心观点、可落地行动项，严禁添加任何主观推理、猜测、补充性内容，不延伸文本未提及的信息。"
+        "2. 内容筛选：彻底去除口语化表达（如“嗯、啊、这个、那个、其实”）、重复表述、冗余铺垫、寒暄问候（如“你好、辛苦、再见”）及与咨询核心无关的闲聊内容。"
+        "3. 结构要求：严格按“核心总结 → 分点要点 → 待办/结论”的逻辑分章节呈现，章节划分清晰，层次分明，符合医疗咨询文本的专业呈现习惯。"
+        "4. 关键信息保留：完整保留文本中出现的关键数字、比例、时间节点、人名、医疗机构名称、医疗专业术语，不得遗漏或简化，确保信息的准确性和专业性。"
+        "5. 语言风格：整体语言简洁、严谨、专业、书面化，采用要点式输出（分点不冗长，每点核心信息不重复），避免口语化、随意化表述。"
+        "6. 信息严谨性：不确定、模糊不清的信息不编造、不补充，仅提炼文本中明确出现、无歧义的内容；若文本中存在矛盾信息，均如实提取，不主观判断对错。"
+        "7. 核心总结要求：单独生成1段整体核心总结（总览），高度概括转录文本的核心内容，涵盖咨询主题、核心结论/观点，字数适中（不冗余、不遗漏关键），作为全文总起。"
+        "8. 分点要点要求：按咨询讨论的主题，划分独立章节（每章对应一个核心讨论主题），每章内提炼具体要点，采用列表形式呈现（有序/无序均可，保持一致），要点之间不交叉、不重复。"
+        "9. 待办/结论要求：单独提取文本中明确的行动项、待办事项（如有），需清晰标注负责人（明确提及的人名/岗位）、完成时间（明确提及的时间节点）；无待办事项则单独呈现文本核心结论，不强行添加。"
+        "10. 关键信息高亮：对文本中的关键数据、比例、数字、明确判断结论进行高亮处理（可采用加粗形式），突出核心信息，方便快速抓取重点。"
+        "只输出 JSON，不要输出额外解释。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        "请对以下转录文本进行结构化总结，遵守以下规则：\n"
+        "1. 只提取客观事实、结论、数据、核心观点、可落地行动项，不添加主观推理、猜测、补充性内容，不延伸文本未提及的信息。\n"
+        "2. 彻底去除口语、重复、冗余、寒暄、打断、无关对话。\n"
+        "3. 输出结构固定为三段式：① 1段整体核心总结（总览）② 按讨论主题分章节，每章提炼要点，用列表呈现③ 提取行动项/待办（如有）\n"
+        "4. 完整保留关键数字、比例、时间、患者量、处方占比、专业术语。\n"
+        "5. 语言简洁、专业、书面化，全程要点式输出，不写长段落。\n"
+        "6. 不确定内容不推测、不补充，只写文本中明确出现的信息。\n"
+        "7. 关键数据、比例、阈值、核心结论加粗高亮。\n"
+        "8. 严格忠实原文，不漏信息、不改观点、不合并语义、不跳模块。\n"
+        "9. 医生关键原话用“”标注。\n"
+        "10. 能用表格呈现比例/分布时，必须用表格。\n\n"
+        "请输出 JSON，结构参考如下：\n"
+        "{\n"
+        '  "core_summary": "1段整体核心总结（总览）",\n'
+        '  "sections": [\n'
+        "    {\n"
+        '      "order": 1,\n'
+        '      "title": "第一部分：...",\n'
+        '      "summary": "该部分的简短概述",\n'
+        '      "items": [\n'
+        "        {\n"
+        '          "order": 1,\n'
+        '          "title": "小点标题",\n'
+        '          "summary": "小点要点总结"\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ],\n"
+        '  "action_items": [\n'
+        "    {\n"
+        '      "owner": "负责人，如有则写",\n'
+        '      "time": "时间，如有则写",\n'
+        '      "content": "待办内容"\n'
+        "    }\n"
+        "  ],\n"
+        '  "highlights": ["关键数据、比例、数字、判断结论"]\n'
+        "}\n\n"
+        f"【整篇访谈转录】\n{transcript_text}\n\n"
+        "补充要求：\n"
+        "1. 章节数量控制在 3 到 8 个之间，避免过碎。\n"
+        "2. 每个章节下列出 2 到 6 个小点。\n"
+        "3. 章节和小点要概括整场访谈的核心主题，而不是机械按问卷逐题抄写。\n"
+        "4. 如果某些问题明显属于同一主题，请合并到同一章节或小点，但不能丢失原文信息。\n"
+        "5. 如果原文没有对应内容，不要虚构章节或待办。\n"
+        "6. 行动项若存在，必须标注负责人、时间；若无则输出“无”。\n"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    payload = parse_minutes_outline_response(raw_output)
+    if not payload.get("document_title"):
+        payload["document_title"] = ""
+    return payload
+
+
+def generate_minutes_item_summary(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    interview_context_block: str,
+    section_title: str,
+    section_summary: str,
+    item_title: str,
+    item_summary: str,
+    segments: List[Dict[str, Any]],
+) -> str:
+    """
+    基于纪要大纲的小点与相关访谈片段，生成单个小点的纪要正文。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        interview_context_block: 已格式化好的访谈背景块。
+        section_title: 章节标题，例如“第一部分：流行病学及就诊情况”。
+        section_summary: 章节概述，用于帮助模型把握主题边界。
+        item_title: 小点标题，例如“MS 总体发病趋势”。
+        item_summary: 小点的原始概述，用于补充语义。
+        segments: 针对该小点检索到的相关访谈片段。
+
+    返回:
+        适合直接写入纪要结果的中文总结文本。
+    """
+    context_lines: List[str] = []
+    for idx, seg in enumerate(segments, start=1):
+        sid = seg.get("summary_id", "")
+        speaker = seg.get("speaker", "")
+        text = str(seg.get("text", "")).replace("\n", " ")
+        score = seg.get("score", 0.0)
+        context_lines.append(f"[{idx}] summary_id={sid} speaker={speaker} score={score:.4f}\n{text}")
+    context_block = "\n\n".join(context_lines) if context_lines else "（当前没有检索到相关片段）"
+
+    system_prompt = (
+        "你是专业的医疗咨询行业专家与信息提炼专家，精通医疗领域专业术语、咨询场景核心要点，"
+        "擅长精准提取转录文本中的关键信息，规避口语化、冗余内容，同时严格遵循以下规则，完成转录文本的结构化总结："
+        "一、核心规则（必严格遵守）"
+        "1. 信息提取范围：仅提取文本中客观事实、明确结论、具体数据、核心观点、可落地行动项，严禁添加任何主观推理、猜测、补充性内容，不延伸文本未提及的信息。"
+        "2. 内容筛选：彻底去除口语化表达（如“嗯、啊、这个、那个、其实”）、重复表述、冗余铺垫、寒暄问候（如“你好、辛苦、再见”）及与咨询核心无关的闲聊内容。"
+        "3. 结构要求：严格按“核心总结 → 分点要点 → 待办/结论”的逻辑分章节呈现，章节划分清晰，层次分明，符合医疗咨询文本的专业呈现习惯。"
+        "4. 关键信息保留：完整保留文本中出现的关键数字、比例、时间节点、人名、医疗机构名称、医疗专业术语，不得遗漏或简化，确保信息的准确性和专业性。"
+        "5. 语言风格：整体语言简洁、严谨、专业、书面化，采用要点式输出（分点不冗长，每点核心信息不重复），避免口语化、随意化表述。"
+        "6. 信息严谨性：不确定、模糊不清的信息不编造、不补充，仅提炼文本中明确出现、无歧义的内容；若文本中存在矛盾信息，均如实提取，不主观判断对错。"
+        "7. 核心总结要求：单独生成1段整体核心总结（总览），高度概括转录文本的核心内容，涵盖咨询主题、核心结论/观点，字数适中（不冗余、不遗漏关键），作为全文总起。"
+        "8. 分点要点要求：按咨询讨论的主题，划分独立章节（每章对应一个核心讨论主题），每章内提炼具体要点，采用列表形式呈现（有序/无序均可，保持一致），要点之间不交叉、不重复。"
+        "9. 待办/结论要求：单独提取文本中明确的行动项、待办事项（如有），需清晰标注负责人（明确提及的人名/岗位）、完成时间（明确提及的时间节点）；无待办事项则单独呈现文本核心结论，不强行添加。"
+        "10. 关键信息高亮：对文本中的关键数据、比例、数字、明确判断结论进行高亮处理（可采用加粗形式），突出核心信息，方便快速抓取重点。"
+        "只输出 JSON，不要输出额外解释。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"{interview_context_block}"
+        "下面是一条纪要大纲小点及其相关访谈片段，请综合这些信息生成该小点的总结。\n\n"
+        f"【章节标题】\n{section_title or '未命名章节'}\n\n"
+        f"【章节概述】\n{section_summary or '（无）'}\n\n"
+        f"【小点标题】\n{item_title or '未命名小点'}\n\n"
+        f"【小点概述】\n{item_summary or '（无）'}\n\n"
+        "【相关访谈片段】\n"
+        f"{context_block}\n\n"
+        "要求：\n"
+        "1. 只基于片段中的信息进行总结，不要引入片段外事实；如果片段之间存在冲突，请直接写出冲突，不要强行统一。\n"
+        "2. 输出内容要像智能纪要中的正文，严格、完整、无遗漏，简洁、准确、书面化。\n"
+        "3. 必须保留与当前小点相关的关键数字、比例、时间、患者量、处方占比、专业术语。\n"
+        "4. 关键数据、比例、阈值、核心结论加粗高亮；医生关键原话用“”标注。\n"
+        "5. 如有必要，可使用表格或要点式表达，但不要展开分析过程。\n"
+        "6. 如果当前片段不足以支撑这个小点，请直接输出“当前访谈中信息不足”。\n"
+        "7. 不要输出标题、分析过程、证据引用或 JSON。\n"
+    )
+    content = generate_fn(system_prompt, user_prompt).strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
+    return content
+
+
 def _parse_json_with_repair(
     generate_fn: Callable[[str, str], str],
     content: str,
@@ -567,28 +850,26 @@ def generate_kbq_dimensions(
         包含 `dimensions` 的字典。
     """
     system_prompt = (
-        "你是一名医学、药学、体外诊断和市场调研领域的访谈分析专家。"
-        "你的任务是：针对单条 key BQ 抽取后续生成答案所需的分析维度。"
-        "你必须只输出语法完全合法、可以被 json.loads 直接解析的 JSON。"
+        "你是一名医学、药学、体外诊断和市场调研领域的分析专家。"
+        "你的任务是把单条 key BQ 抽象成 2 到 4 个适合做纪要的分析维度。"
+        "只输出严格合法的 JSON，不要输出额外说明。"
     )
     user_prompt = (
         f"{project_context_block}"
         f"{interview_context_block}"
         "下面是一条 key BQ，请你抽取 2 到 4 个适合后续生成 notes 的分析维度。"
         "维度应当是可操作的分析框架，而不是空泛标签。\n\n"
-        f"【key BQ】\n{key_bq_text or '（未提供 key BQ）'}\n\n"
-        "要求：\n"
-        "1. 优先抽出能覆盖问题核心的 2 到 4 个维度；如果 key BQ 很窄，可以少于 2 个。\n"
-        "2. 维度名称要简洁、明确、可用于后续检索和分段回答。\n"
-        "3. 维度说明要指出该维度关注的具体信息点。\n"
-        "4. 只输出 JSON，不要添加解释性文字。\n"
-        "JSON 的参考结构如下：\n"
+        f"【key BQ】\n{key_bq_text}\n\n"
+        "请输出 JSON，结构参考如下：\n"
         "{\n"
         '  "dimensions": [\n'
-        '    {"name": "疾病构成", "description": "关注患者疾病类型、构成和分布情况"},\n'
-        '    {"name": "患者规模", "description": "关注患者规模、覆盖范围和病例量"}\n'
+        '    {"name": "维度名称", "description": "维度描述"}\n'
         "  ]\n"
         "}\n"
+        "要求：\n"
+        "1. 维度数量控制在 2 到 4 个。\n"
+        "2. 维度应抽象、稳定、适合后续检索总结。\n"
+        "3. 不要输出不必要的解释。\n"
     )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_dimensions_response(generate_fn, content)
@@ -637,39 +918,29 @@ def generate_kbq_notes(
     dimensions_block = "\n".join(dimension_lines) if dimension_lines else "（未抽取到维度）"
 
     system_prompt = (
-        "你是一名医学、药学、体外诊断和市场调研领域的访谈分析专家，"
-        "负责根据 key BQ、分析维度和检索到的访谈片段生成结构化的 KBQ Notes。"
-        "你必须严格基于给定的片段和维度，不要编造事实，并且必须输出语法完全合法、"
-        "可以被 json.loads 直接解析的 JSON。"
+        "你是一名医学、药学、体外诊断和市场调研领域的访谈纪要专家。"
+        "你的任务是根据 key BQ、维度和相关访谈片段生成 KBQ Notes。"
+        "只输出严格合法的 JSON，不要输出额外说明。"
     )
     user_prompt = (
         f"{project_context_block}"
         f"{interview_context_block}"
-        "下面是一条 key BQ、已抽取的分析维度，以及相关访谈片段。请按照维度生成 KBQ Notes。\n\n"
-        f"【key BQ】\n{key_bq_text or '（未提供 key BQ）'}\n\n"
-        "【分析维度】\n"
-        f"{dimensions_block}\n\n"
-        "【相关访谈片段】\n"
-        f"{context_block}\n\n"
-        "要求：\n"
-        "1. 只使用上述片段中的信息；如果某个维度没有原文证据，就不要输出该维度。\n"
-        "2. summary 只写 1 到 3 句高度概括；analysis 负责更详细的分析。\n"
-        "3. evidence 中尽量引用与该维度直接相关的原文短片段。\n"
-        "4. 请给出一个 0 到 1 之间的置信度 confidence。\n"
-        "5. 只输出 JSON，不要包含额外说明。\n"
-        "JSON 的参考结构如下：\n"
+        "请基于以下 key BQ、已抽取的分析维度，以及相关访谈片段生成 KBQ Notes。\n\n"
+        f"【key BQ】\n{key_bq_text}\n\n"
+        f"【维度】\n{dimensions_block}\n\n"
+        f"【相关访谈片段】\n{context_block}\n\n"
+        "请输出 JSON，结构参考如下：\n"
         "{\n"
         '  "key_bq": "原始 key BQ",\n'
         '  "dimension_notes": [\n'
-        '    {\n'
-        '      "dimension": "疾病构成",\n'
-        '      "summary": "一句话或几句话的概括",\n'
-        '      "analysis": "更详细的分析和解释",\n'
-        '      "evidence": [{"summary_id": 0, "speaker": "speaker1", "text": "与该维度直接相关的原文片段"}]\n'
-        '    }\n'
-        "  ],\n"
-        '  "confidence": 0.0\n'
+        '    {"dimension": "维度名称", "summary": "总结内容"}\n'
+        "  ]\n"
         "}\n"
+        "要求：\n"
+        "1. 只基于片段内容进行总结。\n"
+        "2. 没有证据支撑的维度不要输出。\n"
+        "3. 不要输出分析过程和证据。\n"
+        "4. 只输出 JSON。\n"
     )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_notes_response(generate_fn, content)

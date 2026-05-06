@@ -9,6 +9,8 @@ from ModelNotes import (
     escape_inner_quotes_in_notes_json,
     generate_kbq_dimensions,
     generate_kbq_notes,
+    generate_minutes_outline_from_transcript,
+    generate_minutes_item_summary,
     generate_notes_for_question,
     generate_notes_for_question_with_fewshot,
     generate_overall_interview_note,
@@ -40,15 +42,22 @@ class ModelClient:
     具体 provider、转录纠错和 Notes 生成逻辑已拆到独立模块。
     """
 
-    _provider: Optional[BaseLLMProvider] = None
-    _provider_name: Optional[str] = None
-    _model_name: Optional[str] = None
-    _api_key: Optional[str] = None
-    _base_url: Optional[str] = None
-    _config_revision: int = -1
+    _notes_provider: Optional[BaseLLMProvider] = None
+    _notes_provider_name: Optional[str] = None
+    _notes_model_name: Optional[str] = None
+    _notes_api_key: Optional[str] = None
+    _notes_base_url: Optional[str] = None
+    _notes_config_revision: int = -1
+
+    _transcript_provider: Optional[BaseLLMProvider] = None
+    _transcript_provider_name: Optional[str] = None
+    _transcript_model_name: Optional[str] = None
+    _transcript_api_key: Optional[str] = None
+    _transcript_base_url: Optional[str] = None
+    _transcript_config_revision: int = -1
 
     @classmethod
-    def _resolve_provider_name(cls) -> str:
+    def _resolve_provider_name(cls, kind: str) -> str:
         """
         解析当前启用的 provider 名称。
 
@@ -58,11 +67,37 @@ class ModelClient:
         返回:
             归一化后的 provider 名称，小写字符串。
         """
-        provider_name = (config.LLM_PROVIDER or "anthropic").strip().lower()
+        if kind == "transcript":
+            provider_name = (config.TRANSCRIPT_LLM_PROVIDER or config.LLM_PROVIDER or "openai").strip().lower()
+        else:
+            provider_name = (config.NOTES_LLM_PROVIDER or config.LLM_PROVIDER or "openai").strip().lower()
         return provider_name or "anthropic"
 
     @classmethod
-    def _ensure_client(cls) -> None:
+    def _resolve_runtime_profile(cls, kind: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+        """
+        解析指定用途的运行时模型配置。
+
+        参数:
+            kind: 配置用途，`transcript` 表示纠错/清洗，`notes` 表示 Notes / minutes。
+
+        返回:
+            (provider_name, api_key, base_url, model_name) 四元组。
+        """
+        if kind == "transcript":
+            provider_name = cls._resolve_provider_name("transcript")
+            api_key = config.TRANSCRIPT_LLM_API_KEY or config.LLM_API_KEY
+            base_url = config.TRANSCRIPT_LLM_BASE_URL or config.LLM_BASE_URL
+            model_name = config.TRANSCRIPT_LLM_MODEL_NAME or config.LLM_MODEL_NAME
+        else:
+            provider_name = cls._resolve_provider_name("notes")
+            api_key = config.NOTES_LLM_API_KEY or config.LLM_API_KEY
+            base_url = config.NOTES_LLM_BASE_URL or config.LLM_BASE_URL
+            model_name = config.NOTES_LLM_MODEL_NAME or config.LLM_MODEL_NAME
+        return provider_name, api_key, base_url, model_name
+
+    @classmethod
+    def _ensure_client(cls, kind: str) -> None:
         """
         按当前运行时配置初始化或刷新 provider。
 
@@ -72,27 +107,74 @@ class ModelClient:
         返回:
             无返回值；如果配置不完整则抛出异常。
         """
-        provider_name = cls._resolve_provider_name()
-        api_key = config.LLM_API_KEY
-        base_url = config.LLM_BASE_URL
-        model_name = config.LLM_MODEL_NAME
+        provider_name, api_key, base_url, model_name = cls._resolve_runtime_profile(kind)
+        if kind == "transcript":
+            cached_provider = cls._transcript_provider
+            cached_provider_name = cls._transcript_provider_name
+            cached_model_name = cls._transcript_model_name
+            cached_api_key = cls._transcript_api_key
+            cached_base_url = cls._transcript_base_url
+            cached_revision = cls._transcript_config_revision
+        else:
+            cached_provider = cls._notes_provider
+            cached_provider_name = cls._notes_provider_name
+            cached_model_name = cls._notes_model_name
+            cached_api_key = cls._notes_api_key
+            cached_base_url = cls._notes_base_url
+            cached_revision = cls._notes_config_revision
+
         if (
-            cls._provider is not None
-            and cls._provider_name == provider_name
-            and cls._model_name == model_name
-            and cls._api_key == api_key
-            and cls._base_url == base_url
-            and cls._config_revision == config.revision
+            cached_provider is not None
+            and cached_provider_name == provider_name
+            and cached_model_name == model_name
+            and cached_api_key == api_key
+            and cached_base_url == base_url
+            and cached_revision == config.revision
         ):
             return
         if not api_key or not model_name:
-            raise RuntimeError("LLM_PROVIDER / LLM_API_KEY / LLM_MODEL_NAME 未正确配置")
-        cls._provider = build_provider(provider_name, api_key, base_url)
-        cls._provider_name = provider_name
-        cls._model_name = model_name
-        cls._api_key = api_key
-        cls._base_url = base_url
-        cls._config_revision = config.revision
+            if kind == "transcript":
+                raise RuntimeError("TRANSCRIPT_LLM_PROVIDER / TRANSCRIPT_LLM_API_KEY / TRANSCRIPT_LLM_MODEL_NAME 未正确配置")
+            raise RuntimeError("NOTES_LLM_PROVIDER / NOTES_LLM_API_KEY / NOTES_LLM_MODEL_NAME 未正确配置")
+        provider = build_provider(provider_name, api_key, base_url)
+        if kind == "transcript":
+            cls._transcript_provider = provider
+            cls._transcript_provider_name = provider_name
+            cls._transcript_model_name = model_name
+            cls._transcript_api_key = api_key
+            cls._transcript_base_url = base_url
+            cls._transcript_config_revision = config.revision
+        else:
+            cls._notes_provider = provider
+            cls._notes_provider_name = provider_name
+            cls._notes_model_name = model_name
+            cls._notes_api_key = api_key
+            cls._notes_base_url = base_url
+            cls._notes_config_revision = config.revision
+
+    @classmethod
+    def _generate_with_kind(cls, kind: str, system_prompt: str, user_prompt: str) -> str:
+        """
+        使用指定用途的 provider 执行一次文本生成。
+
+        参数:
+            kind: 模型用途，`transcript` 或 `notes`。
+            system_prompt: 系统提示词，用于定义角色和输出规范。
+            user_prompt: 用户提示词，用于描述当前任务。
+
+        返回:
+            模型返回的文本字符串。
+        """
+        cls._ensure_client(kind)
+        if kind == "transcript":
+            provider = cls._transcript_provider
+            model_name = cls._transcript_model_name
+        else:
+            provider = cls._notes_provider
+            model_name = cls._notes_model_name
+        if provider is None or model_name is None:
+            raise RuntimeError("LLM provider 未正确初始化")
+        return provider.generate(system_prompt, user_prompt, model_name)
 
     @classmethod
     def _build_project_context_block(cls, project_context: Optional[str]) -> str:
@@ -124,10 +206,21 @@ class ModelClient:
         返回:
             模型返回的文本字符串。
         """
-        cls._ensure_client()
-        if cls._provider is None or cls._model_name is None:
-            raise RuntimeError("LLM provider 未正确初始化")
-        return cls._provider.generate(system_prompt, user_prompt, cls._model_name)
+        return cls._generate_with_kind("notes", system_prompt, user_prompt)
+
+    @classmethod
+    def generate_transcript(cls, system_prompt: str, user_prompt: str) -> str:
+        """
+        使用 transcript 专用 provider 执行一次文本生成。
+
+        参数:
+            system_prompt: 系统提示词，用于定义角色和输出规范。
+            user_prompt: 用户提示词，用于描述当前任务。
+
+        返回:
+            模型返回的文本字符串。
+        """
+        return cls._generate_with_kind("transcript", system_prompt, user_prompt)
 
     @classmethod
     def _strip_code_fences(cls, text: str) -> str:
@@ -202,7 +295,7 @@ class ModelClient:
             带 `corrected_text`、`corrections`、`uncertain_terms` 的记录列表。
         """
         return correct_transcript_batch(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             transcript=transcript,
             term_hints=term_hints,
@@ -232,7 +325,7 @@ class ModelClient:
             带 `corrected_text`、`corrections`、`uncertain_terms` 的记录列表。
         """
         return apply_correction_fallback_batch(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             transcript=transcript,
             correction_rules=correction_rules,
@@ -261,7 +354,7 @@ class ModelClient:
             带 `clean_text` 的记录列表。
         """
         return clean_transcript_batch(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             transcript=transcript,
             term_hints=term_hints,
@@ -293,7 +386,7 @@ class ModelClient:
             兼容旧接口的单条结果字典。
         """
         return clean_speaker_utterance(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             speaker_text=speaker_text,
             speaker_role=speaker_role,
@@ -321,7 +414,7 @@ class ModelClient:
             访谈背景字典。
         """
         return extract_interview_context(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             full_text=full_text,
             term_hints=term_hints,
@@ -413,7 +506,7 @@ class ModelClient:
             适合写入 `bh_project_interview.note_content` 的总结文本。
         """
         return generate_overall_interview_note(
-            generate_fn=cls.generate,
+            generate_fn=cls.generate_transcript,
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
@@ -474,6 +567,65 @@ class ModelClient:
             key_bq_text=key_bq_text,
             dimensions=dimensions,
             segments=segments,
+        )
+
+    @classmethod
+    def generate_minutes_item_summary(
+        cls,
+        section_title: str,
+        section_summary: str,
+        item_title: str,
+        item_summary: str,
+        segments: List[Dict[str, Any]],
+        project_context: Optional[str] = None,
+        interview_context: Optional[Any] = None,
+    ) -> str:
+        """
+        基于纪要大纲小点与检索片段生成单个小点的纪要正文。
+
+        参数:
+            section_title: 章节标题。
+            section_summary: 章节概述。
+            item_title: 小点标题。
+            item_summary: 小点概述。
+            segments: 检索得到的相关片段。
+            project_context: 可选项目背景文本。
+            interview_context: 可选访谈背景摘要。
+
+        返回:
+            一段适合写入智能纪要的小点总结文本。
+        """
+        return generate_minutes_item_summary(
+            generate_fn=cls.generate,
+            project_context_block=cls._build_project_context_block(project_context),
+            interview_context_block=cls._build_interview_context_block(interview_context),
+            section_title=section_title,
+            section_summary=section_summary,
+            item_title=item_title,
+            item_summary=item_summary,
+            segments=segments,
+        )
+
+    @classmethod
+    def generate_minutes_outline_from_transcript(
+        cls,
+        transcript_text: str,
+        project_context: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于整篇访谈转录生成智能纪要大纲。
+
+        参数:
+            transcript_text: 经清洗后的整篇访谈转录全文。
+            project_context: 可选项目背景文本。
+
+        返回:
+            结构化纪要大纲字典。
+        """
+        return generate_minutes_outline_from_transcript(
+            generate_fn=cls.generate,
+            project_context_block=cls._build_project_context_block(project_context),
+            transcript_text=transcript_text,
         )
 
     @classmethod

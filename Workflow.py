@@ -14,9 +14,22 @@ from Hotword import load_correction_rules_from_state, load_term_hints_from_state
 from QuestionnaireHotword import load_reviewed_questionnaire_hotwords
 from DbAccess import DbAccess
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
+from MinutesWorkflow import generate_minutes_for_interview
 from ProjectContext import load_project_context_by_id
-from NotesWorkflow import run_notes_generation_for_interview
 from config import config
+
+
+def _workflow_log(interview_id: int | None, stage: str, message: str) -> None:
+    """
+    打印工作流阶段日志，便于定位 ASR、纠错、写库等步骤的执行位置。
+
+    参数:
+        interview_id: 访谈 ID；未知时可传 None。
+        stage: 阶段名，例如 transcribe、clean_with_llm、write_summary。
+        message: 阶段要输出的日志内容。
+    """
+    prefix = f"[WORKFLOW] interview_id={interview_id if interview_id is not None else '-'} stage={stage}"
+    print(f"{prefix} {message}", flush=True)
 
 
 def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
@@ -65,13 +78,27 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
         return {"success": False, "message": f"upload step unexpected error: {e}"}
 
 
-def step_transcribe(audio_url: str) -> Dict[str, Any]:
+def step_transcribe(audio_url: str, interview_id: int | None = None) -> Dict[str, Any]:
     """
     步骤 2：调用 ASR，将云上音频转写为 {full_text, speakers[]} 结构。
     """
     try:
+        _workflow_log(interview_id, "transcribe", f"start audio_url={audio_url}")
         asr_result = run_asr(audio_url) or {}
+        if isinstance(asr_result, dict):
+            _workflow_log(
+                interview_id,
+                "transcribe",
+                f"done keys={sorted(asr_result.keys())} code={asr_result.get('code')} message={asr_result.get('message')}",
+            )
+        else:
+            _workflow_log(interview_id, "transcribe", f"done type={type(asr_result).__name__}")
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "transcribe",
+            f"failed error={e} traceback={traceback.format_exc()}",
+        )
         return {"success": False, "message": f"transcribe failed: {e}"}
     return {"success": True, "asr_result": asr_result}
 
@@ -132,6 +159,7 @@ def step_extract_interview_context(
     步骤 4：从已落库的 file_content 中读取整篇 ASR 全文，提炼访谈背景说明。
     """
     try:
+        _workflow_log(interview_id, "extract_interview_context", "start")
         row = DbAccess.get_interview_by_id(interview_id)
         if not row:
             return {"success": False, "message": f"interview {interview_id} not found"}
@@ -148,7 +176,17 @@ def step_extract_interview_context(
             project_context=project_context,
             term_hints=term_hints,
         )
+        _workflow_log(
+            interview_id,
+            "extract_interview_context",
+            f"done keys={sorted(interview_context.keys()) if isinstance(interview_context, dict) else type(interview_context).__name__}",
+        )
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "extract_interview_context",
+            f"failed error={e} traceback={traceback.format_exc()}",
+        )
         return {"success": False, "message": f"extract interview context failed: {e}"}
     return {"success": True, "interview_context": interview_context}
 
@@ -159,6 +197,7 @@ def step_clean_with_llm(
     interview_context: Dict[str, Any] | str | None = None,
     term_hints: List[str] | None = None,
     correction_rules: List[str] | None = None,
+    interview_id: int | None = None,
 ) -> Dict[str, Any]:
     """
     步骤 5：先逐段纠错，再做热词兜底纠错，返回更新后的 JSON 字符串。
@@ -170,6 +209,7 @@ def step_clean_with_llm(
     speaker_roles = {"1": "interviewer", "2": "interviewee"}
     effective_term_hints = merge_term_hints(term_hints or [])
     try:
+        _workflow_log(interview_id, "clean_with_llm", "start")
         updated_json = clean_file_content_json(
             file_content_json=file_content_json,
             speaker_roles=speaker_roles,
@@ -178,7 +218,17 @@ def step_clean_with_llm(
             project_context=project_context,
             interview_context=interview_context,
         )
+        _workflow_log(
+            interview_id,
+            "clean_with_llm",
+            f"done json_len={len(updated_json) if isinstance(updated_json, str) else 'n/a'}",
+        )
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "clean_with_llm",
+            f"failed error={e} traceback={traceback.format_exc()}",
+        )
         return {"success": False, "message": f"clean with llm failed: {e}"}
     return {"success": True, "cleaned_json": updated_json}
 
@@ -194,6 +244,7 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
         - modify: 0
     """
     try:
+        _workflow_log(interview_id, "write_summary", "start")
         obj = json.loads(cleaned_json)
         speakers = obj.get("result", {}).get("speakers") or []
         if not speakers:
@@ -210,7 +261,13 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
                 final_text = str(seg.get("speaker_content") or "").strip()
             seg["speaker_content_clean"] = final_text
         inserted = DbAccess.insert_summary_from_cleaned_speakers(interview_id, speakers)
+        _workflow_log(interview_id, "write_summary", f"done inserted={inserted}")
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "write_summary",
+            f"failed error={e} traceback={traceback.format_exc()}",
+        )
         return {"success": False, "message": f"write summary failed: {e}"}
 
     return {"success": True, "inserted": inserted}
@@ -308,13 +365,24 @@ def step_generate_overall_note(
     key_bq_text = _extract_key_bq_text(core_problem)
     client = ModelClient()
     try:
+        _workflow_log(interview_id, "generate_overall_note", "start")
         note_content = client.generate_overall_interview_note(
             key_bq_text=key_bq_text,
             transcript_text=transcript_text,
             project_context=project_context,
             interview_context=interview_context,
         )
+        _workflow_log(
+            interview_id,
+            "generate_overall_note",
+            f"done note_len={len(note_content) if isinstance(note_content, str) else 'n/a'}",
+        )
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "generate_overall_note",
+            f"failed error={e} traceback={traceback.format_exc()}",
+        )
         return {"success": False, "message": f"generate overall note failed: {e}"}
 
     note_content = (note_content or "").strip()
@@ -350,9 +418,11 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             DbAccess.update_interview_status(interview_id, 3)
         except Exception:
             pass
+        _workflow_log(interview_id, stage, f"failed detail={detail}")
         return {"success": False, "stage": stage, "detail": detail}
 
     try:
+        _workflow_log(interview_id, "run_workflow", "start")
         try:
             DbAccess.update_interview_status(interview_id, 1)
         except Exception:
@@ -362,10 +432,17 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         interview_row = DbAccess.get_interview_by_id(interview_id)
         if not interview_row:
             return fail("load_interview", {"message": f"interview {interview_id} not found"})
+        _workflow_log(interview_id, "load_interview", "done")
         project_id = interview_row.get("parse_project_id")
         if project_id is None:
             return fail("load_project", {"message": "project id missing from interview"})
+        _workflow_log(interview_id, "load_project", f"done project_id={project_id}")
         project_context = load_project_context_by_id(int(project_id))
+        _workflow_log(
+            interview_id,
+            "load_project_context",
+            f"done length={len(project_context) if isinstance(project_context, str) else 'n/a'}",
+        )
         interview_term_hints = load_term_hints_from_state(interview_id=interview_id)
         correction_rules = load_correction_rules_from_state(interview_id=interview_id)
         core_problem = interview_row.get("core_problem")
@@ -374,6 +451,11 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             interview_id,
         )
         term_hints = merge_term_hints(interview_term_hints, questionnaire_term_hints)
+        _workflow_log(
+            interview_id,
+            "load_hotwords",
+            f"done term_hints={len(term_hints)} correction_rules={len(correction_rules)}",
+        )
 
         # 1. 本地上云 / 预签名 URL
         up = step_upload_interview_audio(interview_id)
@@ -381,12 +463,18 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             return fail("upload", up)
         object_key = up["object_key"]
         audio_url = up["audio_url"]
+        _workflow_log(interview_id, "upload", f"done object_key={object_key}")
 
         # 2. ASR
-        tr = step_transcribe(audio_url)
+        tr = step_transcribe(audio_url, interview_id=interview_id)
         if not tr.get("success"):
             return fail("transcribe", tr)
         asr_result = tr["asr_result"]
+        _workflow_log(
+            interview_id,
+            "transcribe",
+            f"done full_text_len={len(asr_result.get('full_text', '')) if isinstance(asr_result, dict) else 'n/a'} speakers_count={len(asr_result.get('speakers', [])) if isinstance(asr_result, dict) else 'n/a'}",
+        )
 
         # 3. 写 file_content
         st = step_store_file_content(interview_id, object_key, audio_url, asr_result)
@@ -394,6 +482,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             return fail("store_file_content", st)
         file_content_obj = st["file_content"]
         file_content_json = json.dumps(file_content_obj, ensure_ascii=False)
+        _workflow_log(interview_id, "store_file_content", "done")
 
         # 4. 提炼访谈背景
         ec = step_extract_interview_context(
@@ -404,6 +493,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if not ec.get("success"):
             return fail("extract_interview_context", ec)
         interview_context = ec["interview_context"]
+        _workflow_log(interview_id, "extract_interview_context", "done")
 
         # 5. LLM 纠错 + 再纠错 + 清洗
         cl = step_clean_with_llm(
@@ -412,15 +502,18 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             interview_context=interview_context,
             term_hints=term_hints,
             correction_rules=correction_rules,
+            interview_id=interview_id,
         )
         if not cl.get("success"):
             return fail("correct_fallback", cl)
         cleaned_json = cl["cleaned_json"]
+        _workflow_log(interview_id, "correct_fallback", "done")
 
         # 6. 写 summary
         ws = step_write_summary(interview_id, cleaned_json)
         if not ws.get("success"):
             return fail("write_summary", ws)
+        _workflow_log(interview_id, "write_summary", f"done inserted={ws.get('inserted', 0)}")
 
         overall_note_result = step_generate_overall_note(
             interview_id=interview_id,
@@ -432,6 +525,9 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         overall_note_warning = None
         if not overall_note_result.get("success"):
             overall_note_warning = overall_note_result.get("message") or "generate overall note failed"
+            _workflow_log(interview_id, "generate_overall_note", f"warning detail={overall_note_result}")
+        else:
+            _workflow_log(interview_id, "generate_overall_note", "done")
 
         kbq_result = run_kbq_notes_generation_for_interview(
             interview_id,
@@ -442,19 +538,23 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if not kbq_result.get("success"):
             kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
 
-        notes_result = run_notes_generation_for_interview(
+        minutes_result = generate_minutes_for_interview(
             interview_id,
-            source_kind="auto",
-            ensure_index=False,
+            project_context=project_context,
+            top_k=8,
         )
-        notes_warning = None
-        if not notes_result.get("success"):
-            notes_warning = notes_result.get("message") or "generate notes failed"
+        minutes_warning = None
+        if not minutes_result.get("success"):
+            minutes_warning = minutes_result.get("message") or "generate minutes failed"
+            _workflow_log(interview_id, "generate_minutes", f"warning detail={minutes_result}")
+        else:
+            _workflow_log(interview_id, "generate_minutes", f"done inserted={minutes_result.get('inserted', 0)}")
 
         try:
             DbAccess.update_interview_status(interview_id, 2)
         except Exception:
             pass
+        _workflow_log(interview_id, "run_workflow", "done")
 
         return {
             "success": True,
@@ -467,14 +567,20 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             "summary_inserted": ws.get("inserted", 0),
             "overall_note_written": bool(overall_note_result.get("success")),
             "kbq_notes_inserted": kbq_result.get("inserted", 0),
-            "notes_inserted": notes_result.get("inserted", 0),
+            "minutes_inserted": minutes_result.get("inserted", 0),
+            "notes_inserted": minutes_result.get("inserted", 0),
             "warnings": [
                 warning
-                for warning in [overall_note_warning, kbq_warning, notes_warning]
+                for warning in [overall_note_warning, kbq_warning, minutes_warning]
                 if warning
             ],
         }
     except Exception as e:
+        _workflow_log(
+            interview_id,
+            "run_workflow",
+            f"unexpected error={e} traceback={traceback.format_exc()}",
+        )
         return fail("unexpected", {
             "message": str(e),
             "traceback": traceback.format_exc(),

@@ -3,6 +3,7 @@ export interface RunInterviewResponse {
   queued?: boolean | null;
   summary_inserted?: number | null;
   notes_inserted?: number | null;
+  minutes_inserted?: number | null;
   message?: string | null;
 }
 
@@ -12,6 +13,17 @@ export interface GenerateNotesResponse {
   question_id?: number | null;
   project_id?: number | null;
   total_questions?: number | null;
+  generated?: number | null;
+  inserted?: number | null;
+  warnings?: string[] | null;
+  message?: string | null;
+}
+
+export interface GenerateMinutesResponse {
+  success: boolean;
+  interview_id: number;
+  project_id?: number | null;
+  outline_generated?: number | null;
   generated?: number | null;
   inserted?: number | null;
   warnings?: string[] | null;
@@ -145,7 +157,8 @@ export interface InterviewOverallNotesResponse {
   project_id?: number | null;
   note_content?: string | null;
   kbq_notes: InterviewKbqNotesResponse;
-  notes: InterviewNotesResponse;
+  minutes: InterviewMinutesResponse;
+  notes?: InterviewNotesResponse | null;
   summary: InterviewSummaryResponse;
 }
 
@@ -178,6 +191,30 @@ export interface InterviewKbqNotesResponse {
   interview_id: number;
   project_id?: number | null;
   items: KbqNoteItem[];
+}
+
+export interface InterviewMinutesItem {
+  order: number;
+  title: string;
+  summary?: string | null;
+}
+
+export interface InterviewMinutesSection {
+  order: number;
+  title: string;
+  summary?: string | null;
+  items: InterviewMinutesItem[];
+}
+
+export interface InterviewMinutesResponse {
+  interview_id: number;
+  project_id?: number | null;
+  outline?: unknown;
+  sections: InterviewMinutesSection[];
+  status?: string | null;
+  error_message?: string | null;
+  generated_at?: string | null;
+  minutes_json?: unknown;
 }
 
 export interface QuestionItem {

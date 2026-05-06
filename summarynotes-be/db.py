@@ -521,6 +521,42 @@ def update_interview_note_content(interview_id: int, note_content: str) -> None:
         conn.close()
 
 
+def fetch_interview_minutes_by_interview(interview_id: int) -> dict | None:
+    """
+    查询某个访谈下的智能纪要记录。
+
+    参数:
+        interview_id: 访谈 ID，对应 bh_project_interview.id。
+
+    返回:
+        若存在则返回单条智能纪要记录字典，否则返回 None。
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            project_interview_id,
+            outline_json,
+            minutes_json,
+            status,
+            error_message,
+            generated_at,
+            created_at,
+            updated_at
+        FROM bh_project_interview_minutes
+        WHERE project_interview_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
 def fetch_interview_by_id(
     interview_id: int,
     created_by_user_id: int | None = None,
@@ -594,6 +630,10 @@ def delete_interview_graph(interview_id: int) -> dict | None:
         with conn.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM bh_project_interview_key_bq WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_interview_minutes WHERE project_interview_id = %s",
                 (interview_id,),
             )
             cursor.execute(
@@ -672,6 +712,10 @@ def delete_project_graph(
                 interview_id = int(interview_row["id"])
                 cursor.execute(
                     "DELETE FROM bh_project_interview_key_bq WHERE project_interview_id = %s",
+                    (interview_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM bh_project_interview_minutes WHERE project_interview_id = %s",
                     (interview_id,),
                 )
                 cursor.execute(

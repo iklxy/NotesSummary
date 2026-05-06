@@ -54,9 +54,8 @@ def _build_kbq_query_text(key_bq_text: str, dimensions: List[Dict[str, Any]]) ->
         if not name:
             continue
         dimension_lines.append(f"{name} {description}".strip())
-    dimension_text = "；".join(dimension_lines)
-    if dimension_text:
-        return f"{key_bq_text}\n{dimension_text}"
+    if dimension_lines:
+        return f"{key_bq_text}\n" + "\n".join(dimension_lines)
     return key_bq_text
 
 
@@ -284,7 +283,7 @@ def run_kbq_notes_generation_for_interview(
     interview_id: int,
     project_context: Optional[str] = None,
     interview_context: Optional[Any] = None,
-    top_k: int = 10,
+    top_k: int = 8,
 ) -> Dict[str, Any]:
     """
     为指定访谈生成 KBQ Notes 并落库。

@@ -2,6 +2,7 @@
 "@Author: lixinyang"
 
 import json
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 
 from DbAccess import DbAccess
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
+from MinutesWorkflow import generate_minutes_for_interview
 from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
 from RagIndex import index_interview_summary
 from Workflow import run_workflow
@@ -65,6 +67,7 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
             无返回值。执行结果仅用于日志输出。
         """
         try:
+            print(f"[TRANSCRIBE] interview_id={interview_id} job_start", flush=True)
             result = run_workflow(interview_id)
             print(f"[TRANSCRIBE] interview_id={interview_id} finished: {json.dumps(result, ensure_ascii=False)}")
         except Exception as e:
@@ -72,7 +75,11 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
                 DbAccess.update_interview_status(interview_id, 3)
             except Exception:
                 pass
-            print(f"[TRANSCRIBE] interview_id={interview_id} unexpected error: {e}")
+            print(
+                f"[TRANSCRIBE] interview_id={interview_id} unexpected error: {e}\n"
+                f"{traceback.format_exc()}",
+                flush=True,
+            )
 
     try:
         TRANSCRIBE_EXECUTOR.submit(_job)
@@ -294,6 +301,39 @@ def api_generate_notes(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
+
+
+@app.post("/internal/interviews/{interview_id}/generate-minutes")
+def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
+    """
+    生成并落库指定访谈的智能纪要。
+
+    参数:
+        interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+    返回:
+        智能纪要工作流执行结果，包含大纲生成、条目生成与写库信息。
+
+    异常:
+        HTTPException: 当纪要工作流执行失败时抛出 500。
+    """
+    try:
+        interview = _load_interview_or_404(interview_id)
+        project_id = int(interview.get("parse_project_id") or 0)
+        project_context = None
+        if project_id > 0:
+            try:
+                from ProjectContext import load_project_context_by_id
+
+                project_context = load_project_context_by_id(project_id)
+            except Exception:
+                project_context = None
+        return generate_minutes_for_interview(
+            interview_id,
+            project_context=project_context,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"generate minutes failed: {e}")
 
 
 @app.post("/internal/interviews/{interview_id}/refresh-kbq-notes")
