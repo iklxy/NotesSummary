@@ -6,7 +6,9 @@
 将问卷 DOCX 解析为 Markdown 和 JSON。
 
 该模块不依赖额外第三方解析库，供后端和本地 test 脚本共用。
-它会从 Warm-up 开始截取问卷内容，按领域分组，并结合编号样式递归构建问题树。
+它会优先从 Warm-up 开始截取问卷内容；如果文档里没有 Warm-up，
+则从正文开始解析。随后按领域分组；如果文档里没有显式领域标题，
+则会把整份问卷当成一个默认分组，只抽取问题内容。
 """
 
 from __future__ import annotations
@@ -185,13 +187,20 @@ def extract_outline_modules(blocks: List[Dict[str, Any]]) -> List[str]:
     return []
 
 
-def find_warmup_anchor_index(blocks: List[Dict[str, Any]]) -> int:
-    """定位第一个 Warm-up 段落的位置。"""
+def find_warmup_anchor_index(blocks: List[Dict[str, Any]]) -> Optional[int]:
+    """定位第一个 Warm-up 段落的位置。
+
+    参数:
+        blocks: 从 DOCX 主体提取出来的段落块与表格块列表。
+
+    返回:
+        找到 Warm-up 时返回其所在块索引；如果文档中没有 Warm-up，则返回 None。
+    """
 
     for index, block in enumerate(blocks):
         if block.get("kind") == "paragraph" and normalize_text(block.get("text", "")) == "Warm-up":
             return index
-    raise ValueError("Warm-up marker not found in questionnaire")
+    return None
 
 
 def build_domain_aliases(module_order: List[str]) -> List[str]:
@@ -326,12 +335,25 @@ def build_question_tree(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
-    """解析问卷，只保留 Warm-up 及其之后的内容。"""
+    """解析问卷，抽取问题树并尽量忽略非问题内容。
+
+    规则:
+        - 如果文档里存在 Warm-up，则从 Warm-up 开始解析。
+        - 如果文档里不存在 Warm-up，则从文档正文开始解析。
+        - 如果文档里存在显式领域标题，则按领域分组。
+        - 如果文档里不存在显式领域标题，则把整份问卷视为一个默认领域，
+          只抽取编号问题，不保留封面、背景、说明等额外文本。
+    """
 
     blocks = extract_docx_blocks(docx_path)
     module_order = extract_outline_modules(blocks)
-    start_index = find_warmup_anchor_index(blocks)
+    warmup_index = find_warmup_anchor_index(blocks)
+    start_index = warmup_index if warmup_index is not None else 0
     content_blocks = blocks[start_index:]
+    has_domain_headings = any(
+        block.get("kind") == "paragraph" and is_domain_heading(block, module_order)
+        for block in content_blocks
+    )
 
     domains: List[Dict[str, Any]] = []
     current_domain: Optional[Dict[str, Any]] = None
@@ -380,6 +402,16 @@ def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
             current_blocks = []
             continue
 
+        if current_domain is None and not has_domain_headings and infer_question_level(block) is not None:
+            current_domain = {
+                "title": "问卷问题",
+                "module_key": "AUTO",
+                "source_index": block.get("index"),
+                "questions": [],
+                "notes": [],
+            }
+            current_blocks = []
+
         if current_domain is None:
             continue
 
@@ -391,7 +423,7 @@ def parse_questionnaire(docx_path: Path) -> Dict[str, Any]:
         "source_file": str(docx_path),
         "questionnaire_title": docx_path.stem,
         "module_order": module_order,
-        "start_anchor": "Warm-up",
+        "start_anchor": "Warm-up" if warmup_index is not None else "AUTO",
         "domains": domains,
     }
 

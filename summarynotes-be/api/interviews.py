@@ -804,6 +804,41 @@ def refresh_interview_kbq_notes(
         raise HTTPException(status_code=500, detail=f"parse refresh kbq notes response failed: {e}")
 
 
+@router.post(
+    "/{interview_id}/notes/refresh",
+    response_model=Dict[str, Any],
+)
+def refresh_interview_notes(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    重新生成该访谈下所有 Delivery Notes。
+
+    返回:
+        内部引擎服务返回的批量 Notes 生成结果。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+
+    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-notes"
+    try:
+        resp = requests.post(url, timeout=600)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh delivery notes request failed: {e}")
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    try:
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"parse refresh delivery notes response failed: {e}")
+
+
 @router.delete(
     "/{interview_id}/questions/{question_id}",
     response_model=QuestionDeleteResponse,

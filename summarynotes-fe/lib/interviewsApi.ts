@@ -60,6 +60,14 @@ export function refreshInterviewKbqNotes(
   });
 }
 
+export function refreshInterviewDeliveryNotes(
+  interviewId: number,
+): Promise<GenerateNotesResponse> {
+  return request<GenerateNotesResponse>(`/api/interviews/${interviewId}/notes/refresh`, {
+    method: "POST",
+  });
+}
+
 export function getInterviewQuestions(
   interviewId: number,
 ): Promise<InterviewQuestionsResponse> {

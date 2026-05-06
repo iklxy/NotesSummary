@@ -4,9 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Collapse, Layout, message, Space, Spin, Tag, Typography } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
-import { getInterviewOverallNotes, refreshInterviewKbqNotes } from "../../../../lib/interviewsApi";
+import {
+  getInterviewOverallNotes,
+  refreshInterviewDeliveryNotes,
+  refreshInterviewKbqNotes,
+} from "../../../../lib/interviewsApi";
 import type {
   InterviewOverallNotesResponse,
+  NoteItem,
   QuestionWithNotes,
 } from "../../../../lib/types";
 
@@ -81,11 +86,19 @@ function getKbqDimensionNotes(noteJson: unknown): Array<Record<string, unknown>>
   });
 }
 
+function getPrimaryNote(notes?: NoteItem[] | null): NoteItem | null {
+  if (!notes || notes.length === 0) {
+    return null;
+  }
+  return notes[0] ?? null;
+}
+
 export default function OverallNotesClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [kbqRefreshing, setKbqRefreshing] = useState(false);
+  const [deliveryRefreshing, setDeliveryRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -127,7 +140,26 @@ export default function OverallNotesClient({ interviewId }: Props) {
     }
   };
 
+  const handleRefreshDeliveryNotes = async () => {
+    try {
+      setDeliveryRefreshing(true);
+      const resp = await refreshInterviewDeliveryNotes(interviewId);
+      if (!resp.success) {
+        throw new Error(resp.message || "刷新 Delivery Notes 失败");
+      }
+      message.success(
+        `Delivery Notes 已刷新：生成 ${resp.generated ?? 0} 条，写入 ${resp.inserted ?? 0} 条`,
+      );
+      setReloadToken((v) => v + 1);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "刷新 Delivery Notes 失败");
+    } finally {
+      setDeliveryRefreshing(false);
+    }
+  };
+
   const notesQuestions = useMemo(() => data?.notes?.questions ?? [], [data]);
+  const visibleNotesQuestions = useMemo(() => notesQuestions, [notesQuestions]);
 
   return (
     <Layout className="min-h-screen bg-slate-50">
@@ -150,6 +182,9 @@ export default function OverallNotesClient({ interviewId }: Props) {
             loading={loading}
           >
             刷新页面
+          </Button>
+          <Button onClick={handleRefreshDeliveryNotes} loading={deliveryRefreshing}>
+            刷新 Delivery Notes
           </Button>
           <Button onClick={handleRefreshKbqNotes} loading={kbqRefreshing} type="primary">
             刷新 KBQ Notes
@@ -180,25 +215,13 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 {data?.kbq_notes?.items?.length ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                     {data.kbq_notes.items.map((item) => {
-                      const noteObj = getKbqObject(item.note_json);
                       const dimensionNotes = getKbqDimensionNotes(item.note_json);
-                      const confidenceText =
-                        typeof noteObj?.confidence === "number"
-                          ? `置信度：${noteObj.confidence.toFixed(2)}`
-                          : typeof noteObj?.confidence === "string"
-                            ? `置信度：${noteObj.confidence}`
-                            : "";
                       return (
                         <Card key={item.id} size="small" style={{ borderRadius: 16 }}>
                           <Space direction="vertical" size="small" style={{ width: "100%" }}>
                             <Title level={5} style={{ marginBottom: 0 }}>
                               {item.bq_order}. {item.bq_text}
                             </Title>
-                            {confidenceText ? (
-                              <Text type="secondary" style={{ fontSize: 12 }}>
-                                {confidenceText}
-                              </Text>
-                            ) : null}
                             {dimensionNotes.length > 0 ? (
                               <Space direction="vertical" size="small" style={{ width: "100%" }}>
                                 {dimensionNotes.map((dimensionNote, index) => {
@@ -243,83 +266,24 @@ export default function OverallNotesClient({ interviewId }: Props) {
               </Card>
 
               <Card style={{ borderRadius: 20 }} title="C. 问题级 Delivery Notes">
-                {notesQuestions.length > 0 ? (
+                {visibleNotesQuestions.length > 0 ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {notesQuestions.map((question: QuestionWithNotes) => {
-                      const primaryNote = question.notes?.[0];
+                    {visibleNotesQuestions.map((question: QuestionWithNotes, index) => {
+                      const primaryNote = getPrimaryNote(question.notes);
                       const noteJson = primaryNote?.note_json;
                       const summaryText = getNoteStringField(noteJson, "summary");
-                      const analysisText = getNoteStringField(noteJson, "analysis");
-                      const evidenceItems = getEvidenceItems(noteJson);
                       return (
                         <Card key={question.question_id} size="small" style={{ borderRadius: 16 }}>
                           <Space direction="vertical" size="small" style={{ width: "100%" }}>
                             <Title level={5} style={{ marginBottom: 0 }}>
-                              {question.question_order}. {question.question_text}
+                              {index + 1}. {question.question_text}
                             </Title>
                             {summaryText ? (
-                              <div>
-                                <Text strong>Summary</Text>
-                                <Paragraph style={{ marginBottom: 0 }}>{summaryText}</Paragraph>
-                              </div>
+                              <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                {summaryText}
+                              </Paragraph>
                             ) : (
-                              <Text type="secondary">该题暂无可展示的 Summary。</Text>
-                            )}
-                            {analysisText ? (
-                              <Collapse
-                                ghost
-                                items={[
-                                  {
-                                    key: "analysis",
-                                    label: "展开分析",
-                                    children: (
-                                      <div>
-                                        <Paragraph style={{ marginBottom: 12 }}>
-                                          {analysisText}
-                                        </Paragraph>
-                                        {evidenceItems.length > 0 ? (
-                                          <div>
-                                            <Text strong>证据</Text>
-                                            <div style={{ marginTop: 8 }}>
-                                              <Space size={[8, 8]} wrap>
-                                                {evidenceItems.map((item, index) => {
-                                                  const summaryIds = getSummaryIds(item);
-                                                  const evidenceText =
-                                                    typeof item.text === "string" ? item.text : "";
-                                                  if (summaryIds.length === 0) {
-                                                    return (
-                                                      <Tag
-                                                        key={`unknown-${index}`}
-                                                        color="default"
-                                                        style={{ whiteSpace: "normal" }}
-                                                      >
-                                                        summary_id: 未知
-                                                        {evidenceText ? ` · ${evidenceText}` : ""}
-                                                      </Tag>
-                                                    );
-                                                  }
-                                                  return summaryIds.map((summaryId) => (
-                                                    <Tag
-                                                      key={`${summaryId}-${index}`}
-                                                      color="geekblue"
-                                                      style={{ whiteSpace: "normal" }}
-                                                    >
-                                                      summary_id: {summaryId}
-                                                      {evidenceText ? ` · ${evidenceText}` : ""}
-                                                    </Tag>
-                                                  ));
-                                                })}
-                                              </Space>
-                                            </div>
-                                          </div>
-                                        ) : null}
-                                      </div>
-                                    ),
-                                  },
-                                ]}
-                              />
-                            ) : (
-                              <Text type="secondary">该题暂无可展示的 Analysis。</Text>
+                              <Text type="secondary">该题暂无可展示内容。</Text>
                             )}
                           </Space>
                         </Card>

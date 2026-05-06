@@ -115,7 +115,6 @@ export default function TransClient({ interviewId }: Props) {
                         <Space direction="vertical" size="small" style={{ width: "100%" }}>
                           <Space size={8} wrap>
                             <Tag color="blue">{speakerLabel}</Tag>
-                            <Tag>summary_id: {item.id}</Tag>
                             {timestamp ? (
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 {formatAudioTimestampRange(timestamp)}

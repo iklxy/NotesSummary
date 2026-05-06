@@ -1246,7 +1246,6 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                     <Tag color={side === "left" ? "blue" : "cyan"}>
                                       {sideLabel}
                                     </Tag>
-                                    <Tag>summary_id: {item.id}</Tag>
                                     {timestamp ? (
                                       <Text type="secondary" style={{ fontSize: 12 }}>
                                         {formatAudioTimestampRange(timestamp)}
@@ -1797,88 +1796,26 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                         <Alert type="error" message={notesError} />
                       ) : notes?.questions && notes.questions.length > 0 ? (
                         <Space direction="vertical" style={{ width: "100%" }} size="middle">
-                          {notes.questions.map((q) => {
+                          {notes.questions.map((q, index) => {
                             const primaryNote = q.notes?.[0];
+                            if (!primaryNote) {
+                              return null;
+                            }
                             const noteJson = primaryNote?.note_json;
                             const summaryText = getNoteStringField(noteJson, "summary");
-                            const analysisText = getNoteStringField(noteJson, "analysis");
-                            const evidenceItems = getEvidenceItems(noteJson);
                             return (
                               <Card
                                 key={q.question_id}
                                 style={{ marginBottom: 12 }}
                               >
                                 <Title level={5}>
-                                  {q.question_order}. {q.question_text}
+                                  {index + 1}. {q.question_text}
                                 </Title>
                                 {summaryText && (
-                                  <>
-                                    <Text strong>Summary</Text>
-                                    <Paragraph>{summaryText}</Paragraph>
-                                  </>
+                                  <Paragraph>{summaryText}</Paragraph>
                                 )}
-                                {analysisText && (
-                                  <Collapse
-                                    ghost
-                                    items={[
-                                      {
-                                        key: "analysis",
-                                        label: "展开分析",
-                                        children: (
-                                          <div>
-                                            <Paragraph style={{ marginBottom: 12 }}>
-                                              {analysisText}
-                                            </Paragraph>
-                                            {evidenceItems.length > 0 ? (
-                                              <div>
-                                                <Text strong>证据</Text>
-                                                <div style={{ marginTop: 8 }}>
-                                                  <Space size={[8, 8]} wrap>
-                                                    {evidenceItems.map((evidenceItem, index) => {
-                                                      const summaryIds = getEvidenceSummaryIds(evidenceItem);
-                                                      const evidenceText = typeof evidenceItem.text === "string"
-                                                        ? evidenceItem.text
-                                                        : "";
-                                                      if (summaryIds.length === 0) {
-                                                        return (
-                                                          <Tag
-                                                            key={`unknown-${index}`}
-                                                            color="default"
-                                                            style={{ whiteSpace: "normal" }}
-                                                          >
-                                                            summary_id: 未知
-                                                            {evidenceText ? ` · ${evidenceText}` : ""}
-                                                          </Tag>
-                                                        );
-                                                      }
-                                                      return (
-                                                        <>
-                                                          {summaryIds.map((summaryId) => (
-                                                            <Tag
-                                                              key={`${summaryId}-${index}`}
-                                                              color="geekblue"
-                                                              style={{ whiteSpace: "normal", cursor: "pointer" }}
-                                                              onClick={() => scrollToSummary(summaryId)}
-                                                            >
-                                                              summary_id: {summaryId}
-                                                              {evidenceText ? ` · ${evidenceText}` : ""}
-                                                            </Tag>
-                                                          ))}
-                                                        </>
-                                                      );
-                                                    })}
-                                                  </Space>
-                                                </div>
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                        ),
-                                      },
-                                    ]}
-                                  />
-                                )}
-                                {!summaryText && !analysisText && (
-                                  <Text type="secondary">该题暂无可展示的 Notes。</Text>
+                                {!summaryText && (
+                                  <Text type="secondary">该题暂无可展示内容。</Text>
                                 )}
                               </Card>
                             );

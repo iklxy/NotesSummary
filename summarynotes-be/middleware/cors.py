@@ -20,7 +20,7 @@ def _detect_primary_ip() -> str | None:
     try:
         output = subprocess.check_output(["hostname", "-I"], text=True).strip()
         if output:
-          return output.split()[0]
+            return output.split()[0]
     except Exception:
         pass
 
@@ -47,6 +47,7 @@ def setup_cors(app: FastAPI) -> None:
     primary_ip = _detect_primary_ip()
     if primary_ip:
         origins.add(f"http://{primary_ip}:3000")
+        origins.add(f"http://{primary_ip}:3001")
         origins.add(f"http://{primary_ip}:9000")
 
     app.add_middleware(

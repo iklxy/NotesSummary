@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import dotenv
 import pymysql

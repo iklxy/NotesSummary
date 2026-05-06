@@ -135,7 +135,7 @@ def parse_notes_response(generate_fn: Callable[[str, str], str], content: str) -
         content: 模型原始输出文本。
 
     返回:
-        至少包含 `summary`、`analysis`、`evidence`、`confidence` 的字典。
+        至少包含 `summary`、`analysis`、`evidence`、`confidence`、`is_insufficient` 的字典。
     """
     content_stripped = content.strip()
     if content_stripped.startswith("```"):
@@ -169,6 +169,18 @@ def parse_notes_response(generate_fn: Callable[[str, str], str], content: str) -
     result.setdefault("analysis", "")
     result.setdefault("evidence", [])
     result.setdefault("confidence", 0.0)
+    if "is_insufficient" not in result:
+        summary_text = str(result.get("summary") or "").strip()
+        analysis_text = str(result.get("analysis") or "").strip()
+        result["is_insufficient"] = (
+            "当前访谈中信息不足" in summary_text or "当前访谈中信息不足" in analysis_text
+        )
+    else:
+        raw_flag = result.get("is_insufficient")
+        if isinstance(raw_flag, str):
+            result["is_insufficient"] = raw_flag.strip().lower() in {"1", "true", "yes", "y"}
+        else:
+            result["is_insufficient"] = bool(raw_flag)
     return result
 
 
@@ -221,15 +233,18 @@ def generate_notes_for_question(
         f"{context_block}\n\n"
         "请遵循以下要求完成任务:\n"
         "1. 只使用上述片段中的信息，不要引入任何未在片段中出现的事实。\n"
-        "2. 如果信息不足以回答问题，请在 summary 和 analysis 中明确说明“当前访谈中信息不足”。\n"
-        "3. 请给出一个 0 到 1 之间的置信度 confidence。\n"
-        "4. 输出时只返回 JSON，不要包含额外说明。\n"
+        "2. 如果信息不足以回答问题，请不要用其它委婉说法，必须在 summary 和 analysis 中都写“当前访谈中信息不足”，并将 is_insufficient 设为 true。\n"
+        "3. 如果信息足以回答问题，请将 is_insufficient 设为 false。\n"
+        "4. 如果片段无法支撑某个结论，不要猜测，也不要改写成其它表述。\n"
+        "5. 请给出一个 0 到 1 之间的置信度 confidence。\n"
+        "6. 输出时只返回 JSON，不要包含额外说明。\n"
         "JSON 的参考结构如下:\n"
         "{\n"
         '  "summary": "一句话或几句话的高度概括",\n'
         '  "analysis": "更详细的分析和解释，适合写入研究笔记",\n'
         '  "evidence": [{"summary_id": 0, "speaker": "speaker1", "text": "与结论直接相关的原文片段"}],\n'
-        '  "confidence": 0.0\n'
+        '  "confidence": 0.0,\n'
+        '  "is_insufficient": false\n'
         "}\n"
     )
     return parse_notes_response(generate_fn, generate_fn(system_prompt, user_prompt))
@@ -285,17 +300,20 @@ def generate_notes_for_question_with_fewshot(
         f"{context_block}\n\n"
         "请遵循以下要求完成任务:\n"
         "1. 只使用上述片段中的信息，不要引入任何未在片段中出现的事实；如果片段之间存在冲突，请直接写出冲突，不要强行统一。\n"
-        "2. 如果信息不足以回答问题，请在 summary 和 analysis 中明确说明“当前访谈中信息不足”。\n"
-        "3. summary 只写 1 到 3 句高度概括；analysis 负责更详细的解释。\n"
-        "4. 请给出一个 0 到 1 之间的置信度 confidence。\n"
-        "5. evidence 中尽量引用与结论直接相关的原文短片段。\n"
-        "6. 输出时只返回 JSON，不要包含额外说明。\n"
+        "2. 如果信息不足以回答问题，请不要用其它委婉说法，必须在 summary 和 analysis 中都写“当前访谈中信息不足”，并将 is_insufficient 设为 true。\n"
+        "3. 如果信息足以回答问题，请将 is_insufficient 设为 false。\n"
+        "4. 如果片段无法支撑某个结论，不要猜测，也不要改写成其它表述。\n"
+        "5. summary 只写 1 到 3 句高度概括；analysis 负责更详细的解释。\n"
+        "6. 请给出一个 0 到 1 之间的置信度 confidence。\n"
+        "7. evidence 中尽量引用与结论直接相关的原文短片段。\n"
+        "8. 输出时只返回 JSON，不要包含额外说明。\n"
         "JSON 的参考结构如下:\n"
         "{\n"
         '  "summary": "一句话或几句话的高度概括",\n'
         '  "analysis": "更详细的分析和解释，适合写入研究笔记",\n'
         '  "evidence": [{"summary_id": 0, "speaker": "speaker1", "text": "与结论直接相关的原文片段"}],\n'
-        '  "confidence": 0.0\n'
+        '  "confidence": 0.0,\n'
+        '  "is_insufficient": false\n'
         "}\n"
     )
     fewshot_block = build_fewshot_prompt_block(fewshot_samples)

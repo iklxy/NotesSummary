@@ -459,6 +459,6 @@ def run_asr(audio_url: str) -> Dict[str, Any]:
             print("识别失败，code=", code)
             return {"full_text": "", "speakers": []}
 
-        if time.time() - started_at > 300:
-            print("等待超时（>300s）")
+        if time.time() - started_at > 3600:
+            print("等待超时（>3600s）")
             return {"full_text": "", "speakers": []}

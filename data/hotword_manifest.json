@@ -10,6 +10,11 @@
       "code": "cll",
       "label": "CLL热词",
       "file": "interview/CLL.txt"
+    },
+    {
+      "code": "ms",
+      "label": "MS热词",
+      "file": "interview/MS.txt"
     }
   ]
 }
