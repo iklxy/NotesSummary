@@ -125,3 +125,102 @@ body {
   display: inline-block;
   padding: 8px 0 2px;
 }
+
+.summarynotes-markdown {
+  color: inherit;
+  line-height: 1.8;
+}
+
+.summarynotes-markdown p,
+.summarynotes-markdown .summarynotes-markdown-paragraph {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+}
+
+.summarynotes-markdown p:last-child,
+.summarynotes-markdown .summarynotes-markdown-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.summarynotes-markdown strong {
+  color: inherit;
+  font-weight: 700;
+}
+
+.summarynotes-markdown h1,
+.summarynotes-markdown h2,
+.summarynotes-markdown h3,
+.summarynotes-markdown h4,
+.summarynotes-markdown h5,
+.summarynotes-markdown h6 {
+  margin: 0 0 12px;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.summarynotes-markdown ul,
+.summarynotes-markdown ol {
+  margin: 0 0 12px 20px;
+  padding: 0;
+}
+
+.summarynotes-markdown-list {
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.summarynotes-markdown-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+
+.summarynotes-markdown-list-bullet {
+  flex: 0 0 auto;
+  line-height: 1.8;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.summarynotes-markdown-list-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+}
+
+.summarynotes-markdown-quote {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 4px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.summarynotes-markdown-quote p {
+  margin: 0;
+}
+
+.summarynotes-markdown-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 12px;
+}
+
+.summarynotes-markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.summarynotes-markdown-table th,
+.summarynotes-markdown-table td {
+  border: 1px solid #e2e8f0;
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.summarynotes-markdown-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #0f172a;
+}

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import traceback
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from DbAccess import DbAccess
 from Model import ModelClient
 from ProjectContext import load_project_context_by_id
-from RagIndex import index_interview_summary, retrieve_segments_for_question
 
 
 def fetch_kbq_items_step(interview_id: int) -> Dict[str, Any]:
@@ -57,6 +58,222 @@ def _build_kbq_query_text(key_bq_text: str, dimensions: List[Dict[str, Any]]) ->
     if dimension_lines:
         return f"{key_bq_text}\n" + "\n".join(dimension_lines)
     return key_bq_text
+
+
+def _build_summary_segments(summary_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    将数据库里的 summary 明细行归一化为检索片段。
+
+    参数:
+        summary_rows: bh_project_interview_summary 查询结果。
+
+    返回:
+        可用于本地检索的片段列表。
+    """
+    segments: List[Dict[str, Any]] = []
+    for idx, row in enumerate(summary_rows, start=1):
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        speaker = str(row.get("speaker") or "summary").strip() or "summary"
+        timestamp = str(row.get("timestamp") or "").strip()
+        summary_id = row.get("id") or idx
+        segments.append(
+            {
+                "summary_id": int(summary_id),
+                "speaker": speaker,
+                "timestamp": timestamp or None,
+                "text": text,
+            }
+        )
+    return segments
+
+
+def _load_minutes_text_from_backup_dir(project_id: int, interview_id: int) -> tuple[str | None, Path | None]:
+    """
+    从访谈备份目录读取最终智能纪要 txt。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+
+    返回:
+        (minutes_text, minutes_path) 二元组；未找到时返回 (None, None)。
+    """
+    backup_dir = Path(__file__).resolve().parent / "data" / f"project_{project_id}" / f"interview_{interview_id}"
+    if not backup_dir.exists():
+        return None, None
+    candidate_paths = [
+        backup_dir / "minutes.txt",
+        backup_dir / "outline_minutes" / "minutes.txt",
+    ]
+    for path in candidate_paths:
+        if path.exists() and path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+            if text:
+                return text, path
+    return None, None
+
+
+def _build_minutes_segments_from_text(minutes_text: str) -> List[Dict[str, Any]]:
+    """
+    将智能纪要 txt 切分为适合本地检索的片段。
+
+    参数:
+        minutes_text: minutes.txt 的全文内容。
+
+    返回:
+        可用于本地检索的片段列表。
+    """
+    lines = [line.rstrip() for line in minutes_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    segments: List[Dict[str, Any]] = []
+    heading_stack: List[str] = []
+    buffer: List[str] = []
+
+    def flush_buffer() -> None:
+        if not buffer:
+            return
+        content = "\n".join(buffer).strip()
+        buffer.clear()
+        if not content:
+            return
+        prefix = " ".join(heading_stack).strip()
+        text = f"{prefix}\n{content}".strip() if prefix else content
+        segments.append({"summary_id": len(segments) + 1, "speaker": "minutes", "timestamp": None, "text": text})
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            flush_buffer()
+            continue
+        if line.startswith("#"):
+            flush_buffer()
+            level = len(line) - len(line.lstrip("#"))
+            title = line[level:].strip()
+            if not title:
+                continue
+            heading_stack = heading_stack[: max(0, level - 1)]
+            heading_stack.append(title)
+            segments.append(
+                {
+                    "summary_id": len(segments) + 1,
+                    "speaker": "minutes",
+                    "timestamp": None,
+                    "text": " ".join(heading_stack).strip(),
+                }
+            )
+            continue
+        if re.match(r"^(?:-|\*|\+)\s+", line) or re.match(r"^\d+[.)]\s+", line):
+            flush_buffer()
+            item_text = re.sub(r"^(?:-|\*|\+)\s+|^\d+[.)]\s+", "", line).strip()
+            if item_text:
+                prefix = " ".join(heading_stack).strip()
+                text = f"{prefix}\n{item_text}".strip() if prefix else item_text
+                segments.append(
+                    {
+                        "summary_id": len(segments) + 1,
+                        "speaker": "minutes",
+                        "timestamp": None,
+                        "text": text,
+                    }
+                )
+            continue
+        buffer.append(line)
+
+    flush_buffer()
+    return segments
+
+
+def _tokenize_for_search(text: str) -> List[str]:
+    """
+    将文本拆成适合做本地检索的 token。
+
+    参数:
+        text: 待拆分文本。
+
+    返回:
+        token 列表。
+    """
+    normalized = text.lower()
+    tokens = re.findall(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*|[\u4e00-\u9fff]{2,}", normalized)
+    extra_tokens: List[str] = []
+    for token in tokens:
+        if len(token) <= 6:
+            extra_tokens.append(token)
+    return tokens + extra_tokens
+
+
+def _score_segment(segment_text: str, query_text: str) -> float:
+    """
+    根据 token 重叠度给单条片段打分。
+
+    参数:
+        segment_text: 片段文本。
+        query_text: 检索 query。
+
+    返回:
+        相关性分数。
+    """
+    segment_tokens = _tokenize_for_search(segment_text)
+    query_tokens = _tokenize_for_search(query_text)
+    if not segment_tokens or not query_tokens:
+        return 0.0
+
+    segment_token_set = set(segment_tokens)
+    query_token_set = set(query_tokens)
+    overlap = segment_token_set & query_token_set
+
+    score = float(len(overlap))
+    for token in overlap:
+        if len(token) >= 4:
+            score += 0.5
+    if query_text and query_text in segment_text:
+        score += 5.0
+    if segment_text and any(token in segment_text for token in query_token_set):
+        score += 1.0
+    return score
+
+
+def _retrieve_segments_from_summary(
+    summary_segments: List[Dict[str, Any]],
+    query_text: str,
+    top_k: int,
+) -> List[Dict[str, Any]]:
+    """
+    从 summary 片段中检索最相关的若干段。
+
+    参数:
+        summary_segments: summary 片段列表。
+        query_text: 检索 query。
+        top_k: 返回片段数上限。
+
+    返回:
+        适合直接传给 KBQ 生成步骤的片段字典列表。
+    """
+    ranked: List[tuple[float, Dict[str, Any]]] = []
+    for seg in summary_segments:
+        score = _score_segment(str(seg.get("text") or ""), query_text)
+        if score <= 0:
+            continue
+        ranked.append((score, seg))
+
+    ranked.sort(key=lambda item: (-item[0], int(item[1].get("summary_id") or 0)))
+    selected = ranked[: max(1, top_k)]
+
+    results: List[Dict[str, Any]] = []
+    for score, seg in selected:
+        results.append(
+            {
+                "summary_id": seg.get("summary_id"),
+                "speaker": seg.get("speaker"),
+                "text": seg.get("text"),
+                "score": score,
+            }
+        )
+    return results
 
 
 def _get_kbq_status(payload: Dict[str, Any]) -> str:
@@ -111,13 +328,28 @@ def generate_kbq_notes_step(
     if not project_context:
         project_context = load_project_context_by_id(project_id)
 
-    index_warning = None
-    try:
-        print(f"[KBQ] 为访谈 {interview_id} 构建/更新向量索引")
-        index_interview_summary(interview_id)
-    except Exception as exc:
-        index_warning = f"index summary failed: {exc}"
-        print(f"[KBQ] {index_warning}，将降级为不依赖向量索引继续生成 KBQ Notes")
+    minutes_text, minutes_path = _load_minutes_text_from_backup_dir(project_id, interview_id)
+    if not minutes_text:
+        return {
+            "success": False,
+            "stage": "fetch_minutes_text",
+            "detail": {"message": "no smart minutes txt found"},
+            "project_id": project_id,
+            "interview_id": interview_id,
+            "total_kbq": 0,
+            "results": [],
+        }
+    minutes_segments = _build_minutes_segments_from_text(minutes_text)
+    if not minutes_segments:
+        return {
+            "success": False,
+            "stage": "build_minutes_text",
+            "detail": {"message": f"smart minutes txt is empty: {minutes_path}"},
+            "project_id": project_id,
+            "interview_id": interview_id,
+            "total_kbq": 0,
+            "results": [],
+        }
 
     model_client: Optional[ModelClient] = None
     model_client_error: Optional[str] = None
@@ -150,14 +382,8 @@ def generate_kbq_notes_step(
             )
             dimensions = dimensions_result.get("dimensions") or []
             query_text = _build_kbq_query_text(key_bq_text, dimensions)
-            segments = retrieve_segments_for_question(
-                interview_id=interview_id,
-                question_text=query_text,
-                top_k=top_k,
-                question_type="OPEN",
-                intent_name="KBQ",
-            )
-            print(f"[KBQ] key BQ {kbq_id} 检索到 {len(segments)} 条相关片段")
+            segments = _retrieve_segments_from_summary(minutes_segments, query_text, top_k=top_k)
+            print(f"[KBQ] key BQ {kbq_id} 本地检索到 {len(segments)} 条相关片段")
 
             if model_client is None:
                 notes = {
@@ -211,7 +437,7 @@ def generate_kbq_notes_step(
         "interview_id": interview_id,
         "total_kbq": len(results),
         "results": results,
-        "warnings": [warning for warning in [index_warning, model_client_error] if warning],
+        "warnings": [warning for warning in [model_client_error] if warning],
     }
 
 

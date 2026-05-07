@@ -153,7 +153,13 @@ class ModelClient:
             cls._notes_config_revision = config.revision
 
     @classmethod
-    def _generate_with_kind(cls, kind: str, system_prompt: str, user_prompt: str) -> str:
+    def _generate_with_kind(
+        cls,
+        kind: str,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2048,
+    ) -> str:
         """
         使用指定用途的 provider 执行一次文本生成。
 
@@ -161,6 +167,7 @@ class ModelClient:
             kind: 模型用途，`transcript` 或 `notes`。
             system_prompt: 系统提示词，用于定义角色和输出规范。
             user_prompt: 用户提示词，用于描述当前任务。
+            max_tokens: 本次调用允许返回的最大 token 数。
 
         返回:
             模型返回的文本字符串。
@@ -174,7 +181,7 @@ class ModelClient:
             model_name = cls._notes_model_name
         if provider is None or model_name is None:
             raise RuntimeError("LLM provider 未正确初始化")
-        return provider.generate(system_prompt, user_prompt, model_name)
+        return provider.generate(system_prompt, user_prompt, model_name, max_tokens=max_tokens)
 
     @classmethod
     def _build_project_context_block(cls, project_context: Optional[str]) -> str:
@@ -443,7 +450,12 @@ class ModelClient:
             结构化 Notes 字典。
         """
         return generate_notes_for_question(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             question_text=question_text,
             segments=segments,
@@ -476,7 +488,12 @@ class ModelClient:
             结构化 Notes 字典。
         """
         return generate_notes_for_question_with_fewshot(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             question_text=question_text,
             segments=segments,
@@ -506,7 +523,12 @@ class ModelClient:
             适合写入 `bh_project_interview.note_content` 的总结文本。
         """
         return generate_overall_interview_note(
-            generate_fn=cls.generate_transcript,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "transcript",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
@@ -532,7 +554,12 @@ class ModelClient:
             包含 `dimensions` 的字典。
         """
         return generate_kbq_dimensions(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=3072,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
@@ -561,7 +588,12 @@ class ModelClient:
             包含 `key_bq`、`dimension_notes`、`confidence` 的字典。
         """
         return generate_kbq_notes(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
@@ -596,7 +628,12 @@ class ModelClient:
             一段适合写入智能纪要的小点总结文本。
         """
         return generate_minutes_item_summary(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             section_title=section_title,
@@ -623,7 +660,12 @@ class ModelClient:
             结构化纪要大纲字典。
         """
         return generate_minutes_outline_from_transcript(
-            generate_fn=cls.generate,
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=8192,
+            ),
             project_context_block=cls._build_project_context_block(project_context),
             transcript_text=transcript_text,
         )

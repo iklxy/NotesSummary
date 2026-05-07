@@ -29,6 +29,7 @@ from db import (
     insert_fewshot_sample,
     insert_questions_for_interview,
     update_interview_summary_text,
+    upsert_interview_minutes,
 )
 from schemas.interviews import (
     DeleteInterviewResponse,
@@ -54,6 +55,207 @@ from docx_export import build_transcript_docx_bytes, DOCX_MIME_TYPE
 
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
+
+
+def _get_data_root() -> Path:
+    """
+    获取项目根目录下的 data 目录。
+
+    返回:
+        `data/` 路径。
+    """
+    api_dir = Path(__file__).resolve().parent
+    project_root = api_dir.parent.parent
+    return project_root / "data"
+
+
+def _get_interview_backup_dir(project_id: int, interview_id: int) -> Path:
+    """
+    获取访谈在 data 目录下的备份目录。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+
+    返回:
+        `data/project_{project_id}/interview_{interview_id}` 路径。
+    """
+    return _get_data_root() / f"project_{project_id}" / f"interview_{interview_id}"
+
+
+def _safe_load_json_file(path: Path) -> Dict[str, Any] | None:
+    """
+    安全读取 JSON 文件。
+
+    参数:
+        path: JSON 文件路径。
+
+    返回:
+        解析成功时返回字典，否则返回 `None`。
+    """
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_minutes_payload_complete(payload: Dict[str, Any] | None) -> bool:
+    """
+    判断一个 minutes JSON 是否已经足够用于前端展示。
+
+    参数:
+        payload: 智能纪要 JSON。
+
+    返回:
+        若包含至少一个 section 则返回 True。
+    """
+    if not isinstance(payload, dict):
+        return False
+    raw_sections = payload.get("sections") or []
+    return isinstance(raw_sections, list) and len(raw_sections) > 0
+
+
+def _load_minutes_payload_from_files(project_id: int, interview_id: int) -> tuple[Dict[str, Any] | None, Path | None]:
+    """
+    从访谈目录中寻找可直接展示的 minutes JSON。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+
+    返回:
+        (minutes_payload, source_path) 二元组；未找到时返回 (None, None)。
+    """
+    backup_dir = _get_interview_backup_dir(project_id, interview_id)
+    if not backup_dir.exists():
+        return None, None
+
+    candidate_paths: List[Path] = []
+    direct_path = backup_dir / "minutes.json"
+    outline_path = backup_dir / "outline_minutes" / "minutes.json"
+    candidate_paths.extend([direct_path, outline_path])
+    for path in sorted(backup_dir.rglob("minutes.json")):
+        if path not in candidate_paths:
+            candidate_paths.append(path)
+
+    for path in candidate_paths:
+        payload = _safe_load_json_file(path)
+        if _is_minutes_payload_complete(payload):
+            return payload, path
+    return None, None
+
+
+def _payload_to_minutes_row(payload: Dict[str, Any], project_id: int, interview_id: int) -> Dict[str, Any]:
+    """
+    将文件里的 minutes JSON 转成 `_build_interview_minutes_response` 可消费的行结构。
+
+    参数:
+        payload: 读取到的 minutes JSON。
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+
+    返回:
+        伪造的数据库行结构。
+    """
+    outline_json = payload.get("outline")
+    if outline_json is None:
+        outline_json = payload.get("outline_json")
+    if outline_json is None:
+        outline_json = payload
+    return {
+        "id": None,
+        "project_id": project_id,
+        "project_interview_id": interview_id,
+        "outline_json": outline_json,
+        "minutes_json": payload,
+        "status": payload.get("status") or "done",
+        "error_message": payload.get("error_message"),
+        "generated_at": payload.get("generated_at"),
+    }
+
+
+def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
+    """
+    将智能纪要 JSON 渲染为前端可直接展示的 Markdown 文本。
+
+    参数:
+        payload: 智能纪要 JSON。
+
+    返回:
+        Markdown 风格的可读文本。
+    """
+    lines: List[str] = []
+    document_title = str(payload.get("document_title") or "").strip()
+    if document_title:
+        lines.append(f"# {document_title}")
+        lines.append("")
+
+    core_summary = str(payload.get("core_summary") or "").strip()
+    if core_summary:
+        lines.append("## 核心总结")
+        lines.append(core_summary)
+        lines.append("")
+
+    action_items = payload.get("action_items") or []
+    if isinstance(action_items, list):
+        lines.append("## 待办/结论")
+        if action_items:
+            for idx, item in enumerate(action_items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                owner = str(item.get("owner") or "").strip()
+                time_value = str(item.get("time") or "").strip()
+                content = str(item.get("content") or "").strip()
+                parts: List[str] = []
+                if owner:
+                    parts.append(f"负责人：{owner}")
+                if time_value:
+                    parts.append(f"时间：{time_value}")
+                if content:
+                    parts.append(f"内容：{content}")
+                if parts:
+                    lines.append(f"- {idx}. " + "；".join(parts))
+        else:
+            lines.append("- 无")
+        lines.append("")
+
+    sections = payload.get("sections") or []
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_order = section.get("order")
+            section_title = str(section.get("title") or "").strip()
+            section_summary = str(section.get("summary") or "").strip()
+            if section_title:
+                if section_order is not None:
+                    lines.append(f"## 第{section_order}部分：{section_title}")
+                else:
+                    lines.append(f"## {section_title}")
+            if section_summary:
+                lines.append(section_summary)
+
+            items = section.get("items") or []
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    item_order = item.get("order")
+                    item_title = str(item.get("title") or "").strip()
+                    item_summary = str(item.get("summary") or "").strip()
+                    prefix = f"{item_order}. " if item_order is not None else "- "
+                    if item_title and item_summary:
+                        lines.append(f"{prefix}{item_title}：{item_summary}")
+                    elif item_title:
+                        lines.append(f"{prefix}{item_title}")
+                    elif item_summary:
+                        lines.append(f"{prefix}{item_summary}")
+            lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 def _get_owned_interview_or_404(interview_id: int, current_user_id: int) -> Dict[str, Any]:
@@ -326,8 +528,15 @@ def _build_interview_minutes_response(
     return {
         "interview_id": interview_id,
         "project_id": project_id,
+        "document_title": minutes_json.get("document_title") if isinstance(minutes_json, dict) else None,
+        "core_summary": minutes_json.get("core_summary") if isinstance(minutes_json, dict) else None,
+        "minutes_text": _render_minutes_payload_text(minutes_json)
+        if isinstance(minutes_json, dict)
+        else None,
         "outline": outline_json,
         "sections": sections,
+        "action_items": minutes_json.get("action_items") if isinstance(minutes_json, dict) else [],
+        "highlights": minutes_json.get("highlights") if isinstance(minutes_json, dict) else [],
         "status": row.get("status"),
         "error_message": row.get("error_message"),
         "generated_at": row.get("generated_at"),
@@ -899,6 +1108,39 @@ def get_interview_overall_notes(
         project_id=interview.get("parse_project_id"),
         row=minutes_row,
     )
+    if not minutes_payload.get("sections"):
+        fallback_payload, fallback_path = _load_minutes_payload_from_files(
+            project_id=int(interview.get("parse_project_id") or 0),
+            interview_id=interview_id,
+        )
+        if fallback_payload is not None:
+            try:
+                upsert_interview_minutes(
+                    project_id=int(interview.get("parse_project_id") or 0),
+                    interview_id=interview_id,
+                    outline_json=fallback_payload.get("outline") or fallback_payload.get("outline_json") or fallback_payload,
+                    minutes_json=fallback_payload,
+                    status=str(fallback_payload.get("status") or "done"),
+                    error_message=fallback_payload.get("error_message"),
+                    generated_at=fallback_payload.get("generated_at"),
+                )
+                minutes_row = fetch_interview_minutes_by_interview(interview_id)
+                minutes_payload = _build_interview_minutes_response(
+                    interview_id=interview_id,
+                    project_id=interview.get("parse_project_id"),
+                    row=minutes_row,
+                )
+            except Exception as exc:
+                minutes_row = _payload_to_minutes_row(
+                    fallback_payload,
+                    project_id=int(interview.get("parse_project_id") or 0),
+                    interview_id=interview_id,
+                )
+                minutes_payload = _build_interview_minutes_response(
+                    interview_id=interview_id,
+                    project_id=interview.get("parse_project_id"),
+                    row=minutes_row,
+                )
     summary_rows = fetch_interview_summary(project_interview_id=interview_id)
     return {
         "interview_id": interview_id,
@@ -966,7 +1208,7 @@ def refresh_interview_minutes(
 
     url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-minutes"
     try:
-        resp = requests.post(url, timeout=600)
+        resp = requests.post(url, timeout=3600)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"refresh minutes request failed: {e}")
 

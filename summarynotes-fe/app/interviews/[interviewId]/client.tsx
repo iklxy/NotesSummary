@@ -33,6 +33,7 @@ import {
   StepBackwardOutlined,
   StepForwardOutlined,
 } from "@ant-design/icons";
+import MarkdownContent from "../../../components/MarkdownContent";
 import {
   createInterviewQuestions,
   deleteQuestion,
@@ -1812,7 +1813,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                   {index + 1}. {q.question_text}
                                 </Title>
                                 {summaryText && (
-                                  <Paragraph>{summaryText}</Paragraph>
+                                  <MarkdownContent content={summaryText} />
                                 )}
                                 {!summaryText && (
                                   <Text type="secondary">该题暂无可展示内容。</Text>

@@ -409,14 +409,28 @@ class InterviewMinutesSection(BaseModel):
     items: List[InterviewMinutesItem] = Field(default_factory=list)
 
 
+class InterviewMinutesActionItem(BaseModel):
+    """
+    智能纪要中的单条待办/结论。
+    """
+    owner: Optional[str] = None
+    time: Optional[str] = None
+    content: Optional[str] = None
+
+
 class InterviewMinutesResponse(BaseModel):
     """
     /api/interviews/{interview_id}/overall-notes 中的智能纪要结构。
     """
     interview_id: int
     project_id: Optional[int] = None
+    document_title: Optional[str] = None
+    core_summary: Optional[str] = None
+    minutes_text: Optional[str] = None
     outline: Any = None
     sections: List[InterviewMinutesSection] = Field(default_factory=list)
+    action_items: List[InterviewMinutesActionItem] = Field(default_factory=list)
+    highlights: List[str] = Field(default_factory=list)
     status: Optional[str] = None
     error_message: Optional[str] = None
     generated_at: Optional[str] = None

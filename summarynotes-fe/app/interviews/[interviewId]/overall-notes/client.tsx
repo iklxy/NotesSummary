@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Layout, message, Space, Spin, Typography } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
+import MarkdownContent from "../../../../components/MarkdownContent";
 import {
   getInterviewOverallNotes,
   refreshInterviewKbqNotes,
@@ -12,7 +13,7 @@ import {
 import type { InterviewOverallNotesResponse } from "../../../../lib/types";
 
 const { Header, Content } = Layout;
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 interface Props {
   interviewId: number;
@@ -46,6 +47,50 @@ function getNoteSummary(noteJson: unknown): string {
   }
   const value = noteObj.summary;
   return typeof value === "string" ? value : "";
+}
+
+function getMinutesHighlights(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
+function getMinutesActionItems(
+  value: unknown,
+): Array<{ owner: string; time: string; content: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => {
+      return item !== null && typeof item === "object" && !Array.isArray(item);
+    })
+    .map((item) => ({
+      owner: typeof item.owner === "string" ? item.owner : "",
+      time: typeof item.time === "string" ? item.time : "",
+      content: typeof item.content === "string" ? item.content : "",
+    }))
+    .filter((item) => item.owner.length > 0 || item.time.length > 0 || item.content.length > 0);
+}
+
+function stripMinutesHighlightsSection(text: string): string {
+  const marker = "## 关键高亮";
+  const startIndex = text.indexOf(marker);
+  if (startIndex < 0) {
+    return text;
+  }
+  const afterMarker = text.slice(startIndex + marker.length);
+  const nextHeadingMatch = afterMarker.match(/\n##\s+/);
+  if (!nextHeadingMatch || nextHeadingMatch.index === undefined) {
+    return text.slice(0, startIndex).trim();
+  }
+  const endIndex = startIndex + marker.length + nextHeadingMatch.index;
+  const before = text.slice(0, startIndex).trimEnd();
+  const after = text.slice(endIndex).trimStart();
+  return [before, after].filter((part) => part.length > 0).join("\n\n");
 }
 
 export default function OverallNotesClient({ interviewId }: Props) {
@@ -113,6 +158,10 @@ export default function OverallNotesClient({ interviewId }: Props) {
     }
   };
 
+  const minutesText = useMemo(() => {
+    const rawText = data?.minutes?.minutes_text?.trim() || "";
+    return rawText ? stripMinutesHighlightsSection(rawText) : "";
+  }, [data]);
   const minutesSections = useMemo(() => data?.minutes?.sections ?? [], [data]);
 
   return (
@@ -157,9 +206,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
             <Space direction="vertical" size="large" style={{ width: "100%" }}>
               <Card style={{ borderRadius: 20 }} title="A. 访谈总览 Summary Notes">
                 {data?.note_content ? (
-                  <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                    {data.note_content}
-                  </Paragraph>
+                  <MarkdownContent content={data.note_content} />
                 ) : (
                   <Text type="secondary">暂无整体 summary notes。</Text>
                 )}
@@ -196,9 +243,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                                       title={dimensionName}
                                     >
                                       {summaryText ? (
-                                        <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                          {summaryText}
-                                        </Paragraph>
+                                        <MarkdownContent content={summaryText} />
                                       ) : (
                                         <Text type="secondary">该维度暂无可展示的内容。</Text>
                                       )}
@@ -220,64 +265,64 @@ export default function OverallNotesClient({ interviewId }: Props) {
               </Card>
 
               <Card style={{ borderRadius: 20 }} title="C. 智能纪要">
-                {minutesSections.length > 0 ? (
-                  <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                    {minutesSections.map((section) => {
-                      const sectionTitle =
-                        section.title && section.title.trim()
-                          ? `第${section.order}部分：${section.title.trim()}`
-                          : `第${section.order}部分`;
-                      return (
-                        <Card key={section.order} size="small" style={{ borderRadius: 16 }}>
-                          <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                            <Title level={5} style={{ marginBottom: 0 }}>
-                              {sectionTitle}
-                            </Title>
-                            {section.summary ? (
-                              <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                {section.summary}
-                              </Paragraph>
-                            ) : null}
-                            {section.items?.length ? (
-                              <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                                {section.items.map((item) => {
-                                  const itemTitle =
-                                    item.title && item.title.trim()
-                                      ? `${item.order}. ${item.title.trim()}`
-                                      : `${item.order}`;
-                                  return (
-                                    <Card
-                                      key={`${section.order}-${item.order}-${item.title}`}
-                                      size="small"
-                                      style={{
-                                        borderRadius: 14,
-                                        background: "#fafafa",
-                                        borderColor: "#ececec",
-                                      }}
-                                      title={itemTitle}
-                                    >
-                                      {item.summary ? (
-                                        <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                          {item.summary}
-                                        </Paragraph>
-                                      ) : (
-                                        <Text type="secondary">暂无可展示内容。</Text>
-                                      )}
-                                    </Card>
-                                  );
-                                })}
-                              </Space>
-                            ) : (
-                              <Text type="secondary">该部分暂无小点可展示。</Text>
-                            )}
-                          </Space>
-                        </Card>
-                      );
-                    })}
-                  </Space>
-                ) : (
-                  <Text type="secondary">暂无智能纪要。</Text>
-                )}
+                <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                  {minutesText ? (
+                    <MarkdownContent content={minutesText} />
+                  ) : minutesSections.length > 0 ? (
+                    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                      {minutesSections.map((section) => {
+                        const sectionTitle =
+                          section.title && section.title.trim()
+                            ? `第${section.order}部分：${section.title.trim()}`
+                            : `第${section.order}部分`;
+                        return (
+                          <Card key={section.order} size="small" style={{ borderRadius: 16 }}>
+                            <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                              <Title level={5} style={{ marginBottom: 0 }}>
+                                {sectionTitle}
+                              </Title>
+                              {section.summary ? (
+                                <MarkdownContent content={section.summary} />
+                              ) : null}
+                              {section.items?.length ? (
+                                <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                                  {section.items.map((item) => {
+                                    const itemTitle =
+                                      item.title && item.title.trim()
+                                        ? `${item.order}. ${item.title.trim()}`
+                                        : `${item.order}`;
+                                    return (
+                                      <Card
+                                        key={`${section.order}-${item.order}-${item.title}`}
+                                        size="small"
+                                        style={{
+                                          borderRadius: 14,
+                                          background: "#fafafa",
+                                          borderColor: "#ececec",
+                                        }}
+                                        title={itemTitle}
+                                      >
+                                        {item.summary ? (
+                                          <MarkdownContent content={item.summary} />
+                                        ) : (
+                                          <Text type="secondary">暂无可展示内容。</Text>
+                                        )}
+                                      </Card>
+                                    );
+                                  })}
+                                </Space>
+                              ) : (
+                                <Text type="secondary">该部分暂无小点可展示。</Text>
+                              )}
+                            </Space>
+                          </Card>
+                        );
+                      })}
+                    </Space>
+                  ) : (
+                    <Text type="secondary">暂无智能纪要。</Text>
+                  )}
+                </Space>
               </Card>
             </Space>
           )}

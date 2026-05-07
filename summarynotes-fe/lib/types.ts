@@ -199,6 +199,12 @@ export interface InterviewMinutesItem {
   summary?: string | null;
 }
 
+export interface InterviewMinutesActionItem {
+  owner?: string | null;
+  time?: string | null;
+  content?: string | null;
+}
+
 export interface InterviewMinutesSection {
   order: number;
   title: string;
@@ -209,8 +215,13 @@ export interface InterviewMinutesSection {
 export interface InterviewMinutesResponse {
   interview_id: number;
   project_id?: number | null;
+  document_title?: string | null;
+  core_summary?: string | null;
+  minutes_text?: string | null;
   outline?: unknown;
   sections: InterviewMinutesSection[];
+  action_items?: InterviewMinutesActionItem[];
+  highlights?: string[];
   status?: string | null;
   error_message?: string | null;
   generated_at?: string | null;

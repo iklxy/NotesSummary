@@ -557,6 +557,76 @@ def fetch_interview_minutes_by_interview(interview_id: int) -> dict | None:
     return row
 
 
+def upsert_interview_minutes(
+    project_id: int,
+    interview_id: int,
+    outline_json: Any,
+    minutes_json: Any,
+    status: str = "done",
+    error_message: Optional[str] = None,
+    generated_at: Optional[str] = None,
+) -> int:
+    """
+    将访谈智能纪要大纲与最终结果写入 `bh_project_interview_minutes`。
+
+    参数:
+        project_id: 项目主键 ID。
+        interview_id: 访谈主键 ID。
+        outline_json: 智能纪要大纲对象或 JSON 字符串。
+        minutes_json: 智能纪要最终结果对象或 JSON 字符串。
+        status: 记录状态，默认 `done`。
+        error_message: 可选错误说明。
+        generated_at: 可选生成时间字符串；为空时由数据库接受 NULL。
+
+    返回:
+        实际插入或更新的行数逻辑结果；upsert 场景下返回 `cursor.rowcount`。
+    """
+    sql = """
+        INSERT INTO bh_project_interview_minutes
+            (project_id, project_interview_id, outline_json, minutes_json, status, error_message, generated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            project_id = VALUES(project_id),
+            outline_json = VALUES(outline_json),
+            minutes_json = VALUES(minutes_json),
+            status = VALUES(status),
+            error_message = VALUES(error_message),
+            generated_at = VALUES(generated_at)
+    """
+
+    def _json_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        return text or None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    interview_id,
+                    _json_or_none(outline_json),
+                    _json_or_none(minutes_json),
+                    str(status or "done"),
+                    error_message,
+                    generated_at,
+                ),
+            )
+            rowcount = cursor.rowcount
+        conn.commit()
+        return rowcount
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def fetch_interview_by_id(
     interview_id: int,
     created_by_user_id: int | None = None,

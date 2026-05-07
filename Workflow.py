@@ -529,15 +529,6 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         else:
             _workflow_log(interview_id, "generate_overall_note", "done")
 
-        kbq_result = run_kbq_notes_generation_for_interview(
-            interview_id,
-            project_context=project_context,
-            interview_context=interview_context,
-        )
-        kbq_warning = None
-        if not kbq_result.get("success"):
-            kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
-
         minutes_result = generate_minutes_for_interview(
             interview_id,
             project_context=project_context,
@@ -549,6 +540,17 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             _workflow_log(interview_id, "generate_minutes", f"warning detail={minutes_result}")
         else:
             _workflow_log(interview_id, "generate_minutes", f"done inserted={minutes_result.get('inserted', 0)}")
+
+        kbq_result = {"success": False, "message": "kbq skipped because smart minutes generation failed", "inserted": 0}
+        if minutes_result.get("success"):
+            kbq_result = run_kbq_notes_generation_for_interview(
+                interview_id,
+                project_context=project_context,
+                interview_context=interview_context,
+            )
+        kbq_warning = None
+        if not kbq_result.get("success"):
+            kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
 
         try:
             DbAccess.update_interview_status(interview_id, 2)

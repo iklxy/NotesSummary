@@ -277,6 +277,35 @@ class DbAccess:
         return cls._fetch_all(sql, (interview_id,))
 
     @classmethod
+    def fetch_interview_summary(cls, interview_id: int) -> List[Dict[str, Any]]:
+        """
+        查询某个访谈的 summary 明细。
+
+        参数:
+            interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
+
+        返回:
+            summary 明细记录列表。每条记录至少包含：
+                - id
+                - project_interview_id
+                - timestamp
+                - speaker
+                - text
+        """
+        sql = """
+            SELECT
+                id,
+                project_interview_id,
+                timestamp,
+                speaker,
+                text
+            FROM bh_project_interview_summary
+            WHERE project_interview_id = %s
+            ORDER BY id ASC
+        """
+        return cls._fetch_all(sql, (interview_id,))
+
+    @classmethod
     def fetch_intent_name_map(cls, intent_ids: List[int]) -> Dict[int, str]:
         """
         根据意图 ID 列表构造 `intent_id -> name` 映射。
