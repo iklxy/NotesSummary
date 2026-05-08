@@ -240,8 +240,7 @@ export function getInterviewSummary(interviewId: number): Promise<InterviewSumma
 export async function exportInterviewTransWord(
   interviewId: number,
 ): Promise<{ blob: Blob; filename: string }> {
-  const baseUrl = getBaseUrl().replace(/\/$/, "");
-  const url = `${baseUrl}/api/interviews/${interviewId}/trans/export-word`;
+  const url = `/api/interviews/${interviewId}/trans/export-word`;
   const resp = await fetch(url, {
     method: "GET",
     credentials: "include",
@@ -256,8 +255,18 @@ export async function exportInterviewTransWord(
     throw new Error(`export trans word failed: ${JSON.stringify(detail)}`);
   }
   const contentDisposition = resp.headers.get("content-disposition") || "";
+  const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
   const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
-  const filename = filenameMatch?.[1] || `interview_${interviewId}_trans.docx`;
+  let filename = `interview_${interviewId}_trans.docx`;
+  if (filenameStarMatch?.[1]) {
+    try {
+      filename = decodeURIComponent(filenameStarMatch[1]);
+    } catch {
+      filename = filenameStarMatch[1];
+    }
+  } else if (filenameMatch?.[1]) {
+    filename = filenameMatch[1];
+  }
   return {
     blob: await resp.blob(),
     filename,

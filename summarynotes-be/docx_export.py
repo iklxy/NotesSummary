@@ -11,6 +11,7 @@ Word 文稿导出工具。
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Dict, Iterable, List, Optional
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -34,6 +35,48 @@ def _clean_text(value: Any) -> str:
         return ""
     text = str(value)
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _format_timestamp_mmss(value: Any) -> str:
+    """
+    将毫秒时间戳格式化为 mm:ss。
+
+    参数:
+        value: 原始时间戳，通常是毫秒数，可能为字符串或数字。
+
+    返回:
+        格式化后的时间字符串；如果无法解析则返回原始文本。
+    """
+    raw = _clean_text(value)
+    if not raw:
+        return ""
+    match = re.match(r"^(\d+)(?:-(\d+))?$", raw)
+    if match:
+        start_ms = int(match.group(1))
+        end_ms = int(match.group(2)) if match.group(2) else start_ms
+        if start_ms < 0:
+            start_ms = 0
+        if end_ms < 0:
+            end_ms = 0
+        start_seconds = start_ms // 1000
+        end_seconds = end_ms // 1000
+        start_minutes = start_seconds // 60
+        start_secs = start_seconds % 60
+        end_minutes = end_seconds // 60
+        end_secs = end_seconds % 60
+        start_text = f"{start_minutes}:{start_secs:02d}"
+        end_text = f"{end_minutes}:{end_secs:02d}"
+        return start_text if start_text == end_text else f"{start_text} - {end_text}"
+    try:
+        ms = int(float(raw))
+    except Exception:
+        return raw
+    if ms < 0:
+        ms = 0
+    total_seconds = ms // 1000
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes}:{seconds:02d}"
 
 
 def _w_run(text: str, bold: bool = False, size: Optional[int] = None) -> str:
@@ -122,13 +165,10 @@ def _build_document_xml(
         paragraphs.append(_w_blank_paragraph())
 
     for item in transcript_items:
-        speaker = _clean_text(item.get("speaker")) or "未知角色"
-        timestamp = _clean_text(item.get("timestamp"))
+        timestamp = _format_timestamp_mmss(item.get("timestamp"))
         text = _clean_text(item.get("text"))
-        header = speaker
         if timestamp:
-            header = f"{speaker} [{timestamp}]"
-        paragraphs.append(_w_paragraph(header, bold=True, size=22))
+            paragraphs.append(_w_paragraph(timestamp, bold=True, size=22))
         if text:
             for line in text.split("\n"):
                 cleaned_line = line.strip()

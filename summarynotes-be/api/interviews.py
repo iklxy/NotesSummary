@@ -1695,8 +1695,12 @@ def export_interview_trans_word(
         transcript_items=transcript_items,
     )
     filename = _build_transcript_export_filename(interview_name, interview_id)
+    fallback_filename = f"interview_{interview_id}_trans.docx"
     headers = {
-        "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}",
+        "Content-Disposition": (
+            f"attachment; filename=\"{fallback_filename}\"; "
+            f"filename*=UTF-8''{quote(filename)}"
+        ),
     }
     return Response(content=docx_bytes, media_type=DOCX_MIME_TYPE, headers=headers)
 
