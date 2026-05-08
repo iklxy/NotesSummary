@@ -273,6 +273,42 @@ export async function exportInterviewTransWord(
   };
 }
 
+export async function exportInterviewOverallNotesWord(
+  interviewId: number,
+): Promise<{ blob: Blob; filename: string }> {
+  const url = `/api/interviews/${interviewId}/overall-notes/export-word`;
+  const resp = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`export overall notes word failed: ${JSON.stringify(detail)}`);
+  }
+  const contentDisposition = resp.headers.get("content-disposition") || "";
+  const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  let filename = `interview_${interviewId}_overall_notes.docx`;
+  if (filenameStarMatch?.[1]) {
+    try {
+      filename = decodeURIComponent(filenameStarMatch[1]);
+    } catch {
+      filename = filenameStarMatch[1];
+    }
+  } else if (filenameMatch?.[1]) {
+    filename = filenameMatch[1];
+  }
+  return {
+    blob: await resp.blob(),
+    filename,
+  };
+}
+
 export function getInterviewAudioUrl(interviewId: number): string {
   const baseUrl = getBaseUrl().replace(/\/$/, "");
   return `${baseUrl}/api/interviews/${interviewId}/audio`;

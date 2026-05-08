@@ -54,7 +54,7 @@ from schemas.interviews import (
     SummaryUpdateResponse,
 )
 from storage import delete_remote_object
-from docx_export import build_transcript_docx_bytes, DOCX_MIME_TYPE
+from docx_export import build_overall_notes_docx_bytes, build_transcript_docx_bytes, DOCX_MIME_TYPE
 
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -359,6 +359,78 @@ def _get_qdrant_collection_name() -> str:
     return os.getenv("QDRANT_COLLECTION_SUMMARY", "interview_summary")
 
 
+def _resolve_overall_notes_payload(interview_id: int, current_user_id: int) -> Dict[str, Any]:
+    """
+    聚合整体 Notes 页面所需的数据。
+
+    参数:
+        interview_id: 访谈 ID。
+        current_user_id: 当前登录用户 ID。
+
+    返回:
+        与 /overall-notes 接口一致的聚合字典。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    kbq_rows = fetch_key_bq_rows_by_interview(interview_id)
+    kbq_payload = _build_interview_kbq_notes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        rows=kbq_rows,
+    )
+    minutes_row = fetch_interview_minutes_by_interview(interview_id)
+    minutes_payload = _build_interview_minutes_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        row=minutes_row,
+    )
+    if not minutes_payload.get("sections"):
+        fallback_payload, fallback_path = _load_minutes_payload_from_files(
+            project_id=int(interview.get("parse_project_id") or 0),
+            interview_id=interview_id,
+        )
+        if fallback_payload is not None:
+            try:
+                upsert_interview_minutes(
+                    project_id=int(interview.get("parse_project_id") or 0),
+                    interview_id=interview_id,
+                    outline_json=fallback_payload.get("outline") or fallback_payload.get("outline_json") or fallback_payload,
+                    minutes_json=fallback_payload,
+                    status=str(fallback_payload.get("status") or "done"),
+                    error_message=fallback_payload.get("error_message"),
+                    generated_at=fallback_payload.get("generated_at"),
+                )
+                minutes_row = fetch_interview_minutes_by_interview(interview_id)
+                minutes_payload = _build_interview_minutes_response(
+                    interview_id=interview_id,
+                    project_id=interview.get("parse_project_id"),
+                    row=minutes_row,
+                )
+            except Exception:
+                minutes_row = _payload_to_minutes_row(
+                    fallback_payload,
+                    project_id=int(interview.get("parse_project_id") or 0),
+                    interview_id=interview_id,
+                )
+                minutes_payload = _build_interview_minutes_response(
+                    interview_id=interview_id,
+                    project_id=interview.get("parse_project_id"),
+                    row=minutes_row,
+                )
+    summary_rows = fetch_interview_summary(project_interview_id=interview_id)
+    return {
+        "interview_id": interview_id,
+        "project_id": interview.get("parse_project_id"),
+        "note_content": interview.get("note_content"),
+        "kbq_notes": kbq_payload,
+        "minutes": minutes_payload,
+        "summary": {
+            "interview_id": interview_id,
+            "items": summary_rows,
+        },
+        "interview": interview,
+    }
+
+
 def _build_interview_notes_response(
     interview_id: int,
     project_id: int | None,
@@ -572,6 +644,44 @@ def _build_transcript_export_filename(interview_name: str | None, interview_id: 
     if not cleaned:
         cleaned = f"interview_{interview_id}"
     return f"{cleaned}_全文trans.docx"
+
+
+def _build_overall_notes_export_filename(interview_name: str | None, interview_id: int) -> str:
+    """
+    生成全文 Notes 的导出文件名。
+
+    参数:
+        interview_name: 访谈名称。
+        interview_id: 访谈 ID。
+
+    返回:
+        适合作为下载文件名的字符串。
+    """
+    base_name = (interview_name or f"interview_{interview_id}").strip() or f"interview_{interview_id}"
+    safe_chars: List[str] = []
+    for ch in base_name:
+        if ch.isalnum() or ch in {"-", "_", " ", "(", ")", "[", "]", "【", "】", "、", ".", ","}:
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    cleaned = "".join(safe_chars).strip().replace(" ", "_")
+    if not cleaned:
+        cleaned = f"interview_{interview_id}"
+    return f"{cleaned}_全文Notes.docx"
+
+
+def _build_download_content_disposition(filename: str) -> str:
+    """
+    生成兼容中文文件名的 Content-Disposition。
+
+    参数:
+        filename: 原始文件名。
+
+    返回:
+        适合直接放入响应头的 Content-Disposition 字符串。
+    """
+    ascii_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._-") or "download.docx"
+    return f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
 def _delete_qdrant_points_for_interview(interview_id: int) -> tuple[bool, str | None]:
@@ -1303,64 +1413,73 @@ def get_interview_overall_notes(
         - minutes: 智能纪要
         - summary: 原始 summary 明细列表
     """
-    interview = _get_owned_interview_or_404(interview_id, current_user_id)
-    kbq_rows = fetch_key_bq_rows_by_interview(interview_id)
-    kbq_payload = _build_interview_kbq_notes_response(
-        interview_id=interview_id,
-        project_id=interview.get("parse_project_id"),
-        rows=kbq_rows,
+    payload = _resolve_overall_notes_payload(interview_id, current_user_id)
+    payload.pop("interview", None)
+    return payload
+
+
+@router.get(
+    "/{interview_id}/overall-notes/export-word",
+)
+def export_interview_overall_notes_word(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Response:
+    """
+    导出当前访谈的全文 Notes 为 Word 文档。
+
+    导出的内容按整体 Notes 页面布局顺序展开：
+    A. 访谈总览 Summary Notes
+    B. KBQ Notes
+    C. 智能纪要
+    """
+    payload = _resolve_overall_notes_payload(interview_id, current_user_id)
+    interview = payload.pop("interview", None) or _get_owned_interview_or_404(interview_id, current_user_id)
+    project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
+
+    note_content = str(payload.get("note_content") or "")
+    kbq_items = []
+    kbq_payload = payload.get("kbq_notes") or {}
+    if isinstance(kbq_payload, dict):
+        raw_items = kbq_payload.get("items") or []
+        if isinstance(raw_items, list):
+            kbq_items = [item for item in raw_items if isinstance(item, dict)]
+    minutes_payload = payload.get("minutes") or {}
+    minutes_text = ""
+    if isinstance(minutes_payload, dict):
+        minutes_text = str(minutes_payload.get("minutes_text") or "")
+        if minutes_text:
+            minutes_text = re.sub(
+                r"(?ms)^\s*##\s*关键高亮\s*$.*?(?=^\s*##\s+|\Z)",
+                "",
+                minutes_text,
+            ).strip()
+
+    project_name = project_row.get("name") if project_row else None
+    interview_name = interview.get("name")
+    interview_date = interview.get("interview_date")
+    subtitle_lines = [
+        f"项目：{project_name or interview.get('parse_project_id')}",
+        f"访谈：{interview_name or interview_id}",
+        f"访谈日期：{interview_date or '未填写'}",
+        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+    docx_bytes = build_overall_notes_docx_bytes(
+        title=f"全文 Notes - {interview_name or interview_id}",
+        subtitle_lines=subtitle_lines,
+        note_content=note_content,
+        kbq_items=kbq_items,
+        minutes_text=minutes_text,
     )
-    minutes_row = fetch_interview_minutes_by_interview(interview_id)
-    minutes_payload = _build_interview_minutes_response(
-        interview_id=interview_id,
-        project_id=interview.get("parse_project_id"),
-        row=minutes_row,
-    )
-    if not minutes_payload.get("sections"):
-        fallback_payload, fallback_path = _load_minutes_payload_from_files(
-            project_id=int(interview.get("parse_project_id") or 0),
-            interview_id=interview_id,
-        )
-        if fallback_payload is not None:
-            try:
-                upsert_interview_minutes(
-                    project_id=int(interview.get("parse_project_id") or 0),
-                    interview_id=interview_id,
-                    outline_json=fallback_payload.get("outline") or fallback_payload.get("outline_json") or fallback_payload,
-                    minutes_json=fallback_payload,
-                    status=str(fallback_payload.get("status") or "done"),
-                    error_message=fallback_payload.get("error_message"),
-                    generated_at=fallback_payload.get("generated_at"),
-                )
-                minutes_row = fetch_interview_minutes_by_interview(interview_id)
-                minutes_payload = _build_interview_minutes_response(
-                    interview_id=interview_id,
-                    project_id=interview.get("parse_project_id"),
-                    row=minutes_row,
-                )
-            except Exception as exc:
-                minutes_row = _payload_to_minutes_row(
-                    fallback_payload,
-                    project_id=int(interview.get("parse_project_id") or 0),
-                    interview_id=interview_id,
-                )
-                minutes_payload = _build_interview_minutes_response(
-                    interview_id=interview_id,
-                    project_id=interview.get("parse_project_id"),
-                    row=minutes_row,
-                )
-    summary_rows = fetch_interview_summary(project_interview_id=interview_id)
-    return {
-        "interview_id": interview_id,
-        "project_id": interview.get("parse_project_id"),
-        "note_content": interview.get("note_content"),
-        "kbq_notes": kbq_payload,
-        "minutes": minutes_payload,
-        "summary": {
-            "interview_id": interview_id,
-            "items": summary_rows,
-        },
+    filename = _build_overall_notes_export_filename(interview_name, interview_id)
+    headers = {
+        "Content-Disposition": _build_download_content_disposition(filename),
     }
+    return Response(
+        content=docx_bytes,
+        media_type=DOCX_MIME_TYPE,
+        headers=headers,
+    )
 
 
 @router.post(

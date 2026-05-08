@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Layout, message, Space, Spin, Typography } from "antd";
-import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
 import MarkdownContent from "../../../../components/MarkdownContent";
 import {
+  exportInterviewOverallNotesWord,
   getInterviewOverallNotes,
   refreshInterviewKbqNotes,
   refreshInterviewMinutes,
@@ -97,6 +98,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [kbqRefreshing, setKbqRefreshing] = useState(false);
   const [minutesRefreshing, setMinutesRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -158,6 +160,25 @@ export default function OverallNotesClient({ interviewId }: Props) {
     }
   };
 
+  const handleExportOverallNotesWord = async () => {
+    try {
+      setExporting(true);
+      const resp = await exportInterviewOverallNotesWord(interviewId);
+      const url = URL.createObjectURL(resp.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = resp.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导出全文 Notes 失败");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const minutesText = useMemo(() => {
     const rawText = data?.minutes?.minutes_text?.trim() || "";
     return rawText ? stripMinutesHighlightsSection(rawText) : "";
@@ -185,6 +206,9 @@ export default function OverallNotesClient({ interviewId }: Props) {
             loading={loading}
           >
             刷新页面
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportOverallNotesWord} loading={exporting}>
+            导出全文 Notes
           </Button>
           <Button onClick={handleRefreshMinutes} loading={minutesRefreshing}>
             刷新智能纪要

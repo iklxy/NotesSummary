@@ -4,14 +4,14 @@
 
 Word 文稿导出工具。
 
-该模块负责把“全文 trans”数据渲染为一个标准的 .docx 二进制文件，
+该模块负责把“全文 trans”和“全文 Notes”数据渲染为标准的 .docx 二进制文件，
 用于前端下载导出。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 import re
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -126,6 +126,455 @@ def _w_paragraph(
     if not text:
         return f"<w:p>{ppr}</w:p>"
     return f"<w:p>{ppr}{_w_run(text, bold=bold, size=size)}</w:p>"
+
+
+def _w_paragraph_runs(
+    runs: List[Dict[str, Any]],
+    align: Optional[str] = None,
+) -> str:
+    """
+    生成一个包含多段 run 的 Word 段落 XML。
+
+    参数:
+        runs: run 描述列表，每个元素至少包含 text；可选 bold / size。
+        align: 对齐方式，可选值包括 left/center/right/both。
+
+    返回:
+        paragraph XML 字符串。
+    """
+    ppr = ""
+    if align:
+        ppr = f"<w:pPr><w:jc w:val=\"{escape(align)}\"/></w:pPr>"
+    if not runs:
+        return f"<w:p>{ppr}</w:p>"
+
+    parts: List[str] = []
+    for run in runs:
+        text = str(run.get("text") or "")
+        if not text:
+            continue
+        parts.append(_w_run(text, bold=bool(run.get("bold")), size=run.get("size")))
+    if not parts:
+        parts.append(_w_run(""))
+    return f"<w:p>{ppr}{''.join(parts)}</w:p>"
+
+
+def _w_table_cell(text: str, width: Optional[int] = None) -> str:
+    """
+    生成 Word 表格单元格 XML。
+
+    参数:
+        text: 单元格内容。
+        width: 可选固定宽度，单位为 twentieths of a point。
+
+    返回:
+        table cell XML 字符串。
+    """
+    width_xml = f'<w:tcW w:w="{int(width)}" w:type="dxa"/>' if width is not None else ""
+    cell_paragraph = _paragraph_from_text(text, size=20)
+    return f"<w:tc><w:tcPr>{width_xml}</w:tcPr>{cell_paragraph}</w:tc>"
+
+
+def _w_table(header: List[str], rows: List[List[str]]) -> str:
+    """
+    生成 Word 表格 XML。
+
+    参数:
+        header: 表头单元格列表。
+        rows: 数据行，每一行是单元格列表。
+
+    返回:
+        table XML 字符串。
+    """
+    all_rows = [header] + rows
+    col_count = max(1, max((len(row) for row in all_rows), default=1))
+    col_width = int(9600 / col_count)
+    grid = "".join(f'<w:gridCol w:w="{col_width}"/>' for _ in range(col_count))
+
+    tr_parts: List[str] = []
+    for row_index, row in enumerate(all_rows):
+        cells: List[str] = []
+        for col_index in range(col_count):
+            value = row[col_index] if col_index < len(row) else ""
+            cell_width = col_width
+            cells.append(_w_table_cell(value, width=cell_width))
+        tr_parts.append(f"<w:tr>{''.join(cells)}</w:tr>")
+
+    return (
+        '<w:tbl>'
+        '<w:tblPr>'
+        '<w:tblStyle w:val="TableGrid"/>'
+        '<w:tblW w:w="0" w:type="auto"/>'
+        "</w:tblPr>"
+        f"<w:tblGrid>{grid}</w:tblGrid>"
+        f"{''.join(tr_parts)}"
+        "</w:tbl>"
+    )
+
+
+def _split_inline_markdown(text: str) -> List[Dict[str, Any]]:
+    """
+    将行内 Markdown（主要是加粗）拆成可写入 Word 的 run 列表。
+
+    参数:
+        text: 原始文本。
+
+    返回:
+        run 描述列表，每项包含 text 和 bold。
+    """
+    if not text:
+        return []
+
+    pattern = re.compile(r"(\*\*[\s\S]+?\*\*|__[\s\S]+?__)")
+    runs: List[Dict[str, Any]] = []
+    last_index = 0
+    for match in pattern.finditer(text):
+        start = match.start()
+        if start > last_index:
+            plain = text[last_index:start]
+            if plain:
+                runs.append({"text": plain, "bold": False})
+        raw = match.group(0)
+        inner = raw[2:-2]
+        if inner:
+            runs.append({"text": inner, "bold": True})
+        last_index = match.end()
+    if last_index < len(text):
+        tail = text[last_index:]
+        if tail:
+            runs.append({"text": tail, "bold": False})
+    return runs
+
+
+def _paragraph_from_text(
+    text: str,
+    *,
+    bold: bool = False,
+    size: Optional[int] = None,
+    align: Optional[str] = None,
+) -> str:
+    """
+    将普通文本转换为支持 Markdown 加粗的 Word 段落 XML。
+
+    参数:
+        text: 段落文本。
+        bold: 是否整段加粗。
+        size: 字号，单位为 half-point。
+        align: 对齐方式。
+
+    返回:
+        paragraph XML 字符串。
+    """
+    runs: List[Dict[str, Any]] = []
+    for segment in _split_inline_markdown(text):
+        segment_text = str(segment.get("text") or "")
+        if not segment_text:
+            continue
+        runs.append(
+            {
+                "text": segment_text,
+                "bold": bool(bold or segment.get("bold")),
+                "size": size,
+            }
+        )
+    if not runs:
+        runs = [{"text": text, "bold": bold, "size": size}]
+    return _w_paragraph_runs(runs, align=align)
+
+
+def _append_markdown_text(
+    paragraphs: List[str],
+    content: str,
+    *,
+    base_size: int = 22,
+    heading_sizes: Optional[Dict[int, int]] = None,
+) -> None:
+    """
+    将 Markdown 风格文本追加到段落 XML 列表中。
+
+    参数:
+        paragraphs: 段落 XML 列表。
+        content: Markdown 风格文本。
+        base_size: 普通正文默认字号，单位为 half-point。
+        heading_sizes: 标题层级到字号的映射。
+
+    返回:
+        无。
+    """
+    if not content:
+        return
+    heading_sizes = heading_sizes or {1: 32, 2: 28, 3: 26, 4: 24, 5: 22, 6: 22}
+    normalized = _clean_text(content).replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    buffer: List[str] = []
+
+    def flush_buffer() -> None:
+        if not buffer:
+            return
+        joined = " ".join(part.strip() for part in buffer if part.strip()).strip()
+        buffer.clear()
+        if joined:
+            paragraphs.append(_paragraph_from_text(joined, size=base_size))
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            flush_buffer()
+            paragraphs.append(_w_blank_paragraph())
+            continue
+
+        heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading_match:
+            flush_buffer()
+            level = len(heading_match.group(1))
+            heading_text = heading_match.group(2).strip()
+            paragraphs.append(
+                _paragraph_from_text(
+                    heading_text,
+                    bold=True,
+                    size=heading_sizes.get(level, 22),
+                )
+            )
+            continue
+
+        if re.match(r"^(?:-|\*|\+)\s+", line) or re.match(r"^\d+[.)]\s+", line):
+            flush_buffer()
+            item_text = re.sub(r"^(?:-|\*|\+)\s+|^\d+[.)]\s+", "", line).strip()
+            if item_text:
+                paragraphs.append(_paragraph_from_text(f"· {item_text}", size=base_size))
+            continue
+
+        if "|" in line and index + 1 < len(lines):
+            separator_line = lines[index + 1].strip()
+            if re.match(r"^\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$", separator_line):
+                flush_buffer()
+                header = [
+                    cell.strip()
+                    for cell in line.strip().strip("|").split("|")
+                ]
+                index += 2
+                rows: List[List[str]] = []
+                while index < len(lines):
+                    current = lines[index].strip()
+                    if not current or "|" not in current:
+                        break
+                    rows.append([cell.strip() for cell in current.strip().strip("|").split("|")])
+                    index += 1
+                paragraphs.append(_w_table(header, rows))
+                continue
+
+        if line.startswith("·"):
+            flush_buffer()
+            paragraphs.append(_paragraph_from_text(line, size=base_size))
+            continue
+
+        if line.startswith(">"):
+            flush_buffer()
+            quote_text = re.sub(r"^>\s?", "", line).strip()
+            if quote_text:
+                paragraphs.append(_paragraph_from_text(f"“{quote_text}”", size=base_size))
+            continue
+
+        buffer.append(line)
+
+    flush_buffer()
+
+
+def _build_overall_notes_document_xml(
+    title: str,
+    subtitle_lines: Iterable[str],
+    note_content: str,
+    kbq_items: List[Dict[str, Any]],
+    minutes_text: str,
+) -> str:
+    """
+    组装整体 Notes 的 Word 主文档 XML。
+
+    参数:
+        title: 文档标题。
+        subtitle_lines: 标题下方的说明行。
+        note_content: 访谈级 Summary Notes。
+        kbq_items: KBQ Notes 结构化条目。
+        minutes_text: 智能纪要的 Markdown 文本。
+
+    返回:
+        `word/document.xml` 的完整 XML 文本。
+    """
+    paragraphs: List[str] = []
+    paragraphs.append(_w_paragraph(title, bold=True, size=32, align="center"))
+    paragraphs.append(_w_blank_paragraph())
+    for line in subtitle_lines:
+        cleaned = _clean_text(line)
+        if cleaned:
+            paragraphs.append(_paragraph_from_text(cleaned, size=22))
+    if subtitle_lines:
+        paragraphs.append(_w_blank_paragraph())
+
+    paragraphs.append(_paragraph_from_text("A. 访谈总览 Summary Notes", bold=True, size=28))
+    _append_markdown_text(paragraphs, note_content, base_size=22)
+    paragraphs.append(_w_blank_paragraph())
+
+    paragraphs.append(_paragraph_from_text("B. KBQ Notes", bold=True, size=28))
+    if kbq_items:
+        for item in kbq_items:
+            bq_order = item.get("bq_order")
+            bq_text = _clean_text(item.get("bq_text"))
+            title_text = f"{bq_order}. {bq_text}" if bq_order is not None else bq_text
+            if title_text:
+                paragraphs.append(_paragraph_from_text(title_text, bold=True, size=24))
+
+            note_json = item.get("note_json")
+            dimension_notes: List[Dict[str, Any]] = []
+            if isinstance(note_json, dict):
+                raw_dimension_notes = note_json.get("dimension_notes") or []
+                if isinstance(raw_dimension_notes, list):
+                    dimension_notes = [
+                        dimension
+                        for dimension in raw_dimension_notes
+                        if isinstance(dimension, dict)
+                    ]
+            if dimension_notes:
+                for dimension in dimension_notes:
+                    dimension_name = _clean_text(dimension.get("dimension")) or "维度"
+                    summary_text = _clean_text(dimension.get("summary"))
+                    if dimension_name:
+                        paragraphs.append(_paragraph_from_text(dimension_name, bold=True, size=22))
+                    if summary_text:
+                        _append_markdown_text(paragraphs, summary_text, base_size=22)
+                    else:
+                        paragraphs.append(_paragraph_from_text("暂无可展示的内容。", size=22))
+            else:
+                summary_text = ""
+                if isinstance(note_json, dict):
+                    summary_text = _clean_text(note_json.get("summary"))
+                if summary_text:
+                    _append_markdown_text(paragraphs, summary_text, base_size=22)
+                else:
+                    paragraphs.append(_paragraph_from_text("该条 key BQ 暂无可展示的维度 notes。", size=22))
+            paragraphs.append(_w_blank_paragraph())
+    else:
+        paragraphs.append(_paragraph_from_text("暂无 KBQ Notes。", size=22))
+        paragraphs.append(_w_blank_paragraph())
+
+    paragraphs.append(_paragraph_from_text("C. 智能纪要", bold=True, size=28))
+    _append_markdown_text(paragraphs, minutes_text, base_size=22)
+
+    body = "".join(paragraphs)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"'
+        ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        ' xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+        ' xmlns:v="urn:schemas-microsoft-com:vml"'
+        ' xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"'
+        ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+        ' xmlns:w10="urn:schemas-microsoft-com:office:word"'
+        ' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
+        ' xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"'
+        ' xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"'
+        ' xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"'
+        ' xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+        ' mc:Ignorable="w14 wp14">'
+        "<w:body>"
+        f"{body}"
+        "<w:sectPr>"
+        "<w:pgSz w:w=\"11906\" w:h=\"16838\"/>"
+        "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" "
+        "w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>"
+        "</w:sectPr>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+def build_overall_notes_docx_bytes(
+    *,
+    title: str,
+    subtitle_lines: Iterable[str],
+    note_content: str,
+    kbq_items: List[Dict[str, Any]],
+    minutes_text: str,
+) -> bytes:
+    """
+    生成“全文 Notes”对应的 .docx 文件二进制。
+
+    参数:
+        title: 文档标题。
+        subtitle_lines: 标题下方的说明行。
+        note_content: 访谈级 Summary Notes。
+        kbq_items: KBQ Notes 结构化条目。
+        minutes_text: 智能纪要 Markdown 文本。
+
+    返回:
+        可直接写入 .docx 文件的二进制内容。
+    """
+    document_xml = _build_overall_notes_document_xml(
+        title=title,
+        subtitle_lines=subtitle_lines,
+        note_content=note_content,
+        kbq_items=kbq_items,
+        minutes_text=minutes_text,
+    )
+    core_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+        ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+        ' xmlns:dcterms="http://purl.org/dc/terms/"'
+        ' xmlns:dcmitype="http://purl.org/dc/dcmitype/"'
+        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f"<dc:title>{escape(_clean_text(title))}</dc:title>"
+        f"<dc:creator>NotesSummary</dc:creator>"
+        f"<cp:lastModifiedBy>NotesSummary</cp:lastModifiedBy>"
+        f"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}</dcterms:created>"
+        f"<dcterms:modified xsi:type=\"dcterms:W3CDTF\">{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}</dcterms:modified>"
+        "</cp:coreProperties>"
+    )
+    app_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+        ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        "<Application>NotesSummary</Application>"
+        "</Properties>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/docProps/core.xml" '
+        'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        "</Types>"
+    )
+    rels_root = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/>'
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" '
+        'Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" '
+        'Target="docProps/app.xml"/>'
+        "</Relationships>"
+    )
+
+    buffer = BytesIO()
+    with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels_root)
+        archive.writestr("docProps/core.xml", core_xml)
+        archive.writestr("docProps/app.xml", app_xml)
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
 
 
 def _w_blank_paragraph() -> str:
