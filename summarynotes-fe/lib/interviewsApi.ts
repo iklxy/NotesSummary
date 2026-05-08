@@ -180,6 +180,7 @@ export interface UpdateSummaryResponse {
   reindex_succeeded?: boolean;
   reindex_indexed?: number | null;
   reindex_warning?: string | null;
+  corrections_inserted?: number | null;
 }
 
 export async function createInterview(

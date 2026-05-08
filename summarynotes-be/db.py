@@ -1228,6 +1228,152 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
     return rows
 
 
+def fetch_interview_summary_by_id(summary_id: int, project_interview_id: int) -> dict | None:
+    """
+    根据 summary ID 查询单条 summary 记录。
+
+    参数:
+        summary_id: summary 主键 ID。
+        project_interview_id: 访谈 ID。
+
+    返回:
+        匹配时返回单条记录字典，否则返回 None。
+    """
+    sql = """
+        SELECT
+            id,
+            project_interview_id,
+            timestamp,
+            speaker,
+            text
+        FROM bh_project_interview_summary
+        WHERE id = %s AND project_interview_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (summary_id, project_interview_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def update_interview_summary_text_with_corrections(
+    summary_id: int,
+    project_interview_id: int,
+    text: str,
+    corrections: list[dict] | None,
+) -> tuple[dict | None, int]:
+    """
+    更新某条 summary 的文本，并在同一事务内写入纠错学习记录。
+
+    参数:
+        summary_id: summary 主键 ID。
+        project_interview_id: 访谈 ID。
+        text: 新的 summary 文本。
+        corrections: 需要写入 bh_transcription_corrections 的记录列表。
+
+    返回:
+        (更新后的 summary 记录, 实际插入的 correction 条数)
+    """
+    conn = get_connection()
+    inserted = 0
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_interview_id,
+                    timestamp,
+                    speaker,
+                    text
+                FROM bh_project_interview_summary
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (summary_id, project_interview_id),
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                conn.rollback()
+                return None, 0
+
+            cursor.execute(
+                """
+                UPDATE bh_project_interview_summary
+                SET text = %s
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (text, summary_id, project_interview_id),
+            )
+
+            if corrections:
+                insert_sql = """
+                    INSERT INTO bh_transcription_corrections
+                        (
+                            project_id,
+                            project_interview_id,
+                            summary_id,
+                            wrong_text,
+                            correct_text,
+                            context_before,
+                            context_after,
+                            edit_type,
+                            confidence,
+                            usage_count,
+                            status,
+                            created_by
+                        )
+                    VALUES
+                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                for item in corrections:
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            item.get("project_id"),
+                            item.get("project_interview_id"),
+                            item.get("summary_id"),
+                            item.get("wrong_text"),
+                            item.get("correct_text"),
+                            item.get("context_before"),
+                            item.get("context_after"),
+                            item.get("edit_type"),
+                            item.get("confidence"),
+                            int(item.get("usage_count") or 0),
+                            item.get("status") or "pending",
+                            item.get("created_by"),
+                        ),
+                    )
+                    inserted += 1
+
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_interview_id,
+                    timestamp,
+                    speaker,
+                    text
+                FROM bh_project_interview_summary
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (summary_id, project_interview_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row, inserted
+
+
 def fetch_key_bq_rows_by_interview(interview_id: int) -> list[dict]:
     """
     根据访谈 ID 查询该访谈下所有 key BQ 明细。

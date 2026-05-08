@@ -452,3 +452,4 @@ class SummaryUpdateResponse(BaseModel):
     reindex_succeeded: bool = False
     reindex_indexed: Optional[int] = None
     reindex_warning: Optional[str] = None
+    corrections_inserted: Optional[int] = None

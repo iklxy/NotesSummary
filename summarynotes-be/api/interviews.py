@@ -2,6 +2,8 @@ from pathlib import Path
 import mimetypes
 import shutil
 import json
+import re
+from difflib import SequenceMatcher
 from datetime import datetime
 from urllib.parse import quote
 from typing import Any, Dict, List
@@ -18,6 +20,7 @@ from db import (
     delete_question_and_notes,
     fetch_interview_by_id,
     fetch_interview_minutes_by_interview,
+    fetch_interview_summary_by_id,
     fetch_fewshot_samples_by_interview,
     fetch_interview_summary,
     fetch_project_by_id,
@@ -28,7 +31,7 @@ from db import (
     fetch_questions_by_interview,
     insert_fewshot_sample,
     insert_questions_for_interview,
-    update_interview_summary_text,
+    update_interview_summary_text_with_corrections,
     upsert_interview_minutes,
 )
 from schemas.interviews import (
@@ -704,6 +707,208 @@ def _parse_sample_json(raw: Any) -> tuple[Any, str | None, str | None, int]:
     evidence = parsed.get("evidence")
     evidence_count = len(evidence) if isinstance(evidence, list) else 0
     return parsed, summary if isinstance(summary, str) else None, analysis if isinstance(analysis, str) else None, evidence_count
+
+
+_SUMMARY_DIFF_TOKEN_RE = re.compile(
+    r"\s+|[A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*|[\u4e00-\u9fff]|[^\w\s]",
+    re.UNICODE,
+)
+
+
+def _normalize_correction_compare_text(text: str) -> str:
+    """
+    规范化用于 diff 比较的文本，移除空白与标点噪声。
+
+    参数:
+        text: 原始文本。
+
+    返回:
+        仅保留字母、数字、中文等可比较内容的字符串。
+    """
+    return re.sub(r"[\s\W_]+", "", text or "", flags=re.UNICODE)
+
+
+def _tokenize_correction_text(text: str) -> List[Dict[str, Any]]:
+    """
+    将文本切成适合做差异对齐的 token 序列，并保留原始位置。
+
+    参数:
+        text: 原始文本。
+
+    返回:
+        token 字典列表，每个元素包含 text/start/end。
+    """
+    tokens: List[Dict[str, Any]] = []
+    raw_text = text or ""
+    for match in _SUMMARY_DIFF_TOKEN_RE.finditer(raw_text):
+        token = match.group(0)
+        if token.isspace():
+            continue
+        tokens.append(
+            {
+                "text": token,
+                "start": match.start(),
+                "end": match.end(),
+            }
+        )
+    if not tokens and raw_text.strip():
+        stripped = raw_text.strip()
+        start = raw_text.find(stripped)
+        if start < 0:
+            start = 0
+        tokens.append(
+            {
+                "text": stripped,
+                "start": start,
+                "end": start + len(stripped),
+            }
+        )
+    return tokens
+
+
+def _context_window(text: str, start: int, end: int, window: int = 24) -> tuple[str | None, str | None]:
+    """
+    从原文中截取修改点前后的一小段上下文。
+
+    参数:
+        text: 原始文本。
+        start: 修改片段起始位置。
+        end: 修改片段结束位置。
+        window: 上下文窗口长度，默认 24 个字符。
+
+    返回:
+        (前文, 后文) 二元组，空时返回 None。
+    """
+    safe_start = max(0, start)
+    safe_end = max(safe_start, end)
+    before = (text[max(0, safe_start - window):safe_start] or "").strip()
+    after = (text[safe_end:min(len(text), safe_end + window)] or "").strip()
+    return before or None, after or None
+
+
+def _classify_correction_edit_type(wrong_text: str, correct_text: str) -> str:
+    """
+    根据修改片段长度与形态，粗分类修改类型。
+
+    参数:
+        wrong_text: 原始错误片段。
+        correct_text: 用户修正后的正确片段。
+
+    返回:
+        edit_type 字符串。
+    """
+    wrong_norm = _normalize_correction_compare_text(wrong_text)
+    correct_norm = _normalize_correction_compare_text(correct_text)
+    if not wrong_norm:
+        return "insertion"
+    if not correct_norm:
+        return "deletion"
+
+    combined = f"{wrong_text}{correct_text}"
+    if any(mark in combined for mark in ("。", "！", "？", "\n", "；", ";")):
+        return "sentence_rewrite"
+    if max(len(wrong_norm), len(correct_norm)) >= 24:
+        return "sentence_rewrite"
+    if max(len(wrong_norm), len(correct_norm)) <= 8:
+        return "term_replace"
+    return "phrase_replace"
+
+
+def _limit_correction_text(text: str, limit: int = 1024) -> str:
+    """
+    限制纠错文本长度，避免写入数据库时超出字段上限。
+
+    参数:
+        text: 原始文本。
+        limit: 最大字符数，默认 1024。
+
+    返回:
+        截断后的文本。
+    """
+    safe_text = text or ""
+    if len(safe_text) <= limit:
+        return safe_text
+    return safe_text[:limit]
+
+
+def _extract_transcription_corrections(
+    old_text: str,
+    new_text: str,
+    *,
+    project_id: int,
+    interview_id: int,
+    summary_id: int,
+    created_by: int,
+) -> List[Dict[str, Any]]:
+    """
+    从旧文本和新文本中抽取最小级别的纠错记录。
+
+    参数:
+        old_text: 修改前文本。
+        new_text: 修改后文本。
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+        summary_id: summary ID。
+        created_by: 操作人用户 ID。
+
+    返回:
+        纠错记录列表，每条记录可直接写入 bh_transcription_corrections。
+    """
+    normalized_old = _normalize_correction_compare_text(old_text)
+    normalized_new = _normalize_correction_compare_text(new_text)
+    if normalized_old == normalized_new:
+        return []
+
+    old_tokens = _tokenize_correction_text(old_text)
+    new_tokens = _tokenize_correction_text(new_text)
+    old_seq = [token["text"] for token in old_tokens]
+    new_seq = [token["text"] for token in new_tokens]
+
+    if not old_seq and not new_seq:
+        return []
+
+    matcher = SequenceMatcher(None, old_seq, new_seq, autojunk=False)
+    corrections: List[Dict[str, Any]] = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+
+        old_start = old_tokens[i1]["start"] if i1 < len(old_tokens) else len(old_text or "")
+        old_end = old_tokens[i2 - 1]["end"] if i2 > i1 else old_start
+        new_start = new_tokens[j1]["start"] if j1 < len(new_tokens) else len(new_text or "")
+        new_end = new_tokens[j2 - 1]["end"] if j2 > j1 else new_start
+
+        wrong_text = (old_text or "")[old_start:old_end].strip()
+        correct_text = (new_text or "")[new_start:new_end].strip()
+
+        wrong_norm = _normalize_correction_compare_text(wrong_text)
+        correct_norm = _normalize_correction_compare_text(correct_text)
+        if not wrong_norm and not correct_norm:
+            continue
+        if wrong_norm == correct_norm:
+            continue
+
+        edit_type = _classify_correction_edit_type(wrong_text, correct_text)
+        context_before, context_after = _context_window(old_text or "", old_start, old_end)
+        corrections.append(
+            {
+                "project_id": project_id,
+                "project_interview_id": interview_id,
+                "summary_id": summary_id,
+                "wrong_text": _limit_correction_text(wrong_text),
+                "correct_text": _limit_correction_text(correct_text),
+                "context_before": context_before,
+                "context_after": context_after,
+                "edit_type": edit_type,
+                "confidence": 1.0,
+                "usage_count": 0,
+                "status": "approved",
+                "created_by": created_by,
+            }
+        )
+
+    return corrections
 
 
 @router.post("/{interview_id}/run", response_model=RunInterviewResponse)
@@ -1527,18 +1732,33 @@ def update_interview_summary(
     current_user_id: int = Depends(require_current_user_id),
 ) -> SummaryUpdateResponse:
     """
-    更新指定 summary 的文本，并触发索引重建。
+    更新指定 summary 的文本，并记录用户修正得到的纠错学习样本。
     """
-    _get_owned_interview_or_404(interview_id, current_user_id)
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
     new_text = payload.text.strip()
     if not new_text:
         raise HTTPException(status_code=400, detail="summary text is required")
 
+    original = fetch_interview_summary_by_id(summary_id, interview_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="summary not found")
+
+    old_text = str(original.get("text") or "")
+    corrections = _extract_transcription_corrections(
+        old_text,
+        new_text,
+        project_id=int(interview.get("parse_project_id") or 0),
+        interview_id=interview_id,
+        summary_id=summary_id,
+        created_by=current_user_id,
+    )
+
     try:
-        updated = update_interview_summary_text(
+        updated, corrections_inserted = update_interview_summary_text_with_corrections(
             summary_id=summary_id,
             project_interview_id=interview_id,
             text=new_text,
+            corrections=corrections,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"update summary failed: {e}")
@@ -1552,4 +1772,5 @@ def update_interview_summary(
         reindex_succeeded=False,
         reindex_indexed=None,
         reindex_warning=None,
+        corrections_inserted=corrections_inserted,
     )
