@@ -7,6 +7,8 @@ from LLMProviders import BaseLLMProvider, build_provider
 from ModelNotes import (
     escape_inner_quotes_in_field,
     escape_inner_quotes_in_notes_json,
+    generate_ca_cells_for_sub_point,
+    generate_ca_dimensions,
     generate_kbq_dimensions,
     generate_kbq_notes,
     generate_minutes_outline_from_transcript,
@@ -668,6 +670,72 @@ class ModelClient:
             ),
             project_context_block=cls._build_project_context_block(project_context),
             transcript_text=transcript_text,
+        )
+
+    @classmethod
+    def generate_ca_dimensions(
+        cls,
+        project_context: Optional[str] = None,
+        interviews_notes: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于多份全文 Notes 生成 CA 维度骨架。
+
+        参数:
+            project_context: 可选项目背景文本。
+            interviews_notes: 多访谈全文 Notes 列表。
+
+        返回:
+            结构化 CA 维度字典。
+        """
+        return generate_ca_dimensions(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=8192,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            interviews_notes=interviews_notes or [],
+        )
+
+    @classmethod
+    def generate_ca_cells_for_sub_point(
+        cls,
+        project_context: Optional[str] = None,
+        dimension_title: str = "",
+        dimension_summary: str = "",
+        sub_point_title: str = "",
+        sub_point_summary: str = "",
+        interview_blocks: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于某个 CA 小点为所有访谈生成单元格内容。
+
+        参数:
+            project_context: 可选项目背景文本。
+            dimension_title: 维度标题。
+            dimension_summary: 维度概述。
+            sub_point_title: 小点标题。
+            sub_point_summary: 小点概述。
+            interview_blocks: 各访谈的检索片段输入块。
+
+        返回:
+            标准化后的 cells 映射字典。
+        """
+        return generate_ca_cells_for_sub_point(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=4096,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            dimension_title=dimension_title,
+            dimension_summary=dimension_summary,
+            sub_point_title=sub_point_title,
+            sub_point_summary=sub_point_summary,
+            interview_blocks=interview_blocks or [],
         )
 
     @classmethod

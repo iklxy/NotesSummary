@@ -1,23 +1,30 @@
 from pathlib import Path
+import json
 import os
+import re
 import shutil
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from api.auth import require_current_user_id
+from InterviewLogger import log_interview
 from db import (
     delete_project_graph,
     fetch_interview_by_id,
     fetch_interviews_by_project,
+    fetch_ca_table_by_project,
     fetch_project_by_id,
     fetch_projects,
     insert_project,
+    upsert_ca_table,
 )
 from storage import delete_remote_object
+from xlsx_export import XLSX_MIME_TYPE, build_ca_table_xlsx_bytes
 
 
 class ProjectCreate(BaseModel):
@@ -77,6 +84,17 @@ def _get_data_root() -> Path:
     api_dir = Path(__file__).resolve().parent
     project_root = api_dir.parent.parent
     return project_root / "data"
+
+
+def _get_internal_base() -> str:
+    """
+    获取内部 Engine 服务的基地址。
+
+    返回:
+        可直接拼接 /internal/... 的服务基地址。
+    """
+    base = os.getenv("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000")
+    return base.rstrip("/")
 
 
 def _get_qdrant_base_url() -> str:
@@ -241,6 +259,118 @@ def _delete_cloud_audio_object(object_key: str | None) -> tuple[bool, str | None
     return False, message
 
 
+def _safe_load_json_text(value: Any) -> Dict[str, Any] | None:
+    """
+    安全解析 JSON 文本。
+
+    参数:
+        value: 可能已经是字典、也可能是 JSON 字符串的对象。
+
+    返回:
+        解析成功时返回字典；否则返回 None。
+    """
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _get_ca_data_root() -> Path:
+    """
+    获取本地 CA 缓存目录根路径。
+
+    返回:
+        项目根目录下的 `data` 路径。
+    """
+    api_dir = Path(__file__).resolve().parent
+    project_root = api_dir.parent.parent
+    return project_root / "data"
+
+
+def _get_ca_cache_path(project_id: int) -> Path:
+    """
+    获取项目级 CA 缓存文件路径。
+
+    参数:
+        project_id: 项目 ID。
+
+    返回:
+        `data/project_{project_id}/ca_table.json`
+    """
+    return _get_ca_data_root() / f"project_{project_id}" / "ca_table.json"
+
+
+def _load_ca_payload_from_files(project_id: int) -> tuple[Dict[str, Any] | None, Path | None]:
+    """
+    从本地缓存中读取 CA JSON。
+
+    参数:
+        project_id: 项目 ID。
+
+    返回:
+        (payload, source_path)；没有有效文件则返回 (None, None)。
+    """
+    candidate_paths = [
+        _get_ca_cache_path(project_id),
+    ]
+    for path in candidate_paths:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload, path
+    return None, None
+
+
+def _build_download_content_disposition(filename: str) -> str:
+    """
+    生成兼容中文文件名的 Content-Disposition。
+
+    参数:
+        filename: 目标文件名。
+
+    返回:
+        可直接放入响应头的 Content-Disposition。
+    """
+    ascii_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("_") or "download.xlsx"
+    return f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename)}'
+
+
+def _build_ca_export_filename(project_name: str | None, project_id: int) -> str:
+    """
+    构造 CA 导出文件名。
+
+    参数:
+        project_name: 项目名称。
+        project_id: 项目 ID。
+
+    返回:
+        导出文件名字符串。
+    """
+    base_name = (project_name or f"project_{project_id}").strip() or f"project_{project_id}"
+    safe_chars: List[str] = []
+    for ch in base_name:
+        if ch.isalnum() or ch in {"-", "_", " ", "(", ")", "[", "]", "【", "】", "、", ".", ","}:
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    cleaned = "".join(safe_chars).strip().replace(" ", "_")
+    if not cleaned:
+        cleaned = f"project_{project_id}"
+    return f"{cleaned}_CA.xlsx"
+
+
 @router.post("", response_model=Dict[str, Any])
 def create_project(
     payload: ProjectCreate,
@@ -301,6 +431,165 @@ def list_projects(
     """
     rows = fetch_projects(created_by_user_id=current_user_id)
     return rows
+
+
+@router.get("/{project_id}/ca-table", response_model=Dict[str, Any])
+def get_project_ca_table(
+    project_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    查询指定项目的 CA 表结果。
+
+    返回:
+        包含 ca_json 的响应字典；若数据库未命中则尝试从本地缓存恢复。
+    """
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    row = fetch_ca_table_by_project(project_id)
+    ca_json = None
+    if row:
+        ca_json = _safe_load_json_text(row.get("ca_json"))
+
+    if ca_json is None:
+        fallback_payload, fallback_path = _load_ca_payload_from_files(project_id)
+        if fallback_payload is not None:
+            ca_json = fallback_payload
+            try:
+                upsert_ca_table(
+                    project_id=project_id,
+                    ca_json=fallback_payload,
+                    status=str(fallback_payload.get("status") or "done"),
+                    error_message=fallback_payload.get("error_message"),
+                    generated_at=fallback_payload.get("generated_at"),
+                )
+            except Exception:
+                pass
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "project_name": project.get("name"),
+        "ca_json": ca_json,
+    }
+
+
+@router.post("/{project_id}/ca-table/generate", response_model=Dict[str, Any])
+def generate_project_ca_table(
+    project_id: int,
+    payload: Dict[str, Any] | None = Body(default=None),
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    触发项目级 CA 表生成。
+
+    参数:
+        project_id: 项目 ID。
+        payload: 可选请求体，支持:
+            - interview_ids: 当前选择的访谈 ID 列表
+            - column_meta_fields: 列元数据字段列表
+    """
+    _get_owned_project_or_404(project_id, current_user_id)
+    body = payload or {}
+    url = f"{_get_internal_base()}/internal/projects/{project_id}/generate-ca-table"
+    request_payload = {
+        "interview_ids": body.get("interview_ids") or [],
+        "column_meta_fields": body.get("column_meta_fields") or [],
+    }
+    log_interview(
+        "CA",
+        None,
+        f"BFF 开始请求 CA 生成 project_id={project_id} request_payload={request_payload}",
+        subject_label="project_id",
+    )
+    try:
+        resp = requests.post(url, json=request_payload, timeout=3600)
+    except Exception as e:
+        log_interview(
+            "CA",
+            None,
+            f"BFF 请求 CA 生成异常 project_id={project_id} error={e}",
+            subject_label="project_id",
+        )
+        raise HTTPException(status_code=500, detail=f"generate ca table request failed: {e}")
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        log_interview(
+            "CA",
+            None,
+            f"BFF 收到 CA 生成失败响应 project_id={project_id} status_code={resp.status_code} detail={detail}",
+            subject_label="project_id",
+        )
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    try:
+        log_interview(
+            "CA",
+            None,
+            f"BFF 收到 CA 生成成功响应 project_id={project_id}",
+            subject_label="project_id",
+        )
+        return resp.json()
+    except Exception as e:
+        log_interview(
+            "CA",
+            None,
+            f"BFF 解析 CA 生成响应失败 project_id={project_id} error={e}",
+            subject_label="project_id",
+        )
+        raise HTTPException(status_code=500, detail=f"parse generate ca table response failed: {e}")
+
+
+@router.post("/{project_id}/ca-table/export-xlsx")
+def export_project_ca_table_xlsx(
+    project_id: int,
+    payload: Dict[str, Any] | None = Body(default=None),
+    current_user_id: int = Depends(require_current_user_id),
+) -> Response:
+    """
+    导出项目级 CA 表为 Excel。
+
+    支持在请求体中携带 `ca_json`，用于在前端编辑后直接导出并回填数据库。
+    """
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    body = payload or {}
+    ca_json = body.get("ca_json") if isinstance(body, dict) else None
+    if not isinstance(ca_json, dict):
+        row = fetch_ca_table_by_project(project_id)
+        if row:
+            ca_json = _safe_load_json_text(row.get("ca_json"))
+    if not isinstance(ca_json, dict):
+        fallback_payload, _ = _load_ca_payload_from_files(project_id)
+        if fallback_payload is not None:
+            ca_json = fallback_payload
+    if not isinstance(ca_json, dict):
+        raise HTTPException(status_code=404, detail="ca table not found")
+
+    try:
+        upsert_ca_table(
+            project_id=project_id,
+            ca_json=ca_json,
+            status=str(ca_json.get("status") or "done"),
+            error_message=ca_json.get("error_message"),
+            generated_at=ca_json.get("generated_at"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save ca table failed: {e}")
+
+    try:
+        xlsx_bytes = build_ca_table_xlsx_bytes(ca_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"build ca xlsx failed: {e}")
+
+    project_name = project.get("name")
+    filename = _build_ca_export_filename(project_name, project_id)
+    headers = {
+        "Content-Disposition": _build_download_content_disposition(filename),
+    }
+    return Response(content=xlsx_bytes, media_type=XLSX_MIME_TYPE, headers=headers)
 
 
 @router.delete("/{project_id}", response_model=Dict[str, Any])

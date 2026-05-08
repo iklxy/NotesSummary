@@ -34,21 +34,28 @@ def _ensure_log_dir() -> None:
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def _build_log_line(component: str, interview_id: Optional[int], message: str) -> str:
+def _build_log_line(
+    component: str,
+    subject_id: Optional[int],
+    message: str,
+    subject_label: str = "interview_id",
+) -> str:
     """
     构造统一格式的日志行。
 
     参数:
         component: 日志来源组件名。
-        interview_id: 访谈 ID；若为 None 则写为 -。
+        subject_id: 记录对象 ID；若为 None 则写为 -。
         message: 日志内容。
+        subject_label: 记录对象字段名，默认 `interview_id`。
 
     返回:
         格式化后的单行日志字符串。
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    interview_label = interview_id if interview_id is not None else "-"
-    return f"{timestamp} [{component}] interview_id={interview_label} {message}"
+    subject_label = subject_label.strip() or "interview_id"
+    subject_value = subject_id if subject_id is not None else "-"
+    return f"{timestamp} [{component}] {subject_label}={subject_value} {message}"
 
 
 def _write_line(path: Path, line: str) -> None:
@@ -68,7 +75,12 @@ def _write_line(path: Path, line: str) -> None:
             f.write(line + "\n")
 
 
-def log_interview(component: str, interview_id: Optional[int], message: str) -> None:
+def log_interview(
+    component: str,
+    interview_id: Optional[int],
+    message: str,
+    subject_label: str = "interview_id",
+) -> None:
     """
     输出访谈级日志，同时写入对应访谈的独立日志文件。
 
@@ -76,12 +88,13 @@ def log_interview(component: str, interview_id: Optional[int], message: str) -> 
         component: 日志来源组件名，例如 WORKFLOW、TRANSCRIBE、NOTES。
         interview_id: 访谈 ID；若为空则只输出到系统日志。
         message: 日志内容。
+        subject_label: 日志对象字段名，默认 `interview_id`。
 
     返回:
         无。
     """
     _ensure_log_dir()
-    line = _build_log_line(component, interview_id, message)
+    line = _build_log_line(component, interview_id, message, subject_label=subject_label)
     print(line, flush=True)
     if interview_id is None:
         _write_line(SYSTEM_LOG_PATH, line)

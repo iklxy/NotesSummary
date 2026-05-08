@@ -474,6 +474,9 @@ export default function Home() {
                                 >
                                   新建访谈
                                 </Button>
+                                <Button onClick={() => router.push(`/projects/${project.id}/ca`)}>
+                                  CA
+                                </Button>
                                 <Button type="default" onClick={() => openEditProject(project)}>
                                   编辑项目
                                 </Button>

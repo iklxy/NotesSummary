@@ -352,6 +352,74 @@ export interface Project {
   interviews?: Interview[];
 }
 
+export interface ProjectCaInterviewMeta {
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
+}
+
+export interface ProjectCaInterviewItem {
+  interview_id: number;
+  name: string;
+  interview_date?: string | null;
+  meta?: ProjectCaInterviewMeta | Record<string, string | number | null> | null;
+}
+
+export interface ProjectCaSubPoint {
+  order: number;
+  title: string;
+  summary?: string | null;
+  cells?: Record<string, string>;
+}
+
+export interface ProjectCaDimension {
+  order: number;
+  title: string;
+  summary?: string | null;
+  sub_points: ProjectCaSubPoint[];
+}
+
+export interface ProjectCaJson {
+  project_id: number;
+  project_name?: string | null;
+  column_meta_fields?: string[];
+  selected_interview_ids?: number[];
+  interviews: ProjectCaInterviewItem[];
+  dimensions: ProjectCaDimension[];
+  status?: string | null;
+  generated_at?: string | null;
+  error_message?: string | null;
+  project_context?: Record<string, unknown> | null;
+}
+
+export interface ProjectCaTableResponse {
+  success: boolean;
+  project_id: number;
+  project_name?: string | null;
+  ca_json?: ProjectCaJson | null;
+}
+
+export interface GenerateProjectCaTableRequest {
+  interview_ids: number[];
+  column_meta_fields: string[];
+}
+
+export interface GenerateProjectCaTableResponse {
+  success: boolean;
+  project_id: number;
+  generated_at?: string | null;
+  column_meta_fields?: string[] | null;
+  interview_count?: number | null;
+  dimension_count?: number | null;
+  requested_interview_ids?: number[] | null;
+  skipped_interview_ids?: number[] | null;
+  ca_json?: ProjectCaJson | null;
+  ca_json_path?: string | null;
+  message?: string | null;
+  stage?: string | null;
+  detail?: unknown;
+}
+
 export interface AuthUser {
   id: number;
   username: string;

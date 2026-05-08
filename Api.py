@@ -6,11 +6,12 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 
 from DbAccess import DbAccess
 from InterviewLogger import log_interview
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
+from CAWorkflow import generate_ca_table_for_project
 from MinutesWorkflow import generate_minutes_for_interview
 from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
 from RagIndex import index_interview_summary
@@ -331,6 +332,63 @@ def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"generate minutes failed: {e}")
+
+
+@app.post("/internal/projects/{project_id}/generate-ca-table")
+def api_generate_ca_table(
+    project_id: int,
+    payload: Dict[str, Any] | None = Body(default=None),
+) -> Dict[str, Any]:
+    """
+    生成指定项目的 CA 表。
+
+    参数:
+        project_id: 项目主键 ID。
+        payload: 可选请求体，支持 interview_ids 与 column_meta_fields。
+    """
+    body = payload or {}
+    interview_ids = body.get("interview_ids") or []
+    column_meta_fields = body.get("column_meta_fields") or []
+    log_interview(
+        "CA",
+        project_id,
+        "开始生成 CA 表 "
+        f"interview_ids={interview_ids} "
+        f"column_meta_fields={column_meta_fields}",
+    )
+    try:
+        result = generate_ca_table_for_project(
+            project_id=project_id,
+            interview_ids=[int(item) for item in interview_ids if item is not None],
+            column_meta_fields=[str(item) for item in column_meta_fields if str(item).strip()],
+        )
+        if isinstance(result, dict):
+            if result.get("success"):
+                log_interview(
+                    "CA",
+                    project_id,
+                    "CA 表生成完成 "
+                    f"interview_count={result.get('interview_count')} "
+                    f"dimension_count={result.get('dimension_count')} "
+                    f"skipped_interview_ids={result.get('skipped_interview_ids')}",
+                )
+            else:
+                log_interview(
+                    "CA",
+                    project_id,
+                    "CA 表生成返回失败 "
+                    f"stage={result.get('stage')} "
+                    f"detail={result.get('detail')}",
+                )
+        return result
+    except Exception as e:
+        log_interview(
+            "CA",
+            project_id,
+            "CA 表生成异常 "
+            f"error={e}\n{traceback.format_exc()}",
+        )
+        raise HTTPException(status_code=500, detail=f"generate ca table failed: {e}")
 
 
 @app.post("/internal/interviews/{interview_id}/refresh-kbq-notes")

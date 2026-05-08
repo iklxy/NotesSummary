@@ -2,6 +2,7 @@
 "@Author: lixinyang"
 
 
+import json
 from typing import Any, Dict, List, Optional, Sequence
 
 import pymysql
@@ -241,6 +242,92 @@ class DbAccess:
             LIMIT 1
         """
         return cls._fetch_one(sql, (project_id,))
+
+    @classmethod
+    def fetch_interviews_by_project(
+        cls,
+        project_id: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询指定项目下的全部访谈。
+
+        参数:
+            project_id: 项目主键 ID，对应 `bh_project.id`。
+
+        返回:
+            访谈记录列表，按 `id DESC` 排序；每条记录至少包含：
+                - id
+                - parse_project_id
+                - name
+                - interview_date
+                - file_name
+                - hospital_city
+                - hospital_decile
+                - doctor_level
+                - core_problem
+                - status
+        """
+        sql = """
+            SELECT
+                i.id,
+                i.parse_project_id,
+                i.name,
+                i.interview_date,
+                i.file_name,
+                i.hospital_city,
+                i.hospital_decile,
+                i.doctor_level,
+                i.core_problem,
+                i.status
+            FROM bh_project_interview i
+            WHERE i.parse_project_id = %s
+            ORDER BY i.id DESC
+        """
+        return cls._fetch_all(sql, (project_id,))
+
+    @classmethod
+    def fetch_completed_interviews_for_project(
+        cls,
+        project_id: int,
+        interview_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询指定项目下状态为 2 的已完成访谈。
+
+        参数:
+            project_id: 项目主键 ID，对应 `bh_project.id`。
+            interview_ids: 可选的访谈 ID 子集；若传入，则仅返回这些访谈中已完成的记录。
+
+        返回:
+            已完成访谈记录列表，按 `id ASC` 排序。
+        """
+        params: List[Any] = [project_id]
+        extra_filter = ""
+        if interview_ids:
+            normalized_ids = [int(item) for item in interview_ids if item is not None]
+            if not normalized_ids:
+                return []
+            extra_filter = f" AND i.id IN ({','.join(['%s'] * len(normalized_ids))})"
+            params.extend(normalized_ids)
+        sql = f"""
+            SELECT
+                i.id,
+                i.parse_project_id,
+                i.name,
+                i.interview_date,
+                i.file_name,
+                i.hospital_city,
+                i.hospital_decile,
+                i.doctor_level,
+                i.core_problem,
+                i.status
+            FROM bh_project_interview i
+            WHERE i.parse_project_id = %s
+              AND i.status = 2
+              {extra_filter}
+            ORDER BY i.id ASC
+        """
+        return cls._fetch_all(sql, params)
 
     @classmethod
     def fetch_questions_for_interview(cls, interview_id: int) -> List[Dict[str, Any]]:
@@ -735,6 +822,96 @@ class DbAccess:
             LIMIT 1
         """
         return cls._fetch_one(sql, (interview_id,))
+
+    @classmethod
+    def upsert_ca_table(
+        cls,
+        project_id: int,
+        ca_json: Any,
+        status: str = "done",
+        error_message: Optional[str] = None,
+        generated_at: Optional[str] = None,
+    ) -> int:
+        """
+        将项目级 CA 结果写入 `bh_project_ca_table`。
+
+        参数:
+            project_id: 项目主键 ID。
+            ca_json: CA 结果对象或 JSON 字符串。
+            status: 记录状态，默认 `done`。
+            error_message: 可选错误说明。
+            generated_at: 可选生成时间字符串；为空时写入 NULL。
+
+        返回:
+            `cursor.rowcount`。
+        """
+        sql = """
+            INSERT INTO bh_project_ca_table
+                (project_id, ca_json, status, error_message, generated_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                ca_json = VALUES(ca_json),
+                status = VALUES(status),
+                error_message = VALUES(error_message),
+                generated_at = VALUES(generated_at)
+        """
+
+        def _json_or_none(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False)
+            text = str(value).strip()
+            return text or None
+
+        conn = cls.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql,
+                    (
+                        project_id,
+                        _json_or_none(ca_json),
+                        str(status or "done"),
+                        error_message,
+                        generated_at,
+                    ),
+                )
+                rowcount = cursor.rowcount
+            conn.commit()
+            return rowcount
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @classmethod
+    def fetch_ca_table_by_project(cls, project_id: int) -> Optional[Dict[str, Any]]:
+        """
+        查询项目级 CA 表记录。
+
+        参数:
+            project_id: 项目主键 ID。
+
+        返回:
+            若存在则返回单条 CA 记录字典，否则返回 `None`。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                ca_json,
+                status,
+                error_message,
+                generated_at,
+                created_at,
+                updated_at
+            FROM bh_project_ca_table
+            WHERE project_id = %s
+            LIMIT 1
+        """
+        return cls._fetch_one(sql, (project_id,))
 
     # ------------------------------------------------------------------
     # Summary 落库
