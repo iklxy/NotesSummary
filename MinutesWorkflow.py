@@ -193,6 +193,56 @@ def _build_summary_full_text(summary_segments: List[Dict[str, Any]]) -> str:
     return "\n".join(lines).strip()
 
 
+def _normalize_minutes_text_fragment(value: Any) -> str:
+    """
+    将智能纪要中的单段文本归一化为普通可读文本。
+
+    主要用于清理模型偶尔返回的 JSON-like 片段，避免把大括号、字段名
+    直接写入 minutes.json / minutes.txt。
+
+    参数:
+        value: 原始文本或其他类型值。
+
+    返回:
+        归一化后的纯文本字符串。
+    """
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return text
+
+        if isinstance(payload, dict):
+            for key in ("core_summary", "核心总结", "summary"):
+                candidate = payload.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+
+            points = payload.get("分点要点") or payload.get("items") or payload.get("points")
+            if isinstance(points, list):
+                flattened_points: List[str] = []
+                for item in points:
+                    if isinstance(item, str) and item.strip():
+                        flattened_points.append(item.strip())
+                if flattened_points:
+                    return "\n".join(f"· {item}" for item in flattened_points)
+
+            conclusion = payload.get("待办/结论") or payload.get("结论")
+            if isinstance(conclusion, str) and conclusion.strip():
+                return conclusion.strip()
+
+        return text
+
+    return text
+
+
 def _tokenize_for_search(text: str) -> List[str]:
     """
     将文本拆成适合做本地检索的 token。
@@ -300,7 +350,7 @@ def _normalize_outline_sections(raw_outline: Any) -> List[Dict[str, Any]]:
         if not isinstance(section, dict):
             continue
         title = str(section.get("title") or section.get("name") or "").strip()
-        summary = str(section.get("summary") or section.get("content") or "").strip()
+        summary = _normalize_minutes_text_fragment(section.get("summary") or section.get("content"))
 
         items: List[Dict[str, Any]] = []
         raw_items = section.get("items") or section.get("points") or section.get("children") or []
@@ -309,7 +359,7 @@ def _normalize_outline_sections(raw_outline: Any) -> List[Dict[str, Any]]:
                 if not isinstance(item, dict):
                     continue
                 item_title = str(item.get("title") or item.get("name") or "").strip()
-                item_summary = str(item.get("summary") or item.get("content") or "").strip()
+                item_summary = _normalize_minutes_text_fragment(item.get("summary") or item.get("content"))
                 if not item_title and not item_summary:
                     continue
                 items.append(
@@ -364,29 +414,6 @@ def _render_minutes_text(payload: Dict[str, Any]) -> str:
                 lines.append(f"- {idx}. {highlight_text}")
         lines.append("")
 
-    action_items = payload.get("action_items") or []
-    if isinstance(action_items, list):
-        lines.append("## 待办/结论")
-        if action_items:
-            for idx, item in enumerate(action_items, start=1):
-                if not isinstance(item, dict):
-                    continue
-                owner = str(item.get("owner") or "").strip()
-                time_value = str(item.get("time") or "").strip()
-                content = str(item.get("content") or "").strip()
-                parts: List[str] = []
-                if owner:
-                    parts.append(f"负责人：{owner}")
-                if time_value:
-                    parts.append(f"时间：{time_value}")
-                if content:
-                    parts.append(f"内容：{content}")
-                if parts:
-                    lines.append(f"- {idx}. " + "；".join(parts))
-        else:
-            lines.append("- 无")
-        lines.append("")
-
     sections = payload.get("sections") or []
     if not isinstance(sections, list):
         return "\n".join(lines).strip()
@@ -402,8 +429,6 @@ def _render_minutes_text(payload: Dict[str, Any]) -> str:
                 lines.append(f"## 第{section_order}部分：{section_title}")
             else:
                 lines.append(f"## {section_title}")
-        if section_summary:
-            lines.append(section_summary)
 
         items = section.get("items") or []
         if isinstance(items, list):
@@ -420,6 +445,8 @@ def _render_minutes_text(payload: Dict[str, Any]) -> str:
                     lines.append(f"{prefix}{item_title}")
                 elif item_summary:
                     lines.append(f"{prefix}{item_summary}")
+        if section_summary:
+            lines.append(section_summary)
         lines.append("")
 
     return "\n".join(lines).strip()
@@ -507,7 +534,7 @@ def _build_minutes_sections(
                     continue
                 item_order = int(item.get("order") or len(section_items) + 1)
                 item_title = str(item.get("title") or "").strip()
-                item_summary = str(item.get("summary") or "").strip()
+                item_summary = _normalize_minutes_text_fragment(item.get("summary"))
                 if not item_title and not item_summary:
                     continue
 
@@ -534,7 +561,7 @@ def _build_minutes_sections(
                         project_context=project_context,
                         interview_context=interview_context,
                     )
-                point_summary = (point_summary or "").strip() or "当前访谈中信息不足"
+                point_summary = _normalize_minutes_text_fragment(point_summary) or "当前访谈中信息不足"
 
                 section_items.append(
                     {

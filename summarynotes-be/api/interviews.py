@@ -188,38 +188,41 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
         Markdown 风格的可读文本。
     """
     lines: List[str] = []
+
+    def _normalize_fragment(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return text
+            if isinstance(parsed, dict):
+                for key in ("core_summary", "核心总结", "summary"):
+                    candidate = parsed.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        return candidate.strip()
+                points = parsed.get("分点要点") or parsed.get("items") or parsed.get("points")
+                if isinstance(points, list):
+                    flattened = [str(item).strip() for item in points if str(item).strip()]
+                    if flattened:
+                        return "\n".join(f"· {item}" for item in flattened)
+                conclusion = parsed.get("待办/结论") or parsed.get("结论")
+                if isinstance(conclusion, str) and conclusion.strip():
+                    return conclusion.strip()
+            return text
+        return text
+
     document_title = str(payload.get("document_title") or "").strip()
     if document_title:
         lines.append(f"# {document_title}")
         lines.append("")
 
-    core_summary = str(payload.get("core_summary") or "").strip()
+    core_summary = _normalize_fragment(payload.get("core_summary"))
     if core_summary:
         lines.append("## 核心总结")
         lines.append(core_summary)
-        lines.append("")
-
-    action_items = payload.get("action_items") or []
-    if isinstance(action_items, list):
-        lines.append("## 待办/结论")
-        if action_items:
-            for idx, item in enumerate(action_items, start=1):
-                if not isinstance(item, dict):
-                    continue
-                owner = str(item.get("owner") or "").strip()
-                time_value = str(item.get("time") or "").strip()
-                content = str(item.get("content") or "").strip()
-                parts: List[str] = []
-                if owner:
-                    parts.append(f"负责人：{owner}")
-                if time_value:
-                    parts.append(f"时间：{time_value}")
-                if content:
-                    parts.append(f"内容：{content}")
-                if parts:
-                    lines.append(f"- {idx}. " + "；".join(parts))
-        else:
-            lines.append("- 无")
         lines.append("")
 
     sections = payload.get("sections") or []
@@ -229,14 +232,12 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
                 continue
             section_order = section.get("order")
             section_title = str(section.get("title") or "").strip()
-            section_summary = str(section.get("summary") or "").strip()
+            section_summary = _normalize_fragment(section.get("summary"))
             if section_title:
                 if section_order is not None:
                     lines.append(f"## 第{section_order}部分：{section_title}")
                 else:
                     lines.append(f"## {section_title}")
-            if section_summary:
-                lines.append(section_summary)
 
             items = section.get("items") or []
             if isinstance(items, list):
@@ -245,7 +246,7 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
                         continue
                     item_order = item.get("order")
                     item_title = str(item.get("title") or "").strip()
-                    item_summary = str(item.get("summary") or "").strip()
+                    item_summary = _normalize_fragment(item.get("summary"))
                     prefix = f"{item_order}. " if item_order is not None else "- "
                     if item_title and item_summary:
                         lines.append(f"{prefix}{item_title}：{item_summary}")
@@ -253,6 +254,8 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
                         lines.append(f"{prefix}{item_title}")
                     elif item_summary:
                         lines.append(f"{prefix}{item_summary}")
+            if section_summary:
+                lines.append(section_summary)
             lines.append("")
 
     return "\n".join(lines).strip()
@@ -1543,14 +1546,10 @@ def update_interview_summary(
     if not updated:
         raise HTTPException(status_code=404, detail="summary not found")
 
-    reindex_succeeded, reindex_indexed, reindex_warning = _reindex_summary_chunks(interview_id)
-    if not reindex_succeeded and not reindex_warning:
-        reindex_warning = "reindex failed"
-
     return SummaryUpdateResponse(
         success=True,
         summary=updated,
-        reindex_succeeded=reindex_succeeded,
-        reindex_indexed=reindex_indexed,
-        reindex_warning=reindex_warning,
+        reindex_succeeded=False,
+        reindex_indexed=None,
+        reindex_warning=None,
     )
