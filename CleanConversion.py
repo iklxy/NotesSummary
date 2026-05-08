@@ -2,11 +2,13 @@
 "@Author: lixinyang"
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import dotenv
 
 from Model import ModelClient
+from InterviewLogger import log_interview
 
 dotenv.load_dotenv()
 
@@ -95,6 +97,8 @@ def _run_segment_stage(
     correction_rules: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
+    interview_id: Optional[int] = None,
+    max_workers: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     用统一模板执行逐段处理，避免主纠错 / 兜底纠错 / 清洗三段逻辑重复。
@@ -156,10 +160,10 @@ def _run_segment_stage(
                 return candidate
         return str(request_item.get(input_text_field) or "")
 
-    for idx, seg in enumerate(speakers, start=1):
+    def _process_one(idx: int, seg: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
         seg_id = seg.get("id")
         speaker_id = str(seg.get("speaker_id", ""))
-        print(f"[{stage_name}] 开始处理第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
+        log_interview("CLEAN", interview_id, f"[{stage_name}] 开始处理第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")
 
         request_item = _build_segment_prompt_record(
             seg=seg,
@@ -175,8 +179,12 @@ def _run_segment_stage(
         }
         if correction_rules is not None and model_method_name == "apply_correction_fallback_batch":
             runner_kwargs["correction_rules"] = correction_rules
-        stage_rows = runner(**runner_kwargs)
-        stage_row = stage_rows[0] if stage_rows else {}
+        try:
+            stage_rows = runner(**runner_kwargs)
+            stage_row = stage_rows[0] if stage_rows else {}
+        except Exception as exc:
+            log_interview("CLEAN", interview_id, f"[{stage_name}] 第 {idx}/{total} 段失败 id={seg_id} error={exc}")
+            stage_row = {"error": str(exc)}
 
         raw_text = str(seg.get("speaker_content", "") or "")
         corrected_text = str(seg.get("speaker_content_corrected", raw_text) or raw_text)
@@ -200,8 +208,48 @@ def _run_segment_stage(
             merged["speaker_content_clean"] = final_text
         if output_text_field == "speaker_content_clean":
             merged["speaker_content_clean"] = final_text
-        results.append(merged)
-        print(f"[{stage_name}] 完成处理第 {idx}/{total} 段, id={seg_id}")
+        log_interview("CLEAN", interview_id, f"[{stage_name}] 完成处理第 {idx}/{total} 段, id={seg_id}")
+        return idx, merged
+
+    batch_size = max(1, max_workers)
+    for start in range(0, total, batch_size):
+        batch = list(enumerate(speakers[start:start + batch_size], start=start + 1))
+        if len(batch) == 1:
+            idx, seg = batch[0]
+            _, merged = _process_one(idx, seg)
+            results.append(merged)
+            continue
+
+        batch_results: Dict[int, Dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=min(batch_size, len(batch)), thread_name_prefix=f"clean-{stage_name.lower()}") as executor:
+            future_map = {executor.submit(_process_one, idx, seg): idx for idx, seg in batch}
+            for future in as_completed(future_map):
+                idx = future_map[future]
+                try:
+                    _, merged = future.result()
+                    batch_results[idx] = merged
+                except Exception as exc:
+                    seg = speakers[idx - 1]
+                    seg_id = seg.get("id")
+                    speaker_id = str(seg.get("speaker_id", ""))
+                    log_interview("CLEAN", interview_id, f"[{stage_name}] 第 {idx}/{total} 段线程异常 id={seg_id} speaker_id={speaker_id} error={exc}")
+                    raw_text = str(seg.get("speaker_content", "") or "")
+                    batch_results[idx] = {
+                        "id": seg_id,
+                        "uid": str(seg.get("uid") or seg.get("id") or f"u{idx:04d}"),
+                        "speaker_id": speaker_id,
+                        "speaker_role": str(seg.get("speaker_role") or ""),
+                        "speaker_content": raw_text,
+                        "speaker_content_corrected": raw_text,
+                        "speaker_content_clean": raw_text,
+                        "start_time": seg.get("start_time"),
+                        "end_time": seg.get("end_time"),
+                        "term_corrections": [],
+                        "uncertain_terms": [],
+                        output_text_field: raw_text,
+                    }
+        for idx in sorted(batch_results):
+            results.append(batch_results[idx])
 
     return results
 
@@ -212,6 +260,7 @@ def correct_speakers(
     term_hints: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
+    interview_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     对按说话轮次切分后的 speakers 列表进行逐段纠错。
@@ -252,6 +301,7 @@ def correct_speakers(
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
 
 
@@ -262,6 +312,7 @@ def fallback_correct_speakers(
     term_hints: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
+    interview_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     在主纠错后，根据热词对应的兜底纠错文本再做一次收敛修正。
@@ -277,6 +328,7 @@ def fallback_correct_speakers(
         correction_rules=correction_rules,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
 
 
@@ -286,6 +338,7 @@ def clean_speakers(
     term_hints: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
+    interview_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     对纠错后的 speakers 列表进行逐段清洗。
@@ -300,6 +353,7 @@ def clean_speakers(
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
 
 
@@ -310,6 +364,7 @@ def clean_file_content_json(
     correction_rules: Optional[List[str]] = None,
     project_context: Optional[str] = None,
     interview_context: Optional[Dict[str, Any] | str] = None,
+    interview_id: Optional[int] = None,
 ) -> str:
     """
     针对 bh_project_interview.file_content 中的 JSON 结果进行逐段纠错与兜底纠错，
@@ -394,6 +449,7 @@ def clean_file_content_json(
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
     fallback_corrected_speakers = fallback_correct_speakers(
         speakers=corrected_speakers,
@@ -402,6 +458,7 @@ def clean_file_content_json(
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
     cleaned_speakers = clean_speakers(
         speakers=fallback_corrected_speakers,
@@ -409,6 +466,7 @@ def clean_file_content_json(
         term_hints=term_hints,
         project_context=project_context,
         interview_context=interview_context,
+        interview_id=interview_id,
     )
 
     enriched: List[Dict[str, Any]] = []

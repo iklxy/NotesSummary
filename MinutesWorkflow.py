@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from DbAccess import DbAccess
+from InterviewLogger import log_interview
 from Model import ModelClient
 from ProjectContext import load_project_context_by_id
 
@@ -32,7 +33,7 @@ DEFAULT_MINUTES_TXT_NAME = "minutes.txt"
 DEFAULT_SUMMARY_TEXT_NAME = "summary_full_text.txt"
 
 
-def log(message: str) -> None:
+def log(message: str, interview_id: int | None = None) -> None:
     """
     输出统一前缀的进度日志。
 
@@ -40,7 +41,7 @@ def log(message: str) -> None:
         message: 需要打印的日志内容。
     """
 
-    print(f"[MINUTES] {message}", flush=True)
+    log_interview("MINUTES", interview_id, message)
 
 
 def _get_data_root() -> Path:
@@ -500,6 +501,7 @@ def _build_minutes_sections(
     project_context: Optional[str],
     interview_context: Optional[Any],
     top_k: int,
+    interview_id: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     根据 outline 逐小点生成智能纪要正文。
@@ -546,7 +548,8 @@ def _build_minutes_sections(
                     top_k=top_k,
                 )
                 log(
-                    f"章节 {section_order} 小点 {item_order} 检索到 {len(segments)} 条相关片段"
+                    f"章节 {section_order} 小点 {item_order} 检索到 {len(segments)} 条相关片段",
+                    interview_id=interview_id,
                 )
 
                 if model_client is None:
@@ -662,10 +665,10 @@ def generate_minutes_for_interview(
                 project_context=project_context,
             )
         except Exception as exc:
-            log(f"访谈 {interview_id} 提炼访谈背景失败，继续使用外部背景或空背景：{exc}")
+            log(f"访谈 {interview_id} 提炼访谈背景失败，继续使用外部背景或空背景：{exc}", interview_id=interview_id)
         interview_context = derived_interview_context or interview_context
 
-        log(f"开始为访谈 {interview_id} 生成智能纪要大纲")
+        log(f"开始为访谈 {interview_id} 生成智能纪要大纲", interview_id=interview_id)
         outline_payload = _extract_minutes_outline_from_summary_text(
             backup_dir,
             summary_rows,
@@ -692,7 +695,7 @@ def generate_minutes_for_interview(
             model_client = ModelClient()
         except Exception as exc:
             model_client_error = f"init model client failed: {exc}"
-            log(model_client_error)
+            log(model_client_error, interview_id=interview_id)
 
         minutes_sections, generated_count = _build_minutes_sections(
             summary_segments=summary_segments,
@@ -701,6 +704,7 @@ def generate_minutes_for_interview(
             project_context=project_context,
             interview_context=interview_context,
             top_k=top_k,
+            interview_id=interview_id,
         )
 
         minutes_payload: Dict[str, Any] = {

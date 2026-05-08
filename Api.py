@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 
 from DbAccess import DbAccess
+from InterviewLogger import log_interview
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from MinutesWorkflow import generate_minutes_for_interview
 from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
@@ -67,19 +68,15 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
             无返回值。执行结果仅用于日志输出。
         """
         try:
-            print(f"[TRANSCRIBE] interview_id={interview_id} job_start", flush=True)
+            log_interview("TRANSCRIBE", interview_id, "job_start")
             result = run_workflow(interview_id)
-            print(f"[TRANSCRIBE] interview_id={interview_id} finished: {json.dumps(result, ensure_ascii=False)}")
+            log_interview("TRANSCRIBE", interview_id, f"finished: {json.dumps(result, ensure_ascii=False)}")
         except Exception as e:
             try:
                 DbAccess.update_interview_status(interview_id, 3)
             except Exception:
                 pass
-            print(
-                f"[TRANSCRIBE] interview_id={interview_id} unexpected error: {e}\n"
-                f"{traceback.format_exc()}",
-                flush=True,
-            )
+            log_interview("TRANSCRIBE", interview_id, f"unexpected error: {e}\n{traceback.format_exc()}")
 
     try:
         TRANSCRIBE_EXECUTOR.submit(_job)

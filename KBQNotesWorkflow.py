@@ -1,3 +1,16 @@
+"""
+@Date: 2026-05-08
+@Author: lixinyang
+
+KBQ Notes 生成工作流。
+
+职责：
+1. 从 bh_project_interview_key_bq 读取 key BQ。
+2. 基于智能纪要 txt 做本地检索。
+3. 抽取维度并生成 KBQ Notes。
+4. 将结果回写数据库并落盘到访谈目录。
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from DbAccess import DbAccess
+from InterviewLogger import log_interview
 from Model import ModelClient
 from ProjectContext import load_project_context_by_id
 
@@ -357,10 +371,10 @@ def generate_kbq_notes_step(
         model_client = ModelClient()
     except Exception as exc:
         model_client_error = f"init model client failed: {exc}"
-        print(f"[KBQ] {model_client_error}，将写入降级 KBQ Notes")
+        log_interview("KBQ", interview_id, f"{model_client_error}，将写入降级 KBQ Notes")
 
     results: List[Dict[str, Any]] = []
-    print(f"[KBQ] 共 {len(kbq_items)} 条 key BQ，开始生成 KBQ Notes")
+    log_interview("KBQ", interview_id, f"共 {len(kbq_items)} 条 key BQ，开始生成 KBQ Notes")
 
     for row in kbq_items:
         kbq_id = row.get("id")
@@ -369,7 +383,7 @@ def generate_kbq_notes_step(
         if not key_bq_text:
             continue
 
-        print(f"[KBQ] 开始为 key BQ {kbq_id} 生成 KBQ Notes")
+        log_interview("KBQ", interview_id, f"开始为 key BQ {kbq_id} 生成 KBQ Notes")
         try:
             dimensions_result = (
                 model_client.generate_kbq_dimensions(
@@ -383,7 +397,7 @@ def generate_kbq_notes_step(
             dimensions = dimensions_result.get("dimensions") or []
             query_text = _build_kbq_query_text(key_bq_text, dimensions)
             segments = _retrieve_segments_from_summary(minutes_segments, query_text, top_k=top_k)
-            print(f"[KBQ] key BQ {kbq_id} 本地检索到 {len(segments)} 条相关片段")
+            log_interview("KBQ", interview_id, f"key BQ {kbq_id} 本地检索到 {len(segments)} 条相关片段")
 
             if model_client is None:
                 notes = {

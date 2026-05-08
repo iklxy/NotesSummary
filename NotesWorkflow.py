@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from DbAccess import DbAccess
 from Fewshot import select_fewshot_samples
+from InterviewLogger import log_interview
 from Model import ModelClient
 from ProjectContext import load_project_context_by_id
 from RagIndex import index_interview_summary, retrieve_segments_for_question
@@ -110,11 +111,11 @@ def generate_notes_step(
     index_warning = None
     if ensure_index:
         try:
-            print(f"[NOTES] 为访谈 {interview_id} 构建/更新向量索引")
+            log_interview("NOTES", interview_id, f"为访谈 {interview_id} 构建/更新向量索引")
             index_interview_summary(interview_id)
         except Exception as exc:
             index_warning = f"index summary failed: {exc}"
-            print(f"[NOTES] {index_warning}，将降级为不依赖向量索引继续生成 Notes")
+            log_interview("NOTES", interview_id, f"{index_warning}，将降级为不依赖向量索引继续生成 Notes")
 
     intent_ids = [int(row["intent_id"]) for row in questions if row.get("intent_id") is not None]
     intent_name_map: Dict[int, str] = {}
@@ -123,7 +124,7 @@ def generate_notes_step(
         if intent_result.get("success"):
             intent_name_map = intent_result.get("intent_name_map") or {}
         else:
-            print(f"[NOTES] 读取 intent 名称失败：{intent_result.get('message')}")
+            log_interview("NOTES", interview_id, f"读取 intent 名称失败：{intent_result.get('message')}")
 
     model_client: Optional[ModelClient] = None
     model_client_error: Optional[str] = None
@@ -131,10 +132,10 @@ def generate_notes_step(
         model_client = ModelClient()
     except Exception as exc:
         model_client_error = f"init model client failed: {exc}"
-        print(f"[NOTES] {model_client_error}，将写入降级 Notes")
+        log_interview("NOTES", interview_id, f"{model_client_error}，将写入降级 Notes")
 
     results: List[Dict[str, Any]] = []
-    print(f"[NOTES] 共 {len(questions)} 条题目，开始生成 Notes")
+    log_interview("NOTES", interview_id, f"共 {len(questions)} 条题目，开始生成 Notes")
 
     for row in questions:
         question_id = row.get("id")
@@ -143,7 +144,7 @@ def generate_notes_step(
         intent_id = row.get("intent_id")
         intent_name = intent_name_map.get(intent_id) if intent_id is not None else None
 
-        print(f"[NOTES] 开始为问题 {question_id} 生成 Notes")
+        log_interview("NOTES", interview_id, f"开始为问题 {question_id} 生成 Notes")
         try:
             segments = retrieve_segments_for_question(
                 interview_id=interview_id,
@@ -152,7 +153,7 @@ def generate_notes_step(
                 question_type=question_type or None,
                 intent_name=intent_name,
             )
-            print(f"[NOTES] 问题 {question_id} 检索到 {len(segments)} 条相关片段")
+            log_interview("NOTES", interview_id, f"问题 {question_id} 检索到 {len(segments)} 条相关片段")
 
             fewshot_samples = select_fewshot_samples(
                 project_id=project_id,
@@ -162,7 +163,7 @@ def generate_notes_step(
                 intent_id=intent_id if intent_id is not None else 0,
                 limit=2,
             )
-            print(f"[NOTES] 问题 {question_id} 选出 few-shot 样本数量: {len(fewshot_samples)}")
+            log_interview("NOTES", interview_id, f"问题 {question_id} 选出 few-shot 样本数量: {len(fewshot_samples)}")
 
             if model_client is None:
                 notes = {

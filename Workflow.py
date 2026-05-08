@@ -13,6 +13,7 @@ from Model import ModelClient
 from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
 from QuestionnaireHotword import load_reviewed_questionnaire_hotwords
 from DbAccess import DbAccess
+from InterviewLogger import log_interview
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from MinutesWorkflow import generate_minutes_for_interview
 from ProjectContext import load_project_context_by_id
@@ -28,8 +29,7 @@ def _workflow_log(interview_id: int | None, stage: str, message: str) -> None:
         stage: 阶段名，例如 transcribe、clean_with_llm、write_summary。
         message: 阶段要输出的日志内容。
     """
-    prefix = f"[WORKFLOW] interview_id={interview_id if interview_id is not None else '-'} stage={stage}"
-    print(f"{prefix} {message}", flush=True)
+    log_interview("WORKFLOW", interview_id, f"stage={stage} {message}")
 
 
 def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
@@ -217,6 +217,7 @@ def step_clean_with_llm(
             correction_rules=correction_rules,
             project_context=project_context,
             interview_context=interview_context,
+            interview_id=interview_id,
         )
         _workflow_log(
             interview_id,
