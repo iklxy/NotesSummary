@@ -29,12 +29,13 @@ from ModelCA import generate_ca_cells_for_sub_point, generate_ca_dimensions
 from NotesMarkdownBuilder import build_interview_full_notes_markdown, build_project_full_notes_markdowns
 from MinutesWorkflow import _score_segment, _tokenize_for_search
 from ProjectContext import load_project_context_by_id
+from interview_detail_fields import INTERVIEW_DETAIL_FIELD_DEFINITIONS
 
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_CA_JSON_NAME = "ca_table.json"
 DEFAULT_CA_FULL_NOTES_NAME = "full_notes.md"
-DEFAULT_COLUMN_META_FIELDS = ["hospital_city", "hospital_decile", "doctor_level"]
+DEFAULT_COLUMN_META_FIELDS = [str(item["key"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS]
 
 
 def log(message: str, project_id: int | None = None) -> None:
@@ -307,7 +308,7 @@ def generate_ca_table_for_project(
         usable_interviews.append(
             {
                 "interview_id": interview_id,
-            "name": str(row.get("name") or item.get("name") or f"Interview {interview_id}").strip(),
+                "name": str(row.get("name") or item.get("name") or f"Interview {interview_id}").strip(),
                 "interview_date": row.get("interview_date"),
                 "meta": meta,
                 "notes_markdown": notes_markdown,
@@ -440,6 +441,9 @@ def generate_ca_table_for_project(
         "project_id": project_id,
         "project_name": project_name,
         "column_meta_fields": selected_fields,
+        "column_meta_field_labels": {
+            str(item["key"]): str(item["label"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS if str(item["key"]) in selected_fields
+        },
         "selected_interview_ids": interview_id_list,
         "requested_interview_ids": requested_interview_ids,
         "skipped_interview_ids": skipped_interview_ids,

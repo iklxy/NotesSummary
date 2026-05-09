@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import pymysql
 
 from config import config
+from interview_detail_fields import build_interview_detail_meta
 
 
 class DbAccess:
@@ -201,21 +202,34 @@ class DbAccess:
         """
         sql = """
             SELECT
-                id,
-                parse_project_id,
-                file_name,
-                core_problem,
-                questionnaire_id,
-                key_bq_id,
-                file_content,
-                note_content,
-                file_path,
-                status
-            FROM bh_project_interview
-            WHERE id = %s
+                i.id,
+                i.parse_project_id,
+                i.name,
+                i.interview_date,
+                i.file_name,
+                i.core_problem,
+                i.questionnaire_id,
+                i.key_bq_id,
+                i.file_content,
+                i.note_content,
+                i.file_path,
+                i.status,
+                COALESCE(d.city, i.hospital_city) AS city,
+                COALESCE(d.city, i.hospital_city) AS hospital_city,
+                COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+                COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+                d.doctor_title,
+                d.hospital,
+                d.department
+            FROM bh_project_interview i
+            LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
+            WHERE i.id = %s
             LIMIT 1
         """
-        return cls._fetch_one(sql, (interview_id,))
+        row = cls._fetch_one(sql, (interview_id,))
+        if row:
+            row["detail"] = build_interview_detail_meta(row)
+        return row
 
     @classmethod
     def get_questionnaire_by_id(cls, questionnaire_id: int) -> Optional[Dict[str, Any]]:
@@ -313,16 +327,24 @@ class DbAccess:
                 i.name,
                 i.interview_date,
                 i.file_name,
-                i.hospital_city,
-                i.hospital_decile,
-                i.doctor_level,
                 i.core_problem,
-                i.status
+                i.status,
+                COALESCE(d.city, i.hospital_city) AS city,
+                COALESCE(d.city, i.hospital_city) AS hospital_city,
+                COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+                COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+                d.doctor_title,
+                d.hospital,
+                d.department
             FROM bh_project_interview i
+            LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
             WHERE i.parse_project_id = %s
             ORDER BY i.id DESC
         """
-        return cls._fetch_all(sql, (project_id,))
+        rows = cls._fetch_all(sql, (project_id,))
+        for row in rows:
+            row["detail"] = build_interview_detail_meta(row)
+        return rows
 
     @classmethod
     def fetch_completed_interviews_for_project(
@@ -355,18 +377,26 @@ class DbAccess:
                 i.name,
                 i.interview_date,
                 i.file_name,
-                i.hospital_city,
-                i.hospital_decile,
-                i.doctor_level,
                 i.core_problem,
-                i.status
+                i.status,
+                COALESCE(d.city, i.hospital_city) AS city,
+                COALESCE(d.city, i.hospital_city) AS hospital_city,
+                COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+                COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+                d.doctor_title,
+                d.hospital,
+                d.department
             FROM bh_project_interview i
+            LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
             WHERE i.parse_project_id = %s
               AND i.status = 2
               {extra_filter}
             ORDER BY i.id ASC
         """
-        return cls._fetch_all(sql, params)
+        rows = cls._fetch_all(sql, params)
+        for row in rows:
+            row["detail"] = build_interview_detail_meta(row)
+        return rows
 
     @classmethod
     def fetch_questions_for_interview(cls, interview_id: int) -> List[Dict[str, Any]]:

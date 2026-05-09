@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from DbAccess import DbAccess
+from interview_detail_fields import build_interview_detail_meta
 from MinutesWorkflow import _render_minutes_text
 
 
@@ -269,11 +270,7 @@ def build_project_full_notes_markdowns(
             continue
         cache_path = ROOT_DIR / "data" / f"project_{project_id}" / f"interview_{interview_id}" / DEFAULT_FULL_NOTES_MD_NAME
         markdown = build_interview_full_notes_markdown(interview_id, cache_path=cache_path)
-        meta = {
-            "hospital_city": interview.get("hospital_city"),
-            "hospital_decile": interview.get("hospital_decile"),
-            "doctor_level": interview.get("doctor_level"),
-        }
+        meta = build_interview_detail_meta(interview)
         results.append(
             {
                 "interview_id": int(interview_id),

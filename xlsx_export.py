@@ -20,6 +20,8 @@ from openpyxl.utils import get_column_letter
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from interview_detail_fields import INTERVIEW_DETAIL_FIELD_LABELS
+
 
 XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -65,6 +67,9 @@ def _build_ca_sheet_rows(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]
     generated_at = str(ca_payload.get("generated_at") or "").strip()
     selected_interview_ids = ca_payload.get("selected_interview_ids") or []
     column_meta_fields = ca_payload.get("column_meta_fields") or []
+    column_meta_field_labels = ca_payload.get("column_meta_field_labels") or {}
+    if not isinstance(column_meta_field_labels, dict):
+        column_meta_field_labels = {}
     interviews = ca_payload.get("interviews") or []
     dimensions = ca_payload.get("dimensions") or []
 
@@ -80,9 +85,11 @@ def _build_ca_sheet_rows(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]
         if isinstance(meta, dict):
             for key in column_meta_fields:
                 value = meta.get(key)
+                label = str(column_meta_field_labels.get(key) or INTERVIEW_DETAIL_FIELD_LABELS.get(key) or key)
                 if value is None or str(value).strip() == "":
-                    continue
-                meta_lines.append(f"{key}：{value}")
+                    meta_lines.append(f"{label}：/")
+                else:
+                    meta_lines.append(f"{label}：{value}")
         header_text = "\n".join(meta_lines)
         if not interview_id_set or interview_id in interview_id_set:
             interview_headers.append(header_text)
@@ -101,7 +108,18 @@ def _build_ca_sheet_rows(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]
     rows.append(
         [
             {"value": f"选择访谈：{len(interview_headers)}", "style": 1},
-            {"value": f"列字段：{', '.join(str(item) for item in column_meta_fields) or '无'}", "style": 1},
+            {
+                "value": "列字段："
+                + (
+                    ", ".join(
+                        str(column_meta_field_labels.get(item) or INTERVIEW_DETAIL_FIELD_LABELS.get(item) or item)
+                        for item in column_meta_fields
+                    )
+                    if column_meta_fields
+                    else "无"
+                ),
+                "style": 1,
+            },
         ]
         + [{"value": "", "style": 1}] * max(0, total_cols - 2)
     )

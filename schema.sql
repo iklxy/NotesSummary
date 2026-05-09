@@ -126,6 +126,31 @@ CREATE TABLE `bh_project_interview` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `bh_interview_detail`
+--
+
+DROP TABLE IF EXISTS `bh_interview_detail`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bh_interview_detail` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `interview_id` bigint NOT NULL COMMENT '关联 bh_project_interview.id',
+  `doctor_level` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '医生级别',
+  `doctor_title` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '职称',
+  `city` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '城市',
+  `hospital` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '所在医院',
+  `department` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '科室',
+  `hospital_decile` tinyint unsigned DEFAULT NULL COMMENT '医院Decile（0-10，0 视为未填写）',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_bh_interview_detail_interview_id` (`interview_id`),
+  CONSTRAINT `fk_bh_interview_detail_interview_id`
+    FOREIGN KEY (`interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `bh_project_questionnaire`
 --
 

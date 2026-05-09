@@ -30,8 +30,11 @@ from db import (
     insert_interview,
     insert_key_bq_rows_for_interview,
     insert_questions_for_interview,
+    update_interview_name,
     update_interview_status,
+    upsert_interview_detail,
 )
+from interview_detail_fields import build_interview_display_name, normalize_interview_detail_payload
 from schemas.interviews import (
     QuestionnaireHotwordLoadResponse,
     QuestionnaireHotwordReviewRequest,
@@ -360,6 +363,38 @@ def _extract_key_bq_items(core_problem_json: str) -> list[Dict[str, Any]]:
     return result
 
 
+def _normalize_detail_form_payload(
+    detail_json: Optional[str],
+    doctor_level: Optional[str],
+    doctor_title: Optional[str],
+    city: Optional[str],
+    hospital: Optional[str],
+    department: Optional[str],
+    hospital_decile: Optional[str],
+    hospital_city: Optional[str],
+) -> Dict[str, Any]:
+    city_fallback = city if city is not None and str(city).strip() else hospital_city
+    hospital_city_fallback = hospital_city if hospital_city is not None and str(hospital_city).strip() else city
+    legacy_values = {
+        "doctor_level": doctor_level,
+        "hospital_city": hospital_city_fallback,
+        "hospital_decile": hospital_decile,
+    }
+    raw_payload: Any
+    if detail_json is not None and str(detail_json).strip():
+        raw_payload = detail_json
+    else:
+        raw_payload = {
+            "doctor_level": doctor_level,
+            "doctor_title": doctor_title,
+            "city": city_fallback,
+            "hospital": hospital,
+            "department": department,
+            "hospital_decile": hospital_decile,
+        }
+    return normalize_interview_detail_payload(raw_payload, legacy_values)
+
+
 def _delete_interview_backup_dir(project_id: int, interview_id: int) -> None:
     """
     删除 data 目录下该访谈对应的备份目录。
@@ -409,14 +444,19 @@ async def create_interview(
     project_id: int,
     background_tasks: BackgroundTasks,
     current_user_id: int = Depends(require_current_user_id),
-    name: str = Form(...),
+    name: Optional[str] = Form(None),
+    detail_json: Optional[str] = Form(None),
     core_problem: Optional[str] = Form(None),
     interview_date: Optional[str] = Form(None),
-    hospital_city: str = Form(...),
-    hospital_decile: int = Form(...),
-    doctor_level: str = Form(...),
-    hotword_keys: Optional[str] = Form(None),
     object_type: Optional[str] = Form(None),
+    doctor_level: Optional[str] = Form(None),
+    doctor_title: Optional[str] = Form(None),
+    city: Optional[str] = Form(None),
+    hospital: Optional[str] = Form(None),
+    department: Optional[str] = Form(None),
+    hospital_decile: Optional[str] = Form(None),
+    hospital_city: Optional[str] = Form(None),
+    hotword_keys: Optional[str] = Form(None),
     questionnaire_id: Optional[int] = Form(None),
     key_bq_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
@@ -427,13 +467,18 @@ async def create_interview(
 
     参数:
         project_id:     项目 ID，对应 bh_project.id，写入 bh_project_interview.parse_project_id。
-        name:           访谈名称，对应 bh_project_interview.name。
-        core_problem:    访谈 key BQ JSON 字符串；新流程下可为空。
+        name:           兼容字段，已不再作为输入入口。
+        detail_json:    访谈细节 JSON 字符串。
+        core_problem:   访谈 key BQ JSON 字符串；新流程下可为空。
         interview_date: 访谈时间字符串（如 '2026-04-15'），写入 bh_project_interview.interview_date。
-        hospital_city:   医院所在城市，写入 bh_project_interview.hospital_city。
-        hospital_decile: 医院 Decile，写入 bh_project_interview.hospital_decile。
-        doctor_level:    医生级别，写入 bh_project_interview.doctor_level。
         object_type:      访谈对象类型，新流程下必填，用于匹配对应 DG/问卷。
+        doctor_level:     医生级别，兼容字段。
+        doctor_title:     职称。
+        city:             城市。
+        hospital:         所在医院。
+        department:       科室。
+        hospital_decile:  医院 Decile。
+        hospital_city:    兼容字段，等同于 city。
         questionnaire_id: 旧流程下的项目级问卷 ID。
         key_bq_id:        旧流程下的项目级 Key BQ ID。
         file:           单个音频文件，文件名写入 bh_project_interview.file_name。
@@ -456,10 +501,8 @@ async def create_interview(
     说明:
         上传完成后会异步触发转录工作流；该接口只负责创建记录和保存音频。
     """
-    clean_name = name.strip()
-    if not clean_name:
-        raise HTTPException(status_code=400, detail="访谈名称不能为空")
     project_row = _get_owned_project_or_404(project_id, current_user_id)
+    project_name = str(project_row.get("name") or f"project_{project_id}").strip() or f"project_{project_id}"
     original_name = file.filename or ""
     if not original_name:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
@@ -471,6 +514,20 @@ async def create_interview(
         normalized_object_type = "doctor"
     else:
         normalized_object_type = None
+
+    normalized_detail = _normalize_detail_form_payload(
+        detail_json=detail_json,
+        doctor_level=doctor_level,
+        doctor_title=doctor_title,
+        city=city,
+        hospital=hospital,
+        department=department,
+        hospital_decile=hospital_decile,
+        hospital_city=hospital_city,
+    )
+    legacy_city = normalized_detail.get("city")
+    legacy_doctor_level = normalized_detail.get("doctor_level")
+    legacy_hospital_decile = normalized_detail.get("hospital_decile")
 
     use_project_pool = normalized_object_type is not None or questionnaire_id is not None
     questionnaire_name: str | None = None
@@ -534,16 +591,20 @@ async def create_interview(
 
             interview_id = insert_interview(
                 parse_project_id=project_id,
-                name=clean_name,
+                name=project_name,
                 interview_date=interview_date,
                 file_name=original_name,
-                hospital_city=hospital_city.strip(),
-                hospital_decile=hospital_decile,
-                doctor_level=doctor_level.strip(),
+                hospital_city=str(legacy_city or "").strip() or None,
+                hospital_decile=legacy_hospital_decile,
+                doctor_level=str(legacy_doctor_level or "").strip() or None,
                 core_problem=project_key_bq_json,
                 questionnaire_id=int(questionnaire_row["id"]),
                 key_bq_id=None,
             )
+            final_name = build_interview_display_name(project_name, normalized_detail, interview_id)
+            if final_name and final_name != project_name:
+                update_interview_name(interview_id, final_name)
+            upsert_interview_detail(interview_id, normalized_detail)
             inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
             if inserted_key_bq <= 0:
                 raise RuntimeError("no key BQ rows inserted")
@@ -561,14 +622,18 @@ async def create_interview(
 
             interview_id = insert_interview(
                 parse_project_id=project_id,
-                name=clean_name,
+                name=project_name,
                 interview_date=interview_date,
                 file_name=original_name,
-                hospital_city=hospital_city.strip(),
-                hospital_decile=hospital_decile,
-                doctor_level=doctor_level.strip(),
+                hospital_city=str(legacy_city or "").strip() or None,
+                hospital_decile=legacy_hospital_decile,
+                doctor_level=str(legacy_doctor_level or "").strip() or None,
                 core_problem=normalized_core_problem,
             )
+            final_name = build_interview_display_name(project_name, normalized_detail, interview_id)
+            if final_name and final_name != project_name:
+                update_interview_name(interview_id, final_name)
+            upsert_interview_detail(interview_id, normalized_detail)
             inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
             if inserted_key_bq <= 0:
                 raise RuntimeError("no key BQ rows inserted")
@@ -642,12 +707,17 @@ async def create_interview(
     return {
         "id": interview_id,
         "project_id": project_id,
-        "name": clean_name,
+        "name": build_interview_display_name(project_name, normalized_detail, interview_id),
         "core_problem": normalized_core_problem,
         "interview_date": interview_date,
-        "hospital_city": hospital_city.strip(),
-        "hospital_decile": hospital_decile,
-        "doctor_level": doctor_level.strip(),
+        "hospital_city": str(normalized_detail.get("city") or "").strip(),
+        "hospital_decile": normalized_detail.get("hospital_decile"),
+        "doctor_level": str(normalized_detail.get("doctor_level") or "").strip(),
+        "doctor_title": str(normalized_detail.get("doctor_title") or "").strip() or None,
+        "city": str(normalized_detail.get("city") or "").strip() or None,
+        "hospital": str(normalized_detail.get("hospital") or "").strip() or None,
+        "department": str(normalized_detail.get("department") or "").strip() or None,
+        "interview_detail": normalized_detail,
         "file_name": original_name,
         "local_path": local_path,
         "audio_backup_path": backup_audio_path,

@@ -198,9 +198,13 @@ export interface ProjectInterviewDTO {
   name: string;
   core_problem?: string | null;
   interview_date?: string | null;
+  city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
+  doctor_title?: string | null;
+  hospital?: string | null;
+  department?: string | null;
   status?: number | null;
   file_name?: string | null;
   questionnaire_object_type?: string | null;

@@ -42,9 +42,11 @@ import {
   updateProjectQuestionnaireHotwords,
 } from "../../../lib/projectQuestionnairesApi";
 import { updateProjectKeyBqCurrent } from "../../../lib/projectKeyBqApi";
+import { getInterviewDetailFields } from "../../../lib/interviewDetailFieldsApi";
 import { getProjectDetail } from "../../../lib/projectsApi";
 import type {
   CreatedInterviewResponse,
+  InterviewDetailFieldDefinition,
   KeyBqJson,
   ProjectDetail,
   ProjectQuestionnaire,
@@ -63,13 +65,20 @@ interface KeyBqFormValues {
 }
 
 interface InterviewFormValues {
-  interview_name: string;
   interview_date?: Dayjs | null;
-  hospital_city: string;
-  hospital_decile: number;
-  doctor_level: string;
   object_type: string;
 }
+
+type InterviewDetailValues = Record<string, string | number | null | undefined>;
+
+const FALLBACK_INTERVIEW_DETAIL_FIELDS: InterviewDetailFieldDefinition[] = [
+  { key: "doctor_level", label: "医生级别", kind: "text" },
+  { key: "doctor_title", label: "职称", kind: "text" },
+  { key: "city", label: "城市", kind: "text" },
+  { key: "hospital", label: "所在医院", kind: "text" },
+  { key: "department", label: "科室", kind: "text" },
+  { key: "hospital_decile", label: "医院Decile", kind: "number" },
+];
 
 interface QuestionnaireReviewState {
   questionnaireId: number;
@@ -155,6 +164,47 @@ function getKeyBqCount(value?: KeyBqJson | null): number {
   return value?.key_bq_list?.length ?? 0;
 }
 
+function normalizeInterviewDetailValues(values?: Record<string, unknown> | null): InterviewDetailValues {
+  const normalized: InterviewDetailValues = {};
+  if (!values) {
+    return normalized;
+  }
+  Object.entries(values).forEach(([key, value]) => {
+    if (value === null || value === undefined) {
+      return;
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (text) {
+        normalized[key] = text;
+      }
+      return;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      if (value > 0) {
+        normalized[key] = value;
+      }
+    }
+  });
+  return normalized;
+}
+
+function summarizeInterviewDetail(
+  fields: InterviewDetailFieldDefinition[],
+  detail: InterviewDetailValues,
+): string {
+  const parts = fields
+    .map((field) => {
+      const value = detail[field.key];
+      if (value === null || value === undefined || value === "") {
+        return null;
+      }
+      return `${field.label}：${value}`;
+    })
+    .filter((item): item is string => Boolean(item));
+  return parts.length > 0 ? parts.join("，") : "尚未填写访谈细节";
+}
+
 export default function ProjectDetailClient({ projectId }: Props) {
   const router = useRouter();
   const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
@@ -177,6 +227,12 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [interviewModalOpen, setInterviewModalOpen] = useState(false);
   const [interviewSaving, setInterviewSaving] = useState(false);
   const [interviewForm] = Form.useForm<InterviewFormValues>();
+  const [interviewDetailModalOpen, setInterviewDetailModalOpen] = useState(false);
+  const [interviewDetailForm] = Form.useForm<InterviewDetailValues>();
+  const [interviewDetailFields, setInterviewDetailFields] = useState<InterviewDetailFieldDefinition[]>(
+    FALLBACK_INTERVIEW_DETAIL_FIELDS,
+  );
+  const [interviewDetailDraft, setInterviewDetailDraft] = useState<InterviewDetailValues>({});
   const [interviewFileList, setInterviewFileList] = useState<UploadFile[]>([]);
 
   const loadProjectDetail = useCallback(async () => {
@@ -199,6 +255,20 @@ export default function ProjectDetailClient({ projectId }: Props) {
   useEffect(() => {
     void loadProjectDetail();
   }, [loadProjectDetail]);
+
+  useEffect(() => {
+    const loadFields = async () => {
+      try {
+        const resp = await getInterviewDetailFields();
+        if (resp.fields && resp.fields.length > 0) {
+          setInterviewDetailFields(resp.fields);
+        }
+      } catch {
+        setInterviewDetailFields(FALLBACK_INTERVIEW_DETAIL_FIELDS);
+      }
+    };
+    void loadFields();
+  }, []);
 
   const questionnaires = useMemo(() => projectDetail?.questionnaires ?? [], [projectDetail]);
   const interviews = useMemo(() => projectDetail?.interviews ?? [], [projectDetail]);
@@ -398,6 +468,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const openInterviewModal = () => {
     interviewForm.resetFields();
     setInterviewFileList([]);
+    setInterviewDetailDraft({});
+    interviewDetailForm.resetFields();
     if (objectTypeOptions.length > 0) {
       interviewForm.setFieldsValue({
         object_type: objectTypeOptions[0].value,
@@ -406,12 +478,40 @@ export default function ProjectDetailClient({ projectId }: Props) {
     setInterviewModalOpen(true);
   };
 
+  const openInterviewDetailModal = () => {
+    interviewDetailForm.resetFields();
+    interviewDetailForm.setFieldsValue(interviewDetailDraft);
+    setInterviewDetailModalOpen(true);
+  };
+
+  const handleInterviewDetailCancel = () => {
+    if (interviewSaving) {
+      return;
+    }
+    setInterviewDetailModalOpen(false);
+  };
+
+  const handleInterviewDetailSubmit = async () => {
+    try {
+      const values = await interviewDetailForm.validateFields();
+      const normalized = normalizeInterviewDetailValues(values);
+      setInterviewDetailDraft(normalized);
+      setInterviewDetailModalOpen(false);
+      message.success("访谈细节已保存");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "保存访谈细节失败");
+    }
+  };
+
   const handleInterviewCancel = () => {
     if (interviewSaving) {
       return;
     }
     setInterviewModalOpen(false);
     setInterviewFileList([]);
+    setInterviewDetailModalOpen(false);
+    setInterviewDetailDraft({});
+    interviewDetailForm.resetFields();
   };
 
   const handleInterviewSubmit = async () => {
@@ -431,11 +531,11 @@ export default function ProjectDetailClient({ projectId }: Props) {
         return;
       }
       const formData = new FormData();
-      formData.append("name", String(values.interview_name || "").trim());
-      formData.append("hospital_city", String(values.hospital_city || "").trim());
-      formData.append("hospital_decile", String(values.hospital_decile ?? ""));
-      formData.append("doctor_level", String(values.doctor_level || "").trim());
       formData.append("object_type", objectType);
+      const detailPayload = normalizeInterviewDetailValues(interviewDetailDraft);
+      if (Object.keys(detailPayload).length > 0) {
+        formData.append("detail_json", JSON.stringify(detailPayload));
+      }
       const dateValue = values.interview_date;
       if (dateValue && typeof (dateValue as { format?: unknown }).format === "function") {
         formData.append("interview_date", (dateValue as { format: (fmt: string) => string }).format("YYYY-MM-DD"));
@@ -719,11 +819,17 @@ export default function ProjectDetailClient({ projectId }: Props) {
                                 <Tag color="blue">DG：{item.questionnaire_name}</Tag>
                               ) : null}
                             </Space>
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              {item.interview_date ? `访谈时间：${formatDate(item.interview_date)}` : "暂无访谈时间"}
-                              {item.hospital_city ? `，城市：${item.hospital_city}` : ""}
-                              {item.doctor_level ? `，医生级别：${item.doctor_level}` : ""}
-                            </Text>
+                            <Space direction="vertical" size={2}>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                {item.interview_date ? `访谈时间：${formatDate(item.interview_date)}` : "暂无访谈时间"}
+                              </Text>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                {summarizeInterviewDetail(
+                                  interviewDetailFields,
+                                  item as unknown as InterviewDetailValues,
+                                )}
+                              </Text>
+                            </Space>
                           </Space>
                         </List.Item>
                       )}
@@ -856,43 +962,23 @@ export default function ProjectDetailClient({ projectId }: Props) {
         <Form form={interviewForm} layout="vertical">
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item
-                label="访谈名称"
-                name="interview_name"
-                rules={[{ required: true, message: "请输入访谈名称" }]}
-              >
-                <Input placeholder="请输入访谈名称" />
-              </Form.Item>
               <Form.Item label="访谈时间" name="interview_date">
                 <DatePicker style={{ width: "100%" }} placeholder="请选择访谈时间" />
               </Form.Item>
-              <Row gutter={12}>
-                <Col span={12}>
-                  <Form.Item
-                    label="医院所在城市"
-                    name="hospital_city"
-                    rules={[{ required: true, message: "请输入医院所在城市" }]}
-                  >
-                    <Input placeholder="例如：北京" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    label="医院 Decile"
-                    name="hospital_decile"
-                    rules={[{ required: true, message: "请输入医院 Decile" }]}
-                  >
-                    <InputNumber style={{ width: "100%" }} min={0} max={10} placeholder="请输入医院 Decile" />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Form.Item
-                label="医生级别"
-                name="doctor_level"
-                rules={[{ required: true, message: "请输入医生级别" }]}
+              <Card
+                size="small"
+                style={{ borderRadius: 16, marginBottom: 16 }}
+                title="访谈细节"
+                extra={
+                  <Button size="small" type="primary" onClick={openInterviewDetailModal}>
+                    填写 / 修改
+                  </Button>
+                }
               >
-                <Input placeholder="例如：主任医师" />
-              </Form.Item>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {summarizeInterviewDetail(interviewDetailFields, interviewDetailDraft)}
+                </Text>
+              </Card>
             </Col>
             <Col span={12}>
               <Form.Item
@@ -927,6 +1013,43 @@ export default function ProjectDetailClient({ projectId }: Props) {
               </Form.Item>
             </Col>
           </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        open={interviewDetailModalOpen}
+        title="访谈细节"
+        onOk={() => void handleInterviewDetailSubmit()}
+        onCancel={handleInterviewDetailCancel}
+        closable={!interviewSaving}
+        maskClosable={!interviewSaving}
+        destroyOnHidden
+        width={860}
+      >
+        <Form form={interviewDetailForm} layout="vertical">
+          <Row gutter={16}>
+            {interviewDetailFields.map((field) => (
+              <Col key={field.key} span={12}>
+                <Form.Item label={field.label} name={field.key}>
+                  {field.kind === "number" || field.key === "hospital_decile" ? (
+                    <InputNumber
+                      style={{ width: "100%" }}
+                      min={0}
+                      max={10}
+                      placeholder={`请输入${field.label}`}
+                    />
+                  ) : (
+                    <Input placeholder={`请输入${field.label}`} />
+                  )}
+                </Form.Item>
+              </Col>
+            ))}
+          </Row>
+          <Alert
+            type="info"
+            showIcon
+            message="这些字段都不是必填项。你可以只填写当前访谈需要的部分。"
+          />
         </Form>
       </Modal>
     </Layout>

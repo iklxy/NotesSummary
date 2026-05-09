@@ -17,10 +17,12 @@ import {
   message,
 } from "antd";
 import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import { getInterviewDetailFields } from "../../../../lib/interviewDetailFieldsApi";
 import { exportProjectCaTableXlsx, generateProjectCaTable, getProjectCaTable } from "../../../../lib/projectsApi";
 import { getProjectInterviews } from "../../../../lib/interviewsApi";
 import type {
   GenerateProjectCaTableRequest,
+  InterviewDetailFieldDefinition,
   ProjectCaDimension,
   ProjectCaJson,
   ProjectCaSubPoint,
@@ -33,17 +35,22 @@ interface Props {
   projectId: number;
 }
 
-const DEFAULT_META_FIELDS = ["hospital_city", "hospital_decile", "doctor_level"];
-const DEFAULT_META_FIELD_LABELS: Record<string, string> = {
-  hospital_city: "医院所在城市",
-  hospital_decile: "医院Decile",
-  doctor_level: "医生级别",
-};
+const FALLBACK_META_FIELDS: InterviewDetailFieldDefinition[] = [
+  { key: "doctor_level", label: "医生级别", kind: "text" },
+  { key: "doctor_title", label: "职称", kind: "text" },
+  { key: "city", label: "城市", kind: "text" },
+  { key: "hospital", label: "所在医院", kind: "text" },
+  { key: "department", label: "科室", kind: "text" },
+  { key: "hospital_decile", label: "医院Decile", kind: "number" },
+];
 
 function cloneCaJson(value: ProjectCaJson): ProjectCaJson {
   return {
     ...value,
     column_meta_fields: [...(value.column_meta_fields ?? [])],
+    column_meta_field_labels: value.column_meta_field_labels
+      ? { ...value.column_meta_field_labels }
+      : value.column_meta_field_labels,
     selected_interview_ids: [...(value.selected_interview_ids ?? [])],
     interviews: (value.interviews ?? []).map((item) => ({
       ...item,
@@ -68,7 +75,10 @@ function normalizeCaJson(value: ProjectCaJson | null | undefined, projectId: num
     return {
       project_id: projectId,
       project_name: "",
-      column_meta_fields: [...DEFAULT_META_FIELDS],
+      column_meta_fields: [...FALLBACK_META_FIELDS.map((item) => item.key)],
+      column_meta_field_labels: Object.fromEntries(
+        FALLBACK_META_FIELDS.map((item) => [item.key, item.label]),
+      ),
       selected_interview_ids: [],
       interviews: [],
       dimensions: [],
@@ -82,7 +92,7 @@ function normalizeCaJson(value: ProjectCaJson | null | undefined, projectId: num
   cloned.project_id = cloned.project_id || projectId;
   cloned.column_meta_fields = (cloned.column_meta_fields ?? []).length
     ? cloned.column_meta_fields
-    : [...DEFAULT_META_FIELDS];
+    : [...FALLBACK_META_FIELDS.map((item) => item.key)];
   cloned.selected_interview_ids = cloned.selected_interview_ids ?? cloned.interviews.map((item) => item.interview_id);
   cloned.interviews = cloned.interviews ?? [];
   cloned.dimensions = cloned.dimensions ?? [];
@@ -116,6 +126,9 @@ export default function CaProjectClient({ projectId }: Props) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string>("");
+  const [metaFieldDefinitions, setMetaFieldDefinitions] = useState<InterviewDetailFieldDefinition[]>(
+    FALLBACK_META_FIELDS,
+  );
   const [interviews, setInterviews] = useState<Array<{
     id: number;
     name: string;
@@ -126,7 +139,9 @@ export default function CaProjectClient({ projectId }: Props) {
     doctor_level?: string | null;
   }>>([]);
   const [selectedInterviewIds, setSelectedInterviewIds] = useState<number[]>([]);
-  const [selectedMetaFields, setSelectedMetaFields] = useState<string[]>([...DEFAULT_META_FIELDS]);
+  const [selectedMetaFields, setSelectedMetaFields] = useState<string[]>(
+    FALLBACK_META_FIELDS.map((item) => item.key),
+  );
   const [caJson, setCaJson] = useState<ProjectCaJson | null>(null);
 
   useEffect(() => {
@@ -138,22 +153,28 @@ export default function CaProjectClient({ projectId }: Props) {
       setLoading(true);
       setError(null);
       try {
-        const [projectsResp, interviewsResp, caResp] = await Promise.all([
+        const [projectsResp, interviewsResp, caResp, fieldResp] = await Promise.all([
           getProjects(),
           getProjectInterviews(projectId),
           getProjectCaTable(projectId),
+          getInterviewDetailFields(),
         ]);
         const matchedProject = projectsResp.find((item) => item.id === projectId) ?? null;
         setProjectName(matchedProject?.name || caResp.project_name || `项目 ${projectId}`);
+        const fieldDefinitions = fieldResp.fields?.length > 0 ? fieldResp.fields : FALLBACK_META_FIELDS;
+        setMetaFieldDefinitions(fieldDefinitions);
 
         const mappedInterviews = interviewsResp.map((item) => ({
           id: item.id,
           name: item.name,
           interview_date: item.interview_date ?? null,
           status: item.status ?? null,
-          hospital_city: item.hospital_city ?? null,
+          hospital_city: item.hospital_city ?? item.city ?? null,
           hospital_decile: item.hospital_decile ?? null,
           doctor_level: item.doctor_level ?? null,
+          doctor_title: item.doctor_title ?? null,
+          hospital: item.hospital ?? null,
+          department: item.department ?? null,
         }));
         setInterviews(mappedInterviews);
 
@@ -166,18 +187,23 @@ export default function CaProjectClient({ projectId }: Props) {
               : existing.interviews.map((item) => item.interview_id)
             ).filter((item) => mappedInterviews.some((row) => row.id === item && row.status === 2)),
           );
-          setSelectedMetaFields(
+          const normalizedSelectedMetaFields = (
             (existing.column_meta_fields && existing.column_meta_fields.length > 0
               ? existing.column_meta_fields
-              : DEFAULT_META_FIELDS
-            ).filter((item) => DEFAULT_META_FIELDS.includes(item)),
+              : fieldDefinitions.map((item) => item.key)
+            ).filter((item) => fieldDefinitions.some((field) => field.key === item))
+          );
+          setSelectedMetaFields(
+            normalizedSelectedMetaFields.length > 0
+              ? normalizedSelectedMetaFields
+              : fieldDefinitions.map((item) => item.key),
           );
           return;
         }
 
         const completedIds = mappedInterviews.filter((item) => item.status === 2).map((item) => item.id);
         setSelectedInterviewIds(completedIds);
-        setSelectedMetaFields([...DEFAULT_META_FIELDS]);
+        setSelectedMetaFields(fieldDefinitions.map((item) => item.key));
         setCaJson(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "加载 CA 页面失败");
@@ -188,10 +214,7 @@ export default function CaProjectClient({ projectId }: Props) {
     void load();
   }, [projectId]);
 
-  const completedInterviews = useMemo(
-    () => interviews.filter((item) => item.status === 2),
-    [interviews],
-  );
+  const completedInterviews = useMemo(() => interviews.filter((item) => item.status === 2), [interviews]);
 
   const selectedCompletedInterviews = useMemo(
     () => completedInterviews.filter((item) => selectedInterviewIds.includes(item.id)),
@@ -269,11 +292,15 @@ export default function CaProjectClient({ projectId }: Props) {
           : next.interviews.map((item) => item.interview_id)
         ).filter((item) => completedInterviews.some((row) => row.id === item)),
       );
-      setSelectedMetaFields(
-        (next.column_meta_fields && next.column_meta_fields.length > 0
+      const normalizedSelectedMetaFields = (
+        next.column_meta_fields && next.column_meta_fields.length > 0
           ? next.column_meta_fields
-          : DEFAULT_META_FIELDS
-        ).filter((item) => DEFAULT_META_FIELDS.includes(item)),
+          : metaFieldDefinitions.map((item) => item.key)
+      ).filter((item) => metaFieldDefinitions.some((field) => field.key === item));
+      setSelectedMetaFields(
+        normalizedSelectedMetaFields.length > 0
+          ? normalizedSelectedMetaFields
+          : metaFieldDefinitions.map((item) => item.key),
       );
       if (resp.skipped_interview_ids && resp.skipped_interview_ids.length > 0) {
         message.warning(`有 ${resp.skipped_interview_ids.length} 条选择访谈未纳入 CA，因为状态不是已完成`);
@@ -390,13 +417,13 @@ export default function CaProjectClient({ projectId }: Props) {
                 <Col xs={24} lg={12}>
                   <Card size="small" title="列字段" style={{ borderRadius: 16 }}>
                     <Space wrap>
-                      {DEFAULT_META_FIELDS.map((field) => (
+                      {metaFieldDefinitions.map((field) => (
                         <Checkbox
-                          key={field}
-                          checked={selectedMetaFields.includes(field)}
-                          onChange={(e) => handleMetaFieldChange(field, e.target.checked)}
+                          key={field.key}
+                          checked={selectedMetaFields.includes(field.key)}
+                          onChange={(e) => handleMetaFieldChange(field.key, e.target.checked)}
                         >
-                          {DEFAULT_META_FIELD_LABELS[field] || field}
+                          {field.label}
                         </Checkbox>
                       ))}
                     </Space>

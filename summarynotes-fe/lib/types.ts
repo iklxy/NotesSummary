@@ -98,6 +98,16 @@ export interface QuestionnaireHotwordReviewResponse {
   message?: string | null;
 }
 
+export interface InterviewDetailFieldDefinition {
+  key: string;
+  label: string;
+  kind?: "text" | "number" | string;
+}
+
+export interface InterviewDetailFieldsResponse {
+  fields: InterviewDetailFieldDefinition[];
+}
+
 export interface DeleteProjectResponse {
   success: boolean;
   project_id: number;
@@ -336,9 +346,13 @@ export interface Interview {
   date?: string | null;
   interview_date?: string | null;
   core_problem?: string | null;
+  city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
+  doctor_title?: string | null;
+  hospital?: string | null;
+  department?: string | null;
   audioFileName?: string | null;
   status?: number | null;
   questionnaire_id?: number | null;
@@ -355,9 +369,13 @@ export interface CreatedInterviewResponse {
   name: string;
   core_problem?: string | null;
   interview_date?: string | null;
+  city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
+  doctor_title?: string | null;
+  hospital?: string | null;
+  department?: string | null;
   file_name: string;
   local_path: string;
   audio_backup_path?: string | null;
@@ -452,9 +470,14 @@ export interface ProjectDetail {
 }
 
 export interface ProjectCaInterviewMeta {
+  [key: string]: string | number | null | undefined;
+  city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
+  doctor_title?: string | null;
+  hospital?: string | null;
+  department?: string | null;
 }
 
 export interface ProjectCaInterviewItem {
@@ -482,6 +505,7 @@ export interface ProjectCaJson {
   project_id: number;
   project_name?: string | null;
   column_meta_fields?: string[];
+  column_meta_field_labels?: Record<string, string>;
   selected_interview_ids?: number[];
   interviews: ProjectCaInterviewItem[];
   dimensions: ProjectCaDimension[];

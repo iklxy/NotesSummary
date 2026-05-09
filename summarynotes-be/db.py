@@ -5,6 +5,8 @@ from typing import Any, Optional
 import dotenv
 import pymysql
 
+from interview_detail_fields import build_interview_detail_meta, normalize_interview_detail_payload
+
 dotenv.load_dotenv()
 
 
@@ -316,6 +318,75 @@ def _normalize_object_type(value: Any) -> Optional[str]:
     if text in {"doctor", "医生"}:
         return "doctor"
     return None
+
+
+def upsert_interview_detail(
+    interview_id: int,
+    detail: Any = None,
+    legacy_values: Optional[dict[str, Any]] = None,
+) -> int:
+    """
+    写入或更新访谈细节记录。
+    """
+    normalized = normalize_interview_detail_payload(detail, legacy_values)
+    sql = """
+        INSERT INTO bh_interview_detail
+            (interview_id, doctor_level, doctor_title, city, hospital, department, hospital_decile)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            doctor_level = VALUES(doctor_level),
+            doctor_title = VALUES(doctor_title),
+            city = VALUES(city),
+            hospital = VALUES(hospital),
+            department = VALUES(department),
+            hospital_decile = VALUES(hospital_decile)
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    interview_id,
+                    normalized.get("doctor_level"),
+                    normalized.get("doctor_title"),
+                    normalized.get("city"),
+                    normalized.get("hospital"),
+                    normalized.get("department"),
+                    normalized.get("hospital_decile"),
+                ),
+            )
+            rowcount = cursor.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return rowcount
+
+
+def update_interview_name(interview_id: int, name: str) -> int:
+    """
+    更新访谈名称。
+    """
+    sql = """
+        UPDATE bh_project_interview
+        SET name = %s
+        WHERE id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (name, interview_id))
+            affected = cursor.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
 
 
 def insert_questionnaire(
@@ -968,6 +1039,36 @@ def insert_interview(
     return new_id
 
 
+def fetch_interview_detail_by_interview_id(interview_id: int) -> dict | None:
+    """
+    查询单条访谈细节记录。
+    """
+    sql = """
+        SELECT
+            id,
+            interview_id,
+            doctor_level,
+            doctor_title,
+            city,
+            hospital,
+            department,
+            hospital_decile,
+            created_at,
+            updated_at
+        FROM bh_interview_detail
+        WHERE interview_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
 def insert_key_bq_rows_for_interview(
     project_id: int,
     project_interview_id: int,
@@ -1574,9 +1675,13 @@ def fetch_interview_by_id(
             i.name,
             i.interview_date,
             i.file_name,
-            i.hospital_city,
-            i.hospital_decile,
-            i.doctor_level,
+            COALESCE(d.city, i.hospital_city) AS city,
+            COALESCE(d.city, i.hospital_city) AS hospital_city,
+            COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+            COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+            d.doctor_title,
+            d.hospital,
+            d.department,
             i.core_problem,
             i.questionnaire_id,
             q.name AS questionnaire_name,
@@ -1589,6 +1694,7 @@ def fetch_interview_by_id(
             i.status
         FROM bh_project_interview i
         INNER JOIN bh_project p ON p.id = i.parse_project_id
+        LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.id = %s
@@ -2109,9 +2215,13 @@ def fetch_interviews_by_project(
             i.name,
             i.interview_date,
             i.file_name,
-            i.hospital_city,
-            i.hospital_decile,
-            i.doctor_level,
+            COALESCE(d.city, i.hospital_city) AS city,
+            COALESCE(d.city, i.hospital_city) AS hospital_city,
+            COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+            COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+            d.doctor_title,
+            d.hospital,
+            d.department,
             i.core_problem,
             i.questionnaire_id,
             q.name AS questionnaire_name,
@@ -2122,6 +2232,7 @@ def fetch_interviews_by_project(
             i.status
         FROM bh_project_interview i
         INNER JOIN bh_project p ON p.id = i.parse_project_id
+        LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
@@ -2167,9 +2278,13 @@ def fetch_completed_interviews_for_project(
             i.name,
             i.interview_date,
             i.file_name,
-            i.hospital_city,
-            i.hospital_decile,
-            i.doctor_level,
+            COALESCE(d.city, i.hospital_city) AS city,
+            COALESCE(d.city, i.hospital_city) AS hospital_city,
+            COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
+            COALESCE(d.doctor_level, i.doctor_level) AS doctor_level,
+            d.doctor_title,
+            d.hospital,
+            d.department,
             i.core_problem,
             i.questionnaire_id,
             q.name AS questionnaire_name,
@@ -2179,6 +2294,7 @@ def fetch_completed_interviews_for_project(
             k.name AS key_bq_name,
             i.status
         FROM bh_project_interview i
+        LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
