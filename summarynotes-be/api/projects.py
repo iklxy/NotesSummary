@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import requests
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
 from api.auth import require_current_user_id
@@ -20,8 +20,11 @@ from db import (
     fetch_interviews_by_project,
     fetch_ca_table_by_project,
     fetch_project_by_id,
+    fetch_project_stats,
     fetch_projects,
+    fetch_questionnaires_by_project,
     insert_project,
+    update_project_guide,
     upsert_ca_table,
 )
 from storage import delete_remote_object
@@ -85,6 +88,37 @@ def _get_data_root() -> Path:
     api_dir = Path(__file__).resolve().parent
     project_root = api_dir.parent.parent
     return project_root / "data"
+
+
+def _get_project_guide_dir(project_id: int) -> Path:
+    """
+    获取项目指南文件目录。
+    """
+    return _get_data_root() / f"project_{project_id}" / "guide"
+
+
+def _save_uploaded_project_guide_file(project_id: int, upload_file: UploadFile) -> tuple[str, str]:
+    """
+    保存项目指南附件到项目目录。
+    """
+    original_name = upload_file.filename or ""
+    if not original_name:
+        raise HTTPException(status_code=400, detail="上传指南缺少文件名")
+
+    target_dir = _get_project_guide_dir(project_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / original_name
+    try:
+        with target_path.open("wb") as f:
+            while True:
+                chunk = upload_file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save project guide failed: {e}")
+    relative_path = str(target_path.relative_to(_get_data_root()))
+    return original_name, relative_path
 
 
 def _get_internal_base() -> str:
@@ -284,6 +318,76 @@ def _safe_load_json_text(value: Any) -> Dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _safe_load_json_array(value: Any) -> list[Any]:
+    """
+    安全解析 JSON 数组。
+
+    用于把数据库里的 JSON 文本转换成前端可直接消费的列表。
+    """
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        for key in ("hotwords", "key_bq_list"):
+            candidate = value.get(key)
+            if isinstance(candidate, list):
+                return candidate
+        return []
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("hotwords", "key_bq_list"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                return candidate
+    return []
+
+
+def _normalize_questionnaire_row(row: dict) -> dict:
+    return {
+        **row,
+        "id": int(row["id"]),
+        "project_id": int(row["project_id"]),
+        "object_type": row.get("object_type"),
+        "hotwords": _safe_load_json_array(row.get("hotwords")),
+        "referenced_interview_count": int(row.get("referenced_interview_count") or 0),
+    }
+
+
+def _normalize_project_row(row: dict) -> dict:
+    normalized = dict(row)
+    if normalized.get("id") is not None:
+        normalized["id"] = int(normalized["id"])
+    if normalized.get("created_by_user_id") is not None:
+        normalized["created_by_user_id"] = int(normalized["created_by_user_id"])
+    normalized["key_bq_json"] = _safe_load_json_text(row.get("key_bq_json")) or {
+        "key_bq_list": _safe_load_json_array(row.get("key_bq_json"))
+    }
+    normalized["questionnaire_count"] = int(normalized.get("questionnaire_count") or 0)
+    normalized["key_bq_count"] = int(normalized.get("key_bq_count") or 0)
+    normalized["interview_count"] = int(normalized.get("interview_count") or 0)
+    return normalized
+
+
+def _normalize_interview_row(row: dict) -> dict:
+    normalized = dict(row)
+    if normalized.get("questionnaire_id") is not None:
+        normalized["questionnaire_id"] = int(normalized["questionnaire_id"])
+    if normalized.get("key_bq_id") is not None:
+        normalized["key_bq_id"] = int(normalized["key_bq_id"])
+    return normalized
+
+
 def _get_ca_data_root() -> Path:
     """
     获取本地 CA 缓存目录根路径。
@@ -374,14 +478,20 @@ def _build_ca_export_filename(project_name: str | None, project_id: int) -> str:
 
 @router.post("", response_model=Dict[str, Any])
 def create_project(
-    payload: ProjectCreate,
     current_user_id: int = Depends(require_current_user_id),
+    name: str = Form(...),
+    keywords: Optional[str] = Form(None),
+    core_problem: Optional[str] = Form(None),
+    guide_file: Optional[UploadFile] = File(None),
 ) -> Dict[str, Any]:
     """
     创建新项目，对应在 bh_project 表中插入一条记录。
 
     参数:
-        payload: 前端传入的项目信息，包括 name、keywords、core_problem。
+        name: 项目名称。
+        keywords: 项目关键词，可空。
+        core_problem: 项目背景说明，可空。
+        guide_file: 项目指南附件，可空，当前仅预留 word 文档上传。
 
     返回:
         新创建项目的基础信息字典，至少包含:
@@ -394,26 +504,37 @@ def create_project(
         HTTPException(400): name 为空或非法。
         HTTPException(500): 数据库插入失败。
     """
-    name = payload.name.strip()
-    if not name:
+    clean_name = name.strip()
+    if not clean_name:
         raise HTTPException(status_code=400, detail="项目名称不能为空")
 
+    guide_file_name: str | None = None
+    guide_file_path: str | None = None
+    new_id: int | None = None
     try:
         new_id = insert_project(
-            name=name,
-            keywords=(payload.keywords.strip() if payload.keywords else None),
-            core_problem=(payload.core_problem.strip() if payload.core_problem else None),
+            name=clean_name,
+            keywords=(keywords.strip() if keywords else None),
+            core_problem=(core_problem.strip() if core_problem else None),
             created_by_user_id=current_user_id,
+            guide_file_name=guide_file_name,
+            guide_file_path=guide_file_path,
         )
+        if guide_file is not None and guide_file.filename:
+            guide_file_name, guide_file_path = _save_uploaded_project_guide_file(new_id, guide_file)
+            update_project_guide(new_id, guide_file_name=guide_file_name, guide_file_path=guide_file_path)
     except Exception as e:
+        if new_id is not None:
+            try:
+                delete_project_graph(new_id, current_user_id)
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"insert project failed: {e}")
 
-    return {
-        "id": new_id,
-        "name": name,
-        "keywords": payload.keywords,
-        "core_problem": payload.core_problem,
-    }
+    project_row = fetch_project_by_id(new_id, current_user_id)
+    if not project_row:
+        raise HTTPException(status_code=500, detail="create project failed")
+    return _normalize_project_row(project_row)
 
 
 @router.get("", response_model=list[Dict[str, Any]])
@@ -431,7 +552,28 @@ def list_projects(
             - core_problem
     """
     rows = fetch_projects(created_by_user_id=current_user_id)
-    return rows
+    return [_normalize_project_row(row) for row in rows]
+
+
+@router.get("/{project_id}", response_model=Dict[str, Any])
+def get_project_detail(
+    project_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    查询单个项目的基础信息、DG、项目 Key BQ 与访谈列表。
+    """
+    project = _normalize_project_row(_get_owned_project_or_404(project_id, current_user_id))
+    questionnaires = [_normalize_questionnaire_row(row) for row in fetch_questionnaires_by_project(project_id, current_user_id)]
+    interviews = [_normalize_interview_row(row) for row in fetch_interviews_by_project(project_id, current_user_id)]
+    counts = fetch_project_stats(project_id)
+    return {
+        "project": project,
+        "questionnaires": questionnaires,
+        "keyBqGroups": [],
+        "interviews": interviews,
+        "counts": counts,
+    }
 
 
 @router.get("/{project_id}/ca-table", response_model=Dict[str, Any])

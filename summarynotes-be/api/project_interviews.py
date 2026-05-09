@@ -23,6 +23,9 @@ from QuestionTree import build_question_insert_rows
 from db import (
     delete_interview_graph,
     fetch_project_by_id,
+    fetch_questionnaire_by_project_and_object_type,
+    fetch_questionnaire_by_id,
+    fetch_key_bq_by_id,
     fetch_interviews_by_project,
     insert_interview,
     insert_key_bq_rows_for_interview,
@@ -246,6 +249,36 @@ def _read_text_file(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _parse_hotwords_list(raw_value: Any) -> list[str]:
+    """
+    将数据库中的热词字段安全归一化为字符串列表。
+    """
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if isinstance(raw_value, dict):
+        value = raw_value.get("hotwords")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    text = str(raw_value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return [line.strip() for line in text.splitlines() if line.strip()]
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    if isinstance(parsed, dict):
+        value = parsed.get("hotwords")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
 def _normalize_core_problem_json(raw_value: str) -> str:
     """
     将前端提交的 key BQ 内容统一归一化为 JSON 字符串。
@@ -377,12 +410,15 @@ async def create_interview(
     background_tasks: BackgroundTasks,
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
-    core_problem: str = Form(...),
+    core_problem: Optional[str] = Form(None),
     interview_date: Optional[str] = Form(None),
     hospital_city: str = Form(...),
     hospital_decile: int = Form(...),
     doctor_level: str = Form(...),
     hotword_keys: Optional[str] = Form(None),
+    object_type: Optional[str] = Form(None),
+    questionnaire_id: Optional[int] = Form(None),
+    key_bq_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     questionnaire_file: Optional[UploadFile] = File(None),
 ) -> Dict[str, Any]:
@@ -392,13 +428,16 @@ async def create_interview(
     参数:
         project_id:     项目 ID，对应 bh_project.id，写入 bh_project_interview.parse_project_id。
         name:           访谈名称，对应 bh_project_interview.name。
-        core_problem:    访谈 key BQ，写入 bh_project_interview.core_problem（JSON 字符串）。
+        core_problem:    访谈 key BQ JSON 字符串；新流程下可为空。
         interview_date: 访谈时间字符串（如 '2026-04-15'），写入 bh_project_interview.interview_date。
         hospital_city:   医院所在城市，写入 bh_project_interview.hospital_city。
         hospital_decile: 医院 Decile，写入 bh_project_interview.hospital_decile。
         doctor_level:    医生级别，写入 bh_project_interview.doctor_level。
+        object_type:      访谈对象类型，新流程下必填，用于匹配对应 DG/问卷。
+        questionnaire_id: 旧流程下的项目级问卷 ID。
+        key_bq_id:        旧流程下的项目级 Key BQ ID。
         file:           单个音频文件，文件名写入 bh_project_interview.file_name。
-        questionnaire_file:  可选 Word 问卷文件，仅支持 .docx。
+        questionnaire_file:  旧流程下可选 Word 问卷文件，仅支持 .docx。
 
     返回:
         {
@@ -420,35 +459,122 @@ async def create_interview(
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="访谈名称不能为空")
-    normalized_core_problem = _normalize_core_problem_json(core_problem)
-    key_bq_items = _extract_key_bq_items(normalized_core_problem)
-    if not key_bq_items:
-        raise HTTPException(status_code=400, detail="key BQ 不能为空")
-
     project_row = _get_owned_project_or_404(project_id, current_user_id)
-
     original_name = file.filename or ""
     if not original_name:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
 
+    normalized_object_type = str(object_type or "").strip().lower() or None
+    if normalized_object_type in {"patient", "患者"}:
+        normalized_object_type = "patient"
+    elif normalized_object_type in {"doctor", "医生"}:
+        normalized_object_type = "doctor"
+    else:
+        normalized_object_type = None
+
+    use_project_pool = normalized_object_type is not None or questionnaire_id is not None
+    questionnaire_name: str | None = None
+    questionnaire_file_name: str | None = None
+    questionnaire_backup_path: str | None = None
+    questionnaire_md_path: str | None = None
+    questionnaire_json_path: str | None = None
+    questionnaire_hotword_candidates: list[Dict[str, Any]] = []
+    questionnaire_hotword_candidates_path: str | None = None
+    questionnaire_hotword_review_required = False
+    questionnaire_status: str | None = None
+    normalized_core_problem: str | None = None
+    local_path: str | None = None
+    backup_audio_path: str | None = None
+    workflow_started = False
+
     interview_id: int | None = None
     try:
-        interview_id = insert_interview(
-            parse_project_id=project_id,
-            name=clean_name,
-            interview_date=interview_date,
-            file_name=original_name,
-            hospital_city=hospital_city.strip(),
-            hospital_decile=hospital_decile,
-            doctor_level=doctor_level.strip(),
-            core_problem=normalized_core_problem,
-        )
-        inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
-        if inserted_key_bq <= 0:
-            raise RuntimeError("no key BQ rows inserted")
-        keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
-        if keys:
-            save_hotword_state("interview", interview_id, keys)
+        if use_project_pool:
+            if normalized_object_type is not None:
+                questionnaire_row = fetch_questionnaire_by_project_and_object_type(
+                    project_id=project_id,
+                    object_type=normalized_object_type,
+                    created_by_user_id=current_user_id,
+                )
+                if not questionnaire_row:
+                    raise HTTPException(status_code=404, detail="questionnaire not found for object type")
+            else:
+                if questionnaire_id is None:
+                    raise HTTPException(status_code=400, detail="questionnaire_id is required")
+                questionnaire_row = fetch_questionnaire_by_id(
+                    questionnaire_id=questionnaire_id,
+                    project_id=project_id,
+                    created_by_user_id=current_user_id,
+                )
+                if not questionnaire_row:
+                    raise HTTPException(status_code=404, detail="questionnaire not found")
+
+            questionnaire_status = str(questionnaire_row.get("status") or "")
+            questionnaire_hotwords = _parse_hotwords_list(questionnaire_row.get("hotwords"))
+            if not questionnaire_hotwords:
+                raise HTTPException(status_code=409, detail="questionnaire hotwords are not ready")
+
+            questionnaire_name = str(questionnaire_row.get("name") or "").strip() or None
+            questionnaire_file_name = str(questionnaire_row.get("file_name") or "").strip() or None
+            questionnaire_backup_path = str(questionnaire_row.get("docx_path") or "").strip() or None
+            questionnaire_md_path = str(questionnaire_row.get("md_path") or "").strip() or None
+            questionnaire_json_path = str(questionnaire_row.get("json_path") or "").strip() or None
+            questionnaire_json_file = _get_data_root() / str(questionnaire_row.get("json_path") or "")
+            if not questionnaire_json_file.exists():
+                raise HTTPException(status_code=500, detail="questionnaire json file missing")
+            questionnaire_document = json.loads(questionnaire_json_file.read_text(encoding="utf-8"))
+            question_rows = build_question_insert_rows(questionnaire_document)
+            if not question_rows:
+                raise HTTPException(status_code=400, detail="no questions extracted from questionnaire")
+
+            project_key_bq_json = _normalize_core_problem_json(str(project_row.get("key_bq_json") or ""))
+            key_bq_items = _extract_key_bq_items(project_key_bq_json)
+            if not key_bq_items:
+                raise HTTPException(status_code=400, detail="key BQ 不能为空")
+
+            interview_id = insert_interview(
+                parse_project_id=project_id,
+                name=clean_name,
+                interview_date=interview_date,
+                file_name=original_name,
+                hospital_city=hospital_city.strip(),
+                hospital_decile=hospital_decile,
+                doctor_level=doctor_level.strip(),
+                core_problem=project_key_bq_json,
+                questionnaire_id=int(questionnaire_row["id"]),
+                key_bq_id=None,
+            )
+            inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
+            if inserted_key_bq <= 0:
+                raise RuntimeError("no key BQ rows inserted")
+            inserted_questions = insert_questions_for_interview(interview_id, question_rows)
+            if inserted_questions <= 0:
+                raise RuntimeError("no questions inserted")
+            save_hotword_state("interview", interview_id, questionnaire_hotwords)
+            background_tasks.add_task(_trigger_workflow_background, interview_id)
+            workflow_started = True
+        else:
+            normalized_core_problem = _normalize_core_problem_json(core_problem or "")
+            key_bq_items = _extract_key_bq_items(normalized_core_problem)
+            if not key_bq_items:
+                raise HTTPException(status_code=400, detail="key BQ 不能为空")
+
+            interview_id = insert_interview(
+                parse_project_id=project_id,
+                name=clean_name,
+                interview_date=interview_date,
+                file_name=original_name,
+                hospital_city=hospital_city.strip(),
+                hospital_decile=hospital_decile,
+                doctor_level=doctor_level.strip(),
+                core_problem=normalized_core_problem,
+            )
+            inserted_key_bq = insert_key_bq_rows_for_interview(project_id, interview_id, key_bq_items)
+            if inserted_key_bq <= 0:
+                raise RuntimeError("no key BQ rows inserted")
+            keys = [item.strip() for item in (hotword_keys or "").split(",") if item.strip()]
+            if keys:
+                save_hotword_state("interview", interview_id, keys)
     except Exception as e:
         if interview_id is not None:
             try:
@@ -458,14 +584,16 @@ async def create_interview(
         raise HTTPException(status_code=500, detail=f"insert interview failed: {e}")
 
     local_path = _save_uploaded_audio_file(project_id, interview_id, file)
-    backup_audio_path = _save_backup_audio_file(project_id, interview_id, _get_audio_root() / f"project_{project_id}" / f"interview_{interview_id}" / original_name, original_name)
+    backup_audio_path = _save_backup_audio_file(
+        project_id,
+        interview_id,
+        _get_audio_root() / f"project_{project_id}" / f"interview_{interview_id}" / original_name,
+        original_name,
+    )
 
-    questionnaire_name: str | None = None
-    questionnaire_backup_path: str | None = None
-    questionnaire_md_path: str | None = None
-    questionnaire_json_path: str | None = None
-    if questionnaire_file is not None and questionnaire_file.filename:
+    if not use_project_pool and questionnaire_file is not None and questionnaire_file.filename:
         questionnaire_name = questionnaire_file.filename
+        questionnaire_file_name = questionnaire_file.filename
         try:
             saved_questionnaire_path = _save_uploaded_questionnaire_file(project_id, interview_id, questionnaire_file)
             convert_result = convert_docx_questionnaire(
@@ -488,12 +616,6 @@ async def create_interview(
                 _cleanup_failed_interview(project_id, interview_id)
             raise HTTPException(status_code=500, detail=f"questionnaire processing failed: {e}")
 
-    workflow_started = False
-    questionnaire_hotword_candidates: list[Dict[str, Any]] = []
-    questionnaire_hotword_candidates_path: str | None = None
-    questionnaire_hotword_review_required = False
-
-    if questionnaire_file is not None and questionnaire_file.filename:
         questionnaire_hotword_review_required = True
         try:
             questionnaire_md_text = ""
@@ -513,7 +635,7 @@ async def create_interview(
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"questionnaire hotword extraction failed: {e}")
-    else:
+    elif not use_project_pool:
         background_tasks.add_task(_trigger_workflow_background, interview_id)
         workflow_started = True
 
@@ -529,7 +651,7 @@ async def create_interview(
         "file_name": original_name,
         "local_path": local_path,
         "audio_backup_path": backup_audio_path,
-        "questionnaire_file_name": questionnaire_name,
+        "questionnaire_file_name": questionnaire_file_name,
         "questionnaire_backup_path": questionnaire_backup_path,
         "questionnaire_md_path": questionnaire_md_path,
         "questionnaire_json_path": questionnaire_json_path,
@@ -537,6 +659,11 @@ async def create_interview(
         "questionnaire_hotword_candidates": questionnaire_hotword_candidates,
         "questionnaire_hotword_candidates_path": questionnaire_hotword_candidates_path,
         "workflow_started": workflow_started,
+        "questionnaire_id": questionnaire_id,
+        "questionnaire_name": questionnaire_name,
+        "questionnaire_status": questionnaire_status,
+        "questionnaire_object_type": normalized_object_type,
+        "key_bq_id": key_bq_id,
     }
 
 

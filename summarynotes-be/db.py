@@ -47,6 +47,8 @@ def insert_project(
     keywords: Optional[str],
     core_problem: Optional[str],
     created_by_user_id: int,
+    guide_file_name: Optional[str] = None,
+    guide_file_path: Optional[str] = None,
 ) -> int:
     """
     插入一条项目记录到 bh_project 表。
@@ -60,13 +62,16 @@ def insert_project(
         新插入记录的自增 ID。
     """
     sql = """
-        INSERT INTO bh_project (name, keywords, core_problem, created_by_user_id)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO bh_project (name, keywords, core_problem, guide_file_name, guide_file_path, created_by_user_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (name, keywords, core_problem, created_by_user_id))
+            cursor.execute(
+                sql,
+                (name, keywords, core_problem, guide_file_name, guide_file_path, created_by_user_id),
+            )
             new_id = cursor.lastrowid
         conn.commit()
     except Exception:
@@ -90,14 +95,28 @@ def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
     """
     sql = """
         SELECT
-            id,
-            name,
-            keywords,
-            core_problem,
-            created_by_user_id
-        FROM bh_project
-        WHERE (%s IS NULL OR created_by_user_id = %s)
-        ORDER BY id DESC
+            p.id,
+            p.name,
+            p.keywords,
+            p.core_problem,
+            p.key_bq_json,
+            p.guide_file_name,
+            p.guide_file_path,
+            p.created_by_user_id,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_questionnaire q
+                WHERE q.project_id = p.id
+            ), 0) AS questionnaire_count,
+            CASE WHEN p.key_bq_json IS NULL OR JSON_LENGTH(p.key_bq_json) = 0 THEN 0 ELSE 1 END AS key_bq_count,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_interview i
+                WHERE i.parse_project_id = p.id
+            ), 0) AS interview_count
+        FROM bh_project p
+        WHERE (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY p.id DESC
     """
     conn = get_connection()
     try:
@@ -124,14 +143,28 @@ def fetch_project_by_id(
     """
     sql = """
         SELECT
-            id,
-            name,
-            keywords,
-            core_problem,
-            created_by_user_id
-        FROM bh_project
-        WHERE id = %s
-          AND (%s IS NULL OR created_by_user_id = %s)
+            p.id,
+            p.name,
+            p.keywords,
+            p.core_problem,
+            p.key_bq_json,
+            p.guide_file_name,
+            p.guide_file_path,
+            p.created_by_user_id,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_questionnaire q
+                WHERE q.project_id = p.id
+            ), 0) AS questionnaire_count,
+            CASE WHEN p.key_bq_json IS NULL OR JSON_LENGTH(p.key_bq_json) = 0 THEN 0 ELSE 1 END AS key_bq_count,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_interview i
+                WHERE i.parse_project_id = p.id
+            ), 0) AS interview_count
+        FROM bh_project p
+        WHERE p.id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
         LIMIT 1
     """
     conn = get_connection()
@@ -231,6 +264,635 @@ def fetch_question_intents() -> list[dict]:
     return rows
 
 
+def update_project_guide(
+    project_id: int,
+    guide_file_name: Optional[str] = None,
+    guide_file_path: Optional[str] = None,
+) -> int:
+    """
+    更新项目级指南文件信息。
+    """
+    sql = """
+        UPDATE bh_project
+        SET guide_file_name = %s,
+            guide_file_path = %s
+        WHERE id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (guide_file_name, guide_file_path, project_id))
+            affected = cursor.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
+def _json_or_none(value: Any) -> Optional[str]:
+    """
+    将任意值归一化为 JSON 字符串或空值。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_object_type(value: Any) -> Optional[str]:
+    """
+    将访谈对象类型归一化为系统内置枚举值。
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"patient", "患者"}:
+        return "patient"
+    if text in {"doctor", "医生"}:
+        return "doctor"
+    return None
+
+
+def insert_questionnaire(
+    project_id: int,
+    name: str,
+    object_type: Optional[str] = None,
+    file_name: Optional[str] = None,
+    docx_path: Optional[str] = None,
+    md_path: Optional[str] = None,
+    json_path: Optional[str] = None,
+    hotwords: Any = None,
+    status: str = "hotword_review_pending",
+) -> int:
+    """
+    插入一条项目问卷记录。
+    """
+    sql = """
+        INSERT INTO bh_project_questionnaire
+            (project_id, name, object_type, file_name, docx_path, md_path, json_path, hotwords, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    name,
+                    _normalize_object_type(object_type),
+                    file_name,
+                    docx_path,
+                    md_path,
+                    json_path,
+                    _json_or_none(hotwords),
+                    status,
+                ),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return new_id
+
+
+def update_questionnaire(
+    questionnaire_id: int,
+    project_id: int,
+    name: Optional[str] = None,
+    object_type: Optional[str] = None,
+    file_name: Optional[str] = None,
+    docx_path: Optional[str] = None,
+    md_path: Optional[str] = None,
+    json_path: Optional[str] = None,
+    hotwords: Any = None,
+    status: Optional[str] = None,
+) -> dict | None:
+    """
+    更新项目问卷记录。
+    """
+    fields: list[str] = []
+    params: list[Any] = []
+    for column, value in (
+        ("name", name),
+        ("object_type", _normalize_object_type(object_type) if object_type is not None else None),
+        ("file_name", file_name),
+        ("docx_path", docx_path),
+        ("md_path", md_path),
+        ("json_path", json_path),
+        ("hotwords", _json_or_none(hotwords) if hotwords is not None else None),
+        ("status", status),
+    ):
+        if value is None:
+            continue
+        fields.append(f"{column} = %s")
+        params.append(value)
+    if not fields:
+        return fetch_questionnaire_by_id(questionnaire_id, project_id)
+
+    sql = f"""
+        UPDATE bh_project_questionnaire
+        SET {", ".join(fields)}
+        WHERE id = %s AND project_id = %s
+    """
+    params.extend([questionnaire_id, project_id])
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_id,
+                    name,
+                    file_name,
+                    docx_path,
+                    md_path,
+                    json_path,
+                    hotwords,
+                    status,
+                    created_at,
+                    updated_at
+                FROM bh_project_questionnaire
+                WHERE id = %s AND project_id = %s
+                LIMIT 1
+                """,
+                (questionnaire_id, project_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_questionnaire_by_id(
+    questionnaire_id: int,
+    project_id: int | None = None,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    查询单条问卷记录。
+    """
+    sql = """
+        SELECT
+                    q.id,
+                    q.project_id,
+                    q.name,
+                    q.object_type,
+                    q.file_name,
+                    q.docx_path,
+                    q.md_path,
+                    q.json_path,
+            q.hotwords,
+            q.status,
+            q.created_at,
+            q.updated_at,
+            p.created_by_user_id
+        FROM bh_project_questionnaire q
+        INNER JOIN bh_project p ON p.id = q.project_id
+        WHERE q.id = %s
+          AND (%s IS NULL OR q.project_id = %s)
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    questionnaire_id,
+                    project_id,
+                    project_id,
+                    created_by_user_id,
+                    created_by_user_id,
+                ),
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_questionnaires_by_project(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> list[dict]:
+    """
+    查询项目下的问卷列表。
+    """
+    sql = """
+        SELECT
+                    q.id,
+                    q.project_id,
+                    q.name,
+                    q.object_type,
+                    q.file_name,
+                    q.docx_path,
+                    q.md_path,
+                    q.json_path,
+            q.hotwords,
+            q.status,
+            q.created_at,
+            q.updated_at,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_interview i
+                WHERE i.parse_project_id = q.project_id
+                  AND i.questionnaire_id = q.id
+            ), 0) AS referenced_interview_count
+        FROM bh_project_questionnaire q
+        INNER JOIN bh_project p ON p.id = q.project_id
+        WHERE q.project_id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY q.id DESC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def fetch_questionnaire_by_project_and_object_type(
+    project_id: int,
+    object_type: str,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    根据项目和对象类型查询问卷。
+    """
+    sql = """
+        SELECT
+            q.id,
+            q.project_id,
+            q.name,
+            q.object_type,
+            q.file_name,
+            q.docx_path,
+            q.md_path,
+            q.json_path,
+            q.hotwords,
+            q.status,
+            q.created_at,
+            q.updated_at,
+            p.created_by_user_id
+        FROM bh_project_questionnaire q
+        INNER JOIN bh_project p ON p.id = q.project_id
+        WHERE q.project_id = %s
+          AND q.object_type = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY q.updated_at DESC, q.id DESC
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, _normalize_object_type(object_type), created_by_user_id, created_by_user_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def delete_questionnaire(
+    questionnaire_id: int,
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    删除项目问卷记录。
+    """
+    row = fetch_questionnaire_by_id(questionnaire_id, project_id, created_by_user_id)
+    if not row:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM bh_project_questionnaire
+                WHERE id = %s AND project_id = %s
+                """,
+                (questionnaire_id, project_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def count_questionnaire_usage(questionnaire_id: int, project_id: int) -> int:
+    """
+    查询问卷被多少访谈引用。
+    """
+    sql = """
+        SELECT COUNT(1) AS cnt
+        FROM bh_project_interview
+        WHERE parse_project_id = %s
+          AND questionnaire_id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, questionnaire_id))
+            row = cursor.fetchone() or {}
+    finally:
+        conn.close()
+    return int(row.get("cnt") or 0)
+
+
+def insert_key_bq(
+    project_id: int,
+    name: str,
+    key_bq_json: Any,
+) -> int:
+    """
+    插入一组项目级 Key BQ。
+    """
+    sql = """
+        INSERT INTO bh_project_key_bq
+            (project_id, name, key_bq_json)
+        VALUES (%s, %s, %s)
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, name, _json_or_none(key_bq_json)))
+            new_id = cursor.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return new_id
+
+
+def upsert_project_key_bq(
+    project_id: int,
+    key_bq_json: Any,
+) -> int:
+    """
+    保存项目级单例 Key BQ。
+    """
+    sql = """
+        UPDATE bh_project
+        SET key_bq_json = %s
+        WHERE id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (_json_or_none(key_bq_json), project_id))
+            affected = cursor.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
+def update_key_bq(
+    key_bq_id: int,
+    project_id: int,
+    name: Optional[str] = None,
+    key_bq_json: Any = None,
+) -> dict | None:
+    """
+    更新一组项目级 Key BQ。
+    """
+    fields: list[str] = []
+    params: list[Any] = []
+    if name is not None:
+        fields.append("name = %s")
+        params.append(name)
+    if key_bq_json is not None:
+        fields.append("key_bq_json = %s")
+        params.append(_json_or_none(key_bq_json))
+    if not fields:
+        return fetch_key_bq_by_id(key_bq_id, project_id)
+
+    sql = f"""
+        UPDATE bh_project_key_bq
+        SET {", ".join(fields)}
+        WHERE id = %s AND project_id = %s
+    """
+    params.extend([key_bq_id, project_id])
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_id,
+                    name,
+                    key_bq_json,
+                    created_at,
+                    updated_at
+                FROM bh_project_key_bq
+                WHERE id = %s AND project_id = %s
+                LIMIT 1
+                """,
+                (key_bq_id, project_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_key_bq_by_id(
+    key_bq_id: int,
+    project_id: int | None = None,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    查询单条项目级 Key BQ。
+    """
+    sql = """
+        SELECT
+            k.id,
+            k.project_id,
+            k.name,
+            k.key_bq_json,
+            k.created_at,
+            k.updated_at,
+            p.created_by_user_id
+        FROM bh_project_key_bq k
+        INNER JOIN bh_project p ON p.id = k.project_id
+        WHERE k.id = %s
+          AND (%s IS NULL OR k.project_id = %s)
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    key_bq_id,
+                    project_id,
+                    project_id,
+                    created_by_user_id,
+                    created_by_user_id,
+                ),
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_key_bq_by_project(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> list[dict]:
+    """
+    查询项目下所有 Key BQ 组。
+    """
+    sql = """
+        SELECT
+            k.id,
+            k.project_id,
+            k.name,
+            k.key_bq_json,
+            k.created_at,
+            k.updated_at,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_interview i
+                WHERE i.parse_project_id = k.project_id
+                  AND i.key_bq_id = k.id
+            ), 0) AS referenced_interview_count
+        FROM bh_project_key_bq k
+        INNER JOIN bh_project p ON p.id = k.project_id
+        WHERE k.project_id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY k.id DESC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def delete_key_bq(
+    key_bq_id: int,
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    """
+    删除项目级 Key BQ。
+    """
+    row = fetch_key_bq_by_id(key_bq_id, project_id, created_by_user_id)
+    if not row:
+        return None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM bh_project_key_bq
+                WHERE id = %s AND project_id = %s
+                """,
+                (key_bq_id, project_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def count_key_bq_usage(key_bq_id: int, project_id: int) -> int:
+    """
+    查询 Key BQ 被多少访谈引用。
+    """
+    sql = """
+        SELECT COUNT(1) AS cnt
+        FROM bh_project_interview
+        WHERE parse_project_id = %s
+          AND key_bq_id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, key_bq_id))
+            row = cursor.fetchone() or {}
+    finally:
+        conn.close()
+    return int(row.get("cnt") or 0)
+
+
+def fetch_project_stats(project_id: int) -> dict:
+    """
+    查询项目下的问卷、Key BQ、访谈数量。
+    """
+    sql = """
+        SELECT
+            (SELECT COUNT(1) FROM bh_project_questionnaire WHERE project_id = %s) AS questionnaire_count,
+            (SELECT CASE WHEN key_bq_json IS NULL OR JSON_LENGTH(key_bq_json) = 0 THEN 0 ELSE 1 END FROM bh_project WHERE id = %s) AS key_bq_count,
+            (SELECT COUNT(1) FROM bh_project_interview WHERE parse_project_id = %s) AS interview_count
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, project_id, project_id))
+            row = cursor.fetchone() or {}
+    finally:
+        conn.close()
+    return row
+
+
 def insert_interview(
     parse_project_id: int,
     name: str,
@@ -240,6 +902,8 @@ def insert_interview(
     hospital_decile: Optional[int],
     doctor_level: Optional[str],
     core_problem: Optional[str],
+    questionnaire_id: Optional[int] = None,
+    key_bq_id: Optional[int] = None,
 ) -> int:
     """
     插入一条访谈记录到 bh_project_interview 表。
@@ -253,6 +917,8 @@ def insert_interview(
         hospital_decile:  医院 Decile，对应 bh_project_interview.hospital_decile。
         doctor_level:     医生级别，对应 bh_project_interview.doctor_level。
         core_problem:     访谈 key BQ 的 JSON 字符串，对应 bh_project_interview.core_problem。
+        questionnaire_id: 关联问卷 ID，可空，写入 bh_project_interview.questionnaire_id。
+        key_bq_id:        关联 Key BQ ID，可空，写入 bh_project_interview.key_bq_id。
 
     返回:
         新插入访谈记录的自增 ID。
@@ -267,9 +933,11 @@ def insert_interview(
             hospital_decile,
             doctor_level,
             core_problem,
+            questionnaire_id,
+            key_bq_id,
             status
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     conn = get_connection()
     try:
@@ -285,6 +953,8 @@ def insert_interview(
                     hospital_decile,
                     doctor_level,
                     core_problem,
+                    questionnaire_id,
+                    key_bq_id,
                     0,
                 ),
             )
@@ -521,6 +1191,72 @@ def update_interview_note_content(interview_id: int, note_content: str) -> None:
         conn.close()
 
 
+def update_interview_kbq_note_json(
+    interview_id: int,
+    kbq_id: int,
+    note_json: Any,
+) -> dict | None:
+    """
+    更新单条 KBQ Notes 的 note_json 内容。
+
+    参数:
+        interview_id: 访谈 ID。
+        kbq_id: KBQ 记录 ID。
+        note_json: 更新后的 JSON 内容。
+
+    返回:
+        更新后的记录字典；若记录不存在则返回 None。
+    """
+    sql = """
+        UPDATE bh_project_interview_key_bq
+        SET note_json = %s
+        WHERE id = %s AND project_interview_id = %s
+    """
+
+    def _json_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        return text or None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (_json_or_none(note_json), kbq_id, interview_id))
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_id,
+                    project_interview_id,
+                    bq_order,
+                    bq_text,
+                    dimension_json,
+                    note_json,
+                    status,
+                    created_at,
+                    updated_at
+                FROM bh_project_interview_key_bq
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (kbq_id, interview_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
 def fetch_interview_minutes_by_interview(interview_id: int) -> dict | None:
     """
     查询某个访谈下的智能纪要记录。
@@ -552,6 +1288,94 @@ def fetch_interview_minutes_by_interview(interview_id: int) -> dict | None:
         with conn.cursor() as cursor:
             cursor.execute(sql, (interview_id,))
             row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def update_interview_minutes_json(
+    interview_id: int,
+    project_id: int,
+    minutes_json: Any,
+) -> dict | None:
+    """
+    更新访谈智能纪要的 minutes_json。
+
+    参数:
+        interview_id: 访谈 ID。
+        project_id: 项目 ID。
+        minutes_json: 更新后的 JSON 内容。
+
+    返回:
+        更新后的记录字典；若没有记录则会尝试插入并返回新记录。
+    """
+    def _json_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        return text or None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE bh_project_interview_minutes
+                SET minutes_json = %s,
+                    status = COALESCE(status, 'done')
+                WHERE project_interview_id = %s
+                """,
+                (_json_or_none(minutes_json), interview_id),
+            )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    """
+                    INSERT INTO bh_project_interview_minutes
+                        (project_id, project_interview_id, outline_json, minutes_json, status, error_message, generated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        project_id = VALUES(project_id),
+                        minutes_json = VALUES(minutes_json),
+                        status = VALUES(status),
+                        error_message = VALUES(error_message),
+                        generated_at = VALUES(generated_at)
+                    """,
+                    (
+                        project_id,
+                        interview_id,
+                        None,
+                        _json_or_none(minutes_json),
+                        "done",
+                        None,
+                        None,
+                    ),
+                )
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_id,
+                    project_interview_id,
+                    outline_json,
+                    minutes_json,
+                    status,
+                    error_message,
+                    generated_at,
+                    created_at,
+                    updated_at
+                FROM bh_project_interview_minutes
+                WHERE project_interview_id = %s
+                LIMIT 1
+                """,
+                (interview_id,),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return row
@@ -754,11 +1578,19 @@ def fetch_interview_by_id(
             i.hospital_decile,
             i.doctor_level,
             i.core_problem,
+            i.questionnaire_id,
+            q.name AS questionnaire_name,
+            q.status AS questionnaire_status,
+            q.object_type AS questionnaire_object_type,
+            i.key_bq_id,
+            k.name AS key_bq_name,
             i.note_content,
             i.file_path,
             i.status
         FROM bh_project_interview i
         INNER JOIN bh_project p ON p.id = i.parse_project_id
+        LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
         LIMIT 1
@@ -904,6 +1736,15 @@ def delete_project_graph(
                     "DELETE FROM bh_project_interview WHERE id = %s",
                     (interview_id,),
                 )
+
+            cursor.execute(
+                "DELETE FROM bh_project_questionnaire WHERE project_id = %s",
+                (project_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_key_bq WHERE project_id = %s",
+                (project_id,),
+            )
 
             cursor.execute(
                 """
@@ -1267,14 +2108,22 @@ def fetch_interviews_by_project(
             i.parse_project_id,
             i.name,
             i.interview_date,
-            i.file_name
-            , i.hospital_city
-            , i.hospital_decile
-            , i.doctor_level
-            , i.core_problem
-            , i.status
+            i.file_name,
+            i.hospital_city,
+            i.hospital_decile,
+            i.doctor_level,
+            i.core_problem,
+            i.questionnaire_id,
+            q.name AS questionnaire_name,
+            q.status AS questionnaire_status,
+            q.object_type AS questionnaire_object_type,
+            i.key_bq_id,
+            k.name AS key_bq_name,
+            i.status
         FROM bh_project_interview i
         INNER JOIN bh_project p ON p.id = i.parse_project_id
+        LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
         ORDER BY i.id DESC
@@ -1322,8 +2171,16 @@ def fetch_completed_interviews_for_project(
             i.hospital_decile,
             i.doctor_level,
             i.core_problem,
+            i.questionnaire_id,
+            q.name AS questionnaire_name,
+            q.status AS questionnaire_status,
+            q.object_type AS questionnaire_object_type,
+            i.key_bq_id,
+            k.name AS key_bq_name,
             i.status
         FROM bh_project_interview i
+        LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
           AND i.status = 2
           {extra_filter}

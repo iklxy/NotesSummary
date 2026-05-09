@@ -205,6 +205,8 @@ class DbAccess:
                 parse_project_id,
                 file_name,
                 core_problem,
+                questionnaire_id,
+                key_bq_id,
                 file_content,
                 note_content,
                 file_path,
@@ -214,6 +216,43 @@ class DbAccess:
             LIMIT 1
         """
         return cls._fetch_one(sql, (interview_id,))
+
+    @classmethod
+    def get_questionnaire_by_id(cls, questionnaire_id: int) -> Optional[Dict[str, Any]]:
+        """
+        根据问卷 ID 查询 `bh_project_questionnaire` 表中的单条记录。
+
+        参数:
+            questionnaire_id: 问卷主键 ID，对应 `bh_project_questionnaire.id`。
+
+        返回:
+            若查询成功，返回问卷记录字典，字段至少包含：
+                - id
+                - project_id
+                - name
+                - file_name
+                - md_path
+                - json_path
+                - hotwords
+                - status
+            若不存在对应记录，则返回 `None`。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                name,
+                file_name,
+                docx_path,
+                md_path,
+                json_path,
+                hotwords,
+                status
+            FROM bh_project_questionnaire
+            WHERE id = %s
+            LIMIT 1
+        """
+        return cls._fetch_one(sql, (questionnaire_id,))
 
     @classmethod
     def get_project_by_id(cls, project_id: int) -> Optional[Dict[str, Any]]:

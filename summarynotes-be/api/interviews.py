@@ -31,6 +31,9 @@ from db import (
     fetch_questions_by_interview,
     insert_fewshot_sample,
     insert_questions_for_interview,
+    update_interview_kbq_note_json,
+    update_interview_minutes_json,
+    update_interview_note_content,
     update_interview_summary_text_with_corrections,
     upsert_interview_minutes,
 )
@@ -50,6 +53,12 @@ from schemas.interviews import (
     QuestionCreateRequest,
     QuestionCreateResponse,
     QuestionDeleteResponse,
+    OverallNotesKbqUpdateRequest,
+    OverallNotesKbqUpdateResponse,
+    OverallNotesMinutesUpdateRequest,
+    OverallNotesMinutesUpdateResponse,
+    OverallNotesSummaryUpdateRequest,
+    OverallNotesSummaryUpdateResponse,
     SummaryUpdateRequest,
     SummaryUpdateResponse,
 )
@@ -1417,6 +1426,98 @@ def get_interview_overall_notes(
     payload = _resolve_overall_notes_payload(interview_id, current_user_id)
     payload.pop("interview", None)
     return payload
+
+
+@router.put(
+    "/{interview_id}/overall-notes/summary",
+    response_model=OverallNotesSummaryUpdateResponse,
+)
+def update_interview_overall_notes_summary(
+    interview_id: int,
+    payload: OverallNotesSummaryUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> OverallNotesSummaryUpdateResponse:
+    """
+    更新全文 Notes 中的 A 区块内容。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+    text = payload.text.strip()
+    try:
+        update_interview_note_content(interview_id, text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update overall notes summary failed: {e}")
+    return OverallNotesSummaryUpdateResponse(
+        success=True,
+        interview_id=interview_id,
+        note_content=text,
+    )
+
+
+@router.put(
+    "/{interview_id}/overall-notes/kbq/{kbq_id}",
+    response_model=OverallNotesKbqUpdateResponse,
+)
+def update_interview_overall_notes_kbq(
+    interview_id: int,
+    kbq_id: int,
+    payload: OverallNotesKbqUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> OverallNotesKbqUpdateResponse:
+    """
+    更新全文 Notes 中单条 KBQ Notes 的 note_json。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+    try:
+        updated = update_interview_kbq_note_json(interview_id, kbq_id, payload.note_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update overall notes kbq failed: {e}")
+    if not updated:
+        raise HTTPException(status_code=404, detail="kbq note not found")
+    note_json = updated.get("note_json")
+    if isinstance(note_json, str):
+        try:
+            note_json = json.loads(note_json)
+        except Exception:
+            pass
+    return OverallNotesKbqUpdateResponse(
+        success=True,
+        interview_id=interview_id,
+        kbq_id=kbq_id,
+        note_json=note_json,
+    )
+
+
+@router.put(
+    "/{interview_id}/overall-notes/minutes",
+    response_model=OverallNotesMinutesUpdateResponse,
+)
+def update_interview_overall_notes_minutes(
+    interview_id: int,
+    payload: OverallNotesMinutesUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> OverallNotesMinutesUpdateResponse:
+    """
+    更新全文 Notes 中 C 区块的 minutes_json。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    try:
+        updated = update_interview_minutes_json(interview_id, project_id, payload.minutes_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update overall notes minutes failed: {e}")
+    if not updated:
+        raise HTTPException(status_code=404, detail="minutes not found")
+    minutes_json = updated.get("minutes_json")
+    if isinstance(minutes_json, str):
+        try:
+            minutes_json = json.loads(minutes_json)
+        except Exception:
+            pass
+    return OverallNotesMinutesUpdateResponse(
+        success=True,
+        interview_id=interview_id,
+        minutes_json=minutes_json,
+    )
 
 
 @router.get(

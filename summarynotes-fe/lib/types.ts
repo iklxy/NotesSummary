@@ -162,6 +162,25 @@ export interface InterviewOverallNotesResponse {
   summary: InterviewSummaryResponse;
 }
 
+export interface OverallNotesSummaryUpdateResponse {
+  success: boolean;
+  interview_id: number;
+  note_content?: string | null;
+}
+
+export interface OverallNotesKbqUpdateResponse {
+  success: boolean;
+  interview_id: number;
+  kbq_id: number;
+  note_json?: unknown;
+}
+
+export interface OverallNotesMinutesUpdateResponse {
+  success: boolean;
+  interview_id: number;
+  minutes_json?: unknown;
+}
+
 export interface KbqDimensionItem {
   name: string;
   description?: string | null;
@@ -315,11 +334,19 @@ export interface Interview {
   id: number;
   name: string;
   date?: string | null;
+  interview_date?: string | null;
   core_problem?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
   doctor_level?: string | null;
   audioFileName?: string | null;
+  status?: number | null;
+  questionnaire_id?: number | null;
+  questionnaire_name?: string | null;
+  questionnaire_status?: string | null;
+  questionnaire_object_type?: string | null;
+  key_bq_id?: number | null;
+  key_bq_name?: string | null;
 }
 
 export interface CreatedInterviewResponse {
@@ -342,6 +369,12 @@ export interface CreatedInterviewResponse {
   questionnaire_hotword_candidates?: QuestionnaireHotwordCandidate[] | null;
   questionnaire_hotword_candidates_path?: string | null;
   workflow_started?: boolean | null;
+  questionnaire_id?: number | null;
+  questionnaire_name?: string | null;
+  questionnaire_status?: string | null;
+  questionnaire_object_type?: string | null;
+  key_bq_id?: number | null;
+  key_bq_name?: string | null;
 }
 
 export interface Project {
@@ -349,7 +382,73 @@ export interface Project {
   name: string;
   keywords?: string | null;
   core_problem?: string | null;
+  guide_file_name?: string | null;
+  guide_file_path?: string | null;
+  key_bq_json?: KeyBqJson | null;
+  questionnaire_count?: number | null;
+  key_bq_count?: number | null;
+  interview_count?: number | null;
   interviews?: Interview[];
+}
+
+export interface ProjectQuestionnaire {
+  id: number;
+  project_id: number;
+  name: string;
+  object_type?: string | null;
+  file_name?: string | null;
+  docx_path?: string | null;
+  md_path?: string | null;
+  json_path?: string | null;
+  hotwords?: string[] | null;
+  status?: "hotword_review_pending" | "ready" | "failed" | string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  referenced_interview_count?: number | null;
+  hotword_candidates?: QuestionnaireHotwordCandidate[] | null;
+  review_required?: boolean | null;
+  success?: boolean | null;
+}
+
+export interface KeyBqJson {
+  key_bq_list: Array<{
+    order: number;
+    text: string;
+    dimensions?: Array<{
+      name: string;
+      description?: string | null;
+    }>;
+  }>;
+}
+
+export interface ProjectKeyBq {
+  id: number;
+  project_id: number;
+  name: string;
+  key_bq_json: KeyBqJson;
+  created_at?: string | null;
+  updated_at?: string | null;
+  referenced_interview_count?: number | null;
+  success?: boolean | null;
+}
+
+export interface ProjectKeyBqSingleton {
+  success?: boolean | null;
+  project_id: number;
+  key_bq_json: KeyBqJson;
+  updated_at?: string | null;
+}
+
+export interface ProjectDetail {
+  project: Project;
+  questionnaires: ProjectQuestionnaire[];
+  keyBqGroups: ProjectKeyBq[];
+  interviews: Interview[];
+  counts?: {
+    questionnaire_count: number;
+    key_bq_count: number;
+    interview_count: number;
+  };
 }
 
 export interface ProjectCaInterviewMeta {

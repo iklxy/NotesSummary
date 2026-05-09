@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -13,26 +13,17 @@ import {
   Modal,
   Row,
   Space,
-  Spin,
+  Tag,
   Typography,
+  Upload,
   message,
 } from "antd";
-import { DatePicker, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { DownOutlined } from "@ant-design/icons";
+import { UploadOutlined } from "@ant-design/icons";
 import { Project } from "../lib/types";
 import { createProject, deleteProject, getProjects } from "../lib/projectsApi";
-import {
-  deleteInterview,
-  createInterview,
-  getProjectInterviews,
-  saveQuestionnaireHotwords,
-} from "../lib/interviewsApi";
-import HotwordSelector from "../components/HotwordSelector";
-import QuestionnaireHotwordReviewModal from "../components/QuestionnaireHotwordReviewModal";
-import { INTERVIEW_HOTWORD_OPTIONS } from "../lib/hotwordOptions";
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 export default function Home() {
@@ -40,57 +31,8 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [interviewModalVisible, setInterviewModalVisible] = useState(false);
-  const [currentProjectForInterview, setCurrentProjectForInterview] = useState<Project | null>(
-    null,
-  );
+  const [guideFileList, setGuideFileList] = useState<UploadFile[]>([]);
   const [form] = Form.useForm();
-  const [interviewForm] = Form.useForm();
-  const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [questionnaireFileList, setQuestionnaireFileList] = useState<UploadFile[]>([]);
-  const [expandedProjectIds, setExpandedProjectIds] = useState<number[]>([]);
-  const [selectedInterviewHotwordValues, setSelectedInterviewHotwordValues] = useState<string[]>(
-    [],
-  );
-  const [questionnaireHotwordReviewVisible, setQuestionnaireHotwordReviewVisible] =
-    useState(false);
-  const [interviewSubmitting, setInterviewSubmitting] = useState(false);
-  const [questionnaireHotwordReviewSaving, setQuestionnaireHotwordReviewSaving] =
-    useState(false);
-  const [pendingQuestionnaireHotwordInterview, setPendingQuestionnaireHotwordInterview] =
-    useState<{
-      projectId: number;
-      interviewId: number;
-      interviewName: string;
-      candidates: Array<{
-        term: string;
-        normalized_term: string;
-        reason?: string | null;
-        confidence?: number | null;
-      }>;
-    } | null>(null);
-
-  const buildKeyBqJson = (rawValue: string): string => {
-    const items = rawValue
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((text, index) => ({ order: index + 1, text }));
-    return JSON.stringify({ key_bq_list: items }, null, 2);
-  };
-
-  const formatInterviewDate = (value?: string | null) => {
-    if (!value) {
-      return "";
-    }
-    return value.includes("T") ? value.split("T")[0] : value;
-  };
-
-  const openCreateProject = () => {
-    setEditingProject(null);
-    form.resetFields();
-    setModalVisible(true);
-  };
 
   useEffect(() => {
     const loadProjects = async () => {
@@ -98,15 +40,18 @@ export default function Home() {
         const data = await getProjects();
         setProjects(data);
       } catch (e) {
-        if (e instanceof Error) {
-          message.error(e.message);
-        } else {
-          message.error("加载项目列表失败");
-        }
+        message.error(e instanceof Error ? e.message : "加载项目列表失败");
       }
     };
-    loadProjects();
+    void loadProjects();
   }, []);
+
+  const openCreateProject = () => {
+    setEditingProject(null);
+    form.resetFields();
+    setGuideFileList([]);
+    setModalVisible(true);
+  };
 
   const openEditProject = (project: Project) => {
     setEditingProject(project);
@@ -114,6 +59,7 @@ export default function Home() {
       name: project.name,
       core_description: project.core_problem ?? "",
     });
+    setGuideFileList([]);
     setModalVisible(true);
   };
 
@@ -122,38 +68,30 @@ export default function Home() {
       const values = await form.validateFields();
       if (editingProject) {
         setProjects((prev) =>
-          prev.map((p) =>
-            p.id === editingProject.id
+          prev.map((item) =>
+            item.id === editingProject.id
               ? {
-                  ...p,
+                  ...item,
                   name: values.name as string,
                   core_problem: (values.core_description as string) || null,
                 }
-              : p,
+              : item,
           ),
         );
         message.success("项目已更新");
       } else {
-        const payload = {
+        const created = await createProject({
           name: values.name as string,
           core_problem: (values.core_description as string) || undefined,
-        };
-        const created = await createProject(payload);
-        setProjects((prev) => [...prev, created]);
+          guide_file: guideFileList[0]?.originFileObj as File | null | undefined,
+        });
+        setProjects((prev) => [created, ...prev]);
         message.success("项目已创建");
       }
       setModalVisible(false);
     } catch (e) {
-      if (e instanceof Error) {
-        message.error(e.message);
-      } else {
-        message.warning("请检查表单填写");
-      }
+      message.error(e instanceof Error ? e.message : "请检查表单填写");
     }
-  };
-
-  const handleProjectCancel = () => {
-    setModalVisible(false);
   };
 
   const handleDeleteProject = (project: Project) => {
@@ -171,230 +109,9 @@ export default function Home() {
           } else {
             message.success("项目已删除");
           }
-          setProjects((prev) => prev.filter((p) => p.id !== project.id));
-          setExpandedProjectIds((prev) => prev.filter((id) => id !== project.id));
+          setProjects((prev) => prev.filter((item) => item.id !== project.id));
         } catch (e) {
-          if (e instanceof Error) {
-            message.error(e.message);
-          } else {
-            message.error("删除项目失败");
-          }
-        }
-      },
-    });
-  };
-
-  const openCreateInterview = (project: Project) => {
-    setCurrentProjectForInterview(project);
-    interviewForm.resetFields();
-    setFileList([]);
-    setQuestionnaireFileList([]);
-    setSelectedInterviewHotwordValues([]);
-    setQuestionnaireHotwordReviewVisible(false);
-    setInterviewSubmitting(false);
-    setQuestionnaireHotwordReviewSaving(false);
-    setPendingQuestionnaireHotwordInterview(null);
-    setInterviewModalVisible(true);
-  };
-
-  const handleInterviewCancel = () => {
-    if (interviewSubmitting) {
-      return;
-    }
-    setInterviewModalVisible(false);
-    setSelectedInterviewHotwordValues([]);
-    setQuestionnaireFileList([]);
-  };
-
-  const handleQuestionnaireHotwordReviewCancel = () => {
-    setQuestionnaireHotwordReviewVisible(false);
-    setPendingQuestionnaireHotwordInterview(null);
-  };
-
-  const handleQuestionnaireHotwordReviewConfirm = async (hotwords: string[]) => {
-    if (!pendingQuestionnaireHotwordInterview) {
-      message.error("缺少待确认的访谈信息");
-      return;
-    }
-    setQuestionnaireHotwordReviewSaving(true);
-    try {
-      await saveQuestionnaireHotwords(
-        pendingQuestionnaireHotwordInterview.projectId,
-        pendingQuestionnaireHotwordInterview.interviewId,
-        { hotwords },
-      );
-      message.success("问卷热词已确认，访谈已开始处理");
-      setQuestionnaireHotwordReviewVisible(false);
-      setPendingQuestionnaireHotwordInterview(null);
-      router.push(`/interviews/${pendingQuestionnaireHotwordInterview.interviewId}/processing`);
-    } catch (e) {
-      if (e instanceof Error) {
-        message.error(e.message);
-      } else {
-        message.error("保存问卷热词失败");
-      }
-    } finally {
-      setQuestionnaireHotwordReviewSaving(false);
-    }
-  };
-
-  const handleInterviewOk = async () => {
-    try {
-      setInterviewSubmitting(true);
-      await interviewForm.validateFields();
-      if (!currentProjectForInterview) {
-        message.error("缺少项目信息");
-        setInterviewSubmitting(false);
-        return;
-      }
-      const values = interviewForm.getFieldsValue();
-      const dateValue = values.interview_date;
-      let dateText: string | null = null;
-      if (dateValue && typeof (dateValue as { format?: unknown }).format === "function") {
-        dateText = (dateValue as { format: (fmt: string) => string }).format("YYYY-MM-DD");
-      }
-      const hospitalCity = String(values.hospital_city || "").trim();
-      const hospitalDecile = Number(values.hospital_decile);
-      const doctorLevel = String(values.doctor_level || "").trim();
-      const keyBqText = String(values.key_bq_text || "").trim();
-      const coreProblem = buildKeyBqJson(keyBqText);
-      const formData = new FormData();
-      formData.append("name", values.interview_name as string);
-      formData.append("core_problem", coreProblem);
-      if (dateText) {
-        formData.append("interview_date", dateText);
-      }
-      formData.append("hospital_city", hospitalCity);
-      formData.append("hospital_decile", String(hospitalDecile));
-      formData.append("doctor_level", doctorLevel);
-      const file = fileList[0];
-      if (!file || !file.originFileObj) {
-        message.error("请先选择音频文件");
-        setInterviewSubmitting(false);
-        return;
-      }
-      formData.append("file", file.originFileObj as File);
-      const questionnaireFile = questionnaireFileList[0];
-      if (questionnaireFile?.originFileObj) {
-        formData.append("questionnaire_file", questionnaireFile.originFileObj as File);
-      }
-      formData.append("hotword_keys", selectedInterviewHotwordValues.join(","));
-
-      const created = await createInterview(currentProjectForInterview.id, formData);
-
-      setProjects((prev) =>
-        prev.map((p) => {
-          if (p.id !== currentProjectForInterview.id) {
-            return p;
-          }
-          const currentInterviews = p.interviews ?? [];
-          const next = {
-            id: created.id,
-            name: created.name,
-            core_problem: created.core_problem ?? coreProblem,
-            date: created.interview_date ?? dateText,
-            hospital_city: created.hospital_city ?? hospitalCity,
-            hospital_decile: created.hospital_decile ?? hospitalDecile,
-            doctor_level: created.doctor_level ?? doctorLevel,
-            audioFileName: created.file_name,
-          };
-          return { ...p, interviews: [...currentInterviews, next] };
-        }),
-      );
-      setExpandedProjectIds((prev) =>
-        prev.includes(currentProjectForInterview.id)
-          ? prev
-          : [...prev, currentProjectForInterview.id],
-      );
-      setInterviewModalVisible(false);
-      setSelectedInterviewHotwordValues([]);
-      setQuestionnaireFileList([]);
-      if (created.questionnaire_hotword_review_required) {
-        setPendingQuestionnaireHotwordInterview({
-          projectId: created.project_id,
-          interviewId: created.id,
-          interviewName: created.name,
-          candidates: created.questionnaire_hotword_candidates ?? [],
-        });
-        setQuestionnaireHotwordReviewVisible(true);
-        message.success("访谈已创建，请先确认问卷热词");
-        setInterviewSubmitting(false);
-        return;
-      }
-      message.success("访谈信息已填写");
-      router.push(`/interviews/${created.id}/processing`);
-    } catch (e) {
-      if (e instanceof Error) {
-        message.error(e.message);
-      } else {
-        message.warning("请完善访谈信息");
-      }
-    } finally {
-      setInterviewSubmitting(false);
-    }
-  };
-
-  const toggleProjectExpanded = async (project: Project) => {
-    if (expandedProjectIds.includes(project.id)) {
-      setExpandedProjectIds((prev) => prev.filter((id) => id !== project.id));
-      return;
-    }
-    if (!project.interviews) {
-      try {
-        const list = await getProjectInterviews(project.id);
-        const mapped = list.map((item) => ({
-          id: item.id,
-          name: item.name,
-          date: item.interview_date ?? null,
-          hospital_city: item.hospital_city ?? null,
-          hospital_decile: item.hospital_decile ?? null,
-          doctor_level: item.doctor_level ?? null,
-          audioFileName: item.file_name ?? null,
-          core_problem: item.core_problem ?? null,
-        }));
-        setProjects((prev) =>
-          prev.map((p) => (p.id === project.id ? { ...p, interviews: mapped } : p)),
-        );
-      } catch (e) {
-        if (e instanceof Error) {
-          message.error(e.message);
-        } else {
-          message.error("加载访谈列表失败");
-        }
-      }
-    }
-    setExpandedProjectIds((prev) =>
-      prev.includes(project.id) ? prev : [...prev, project.id],
-    );
-  };
-
-  const handleDeleteInterview = (projectId: number, interviewId: number, interviewName: string) => {
-    Modal.confirm({
-      title: "确认删除访谈",
-      content: `确定要删除访谈「${interviewName}」吗？该操作会同时删除数据库中的访谈、题目、原文、Notes，以及本地和云端音频文件与向量索引。`,
-      okText: "删除",
-      okType: "danger",
-      cancelText: "取消",
-      onOk: async () => {
-        try {
-          await deleteInterview(interviewId);
-          setProjects((prev) =>
-            prev.map((p) =>
-              p.id === projectId
-                ? {
-                    ...p,
-                    interviews: (p.interviews ?? []).filter((it) => it.id !== interviewId),
-                  }
-                : p,
-            ),
-          );
-          message.success("访谈已删除");
-        } catch (e) {
-          if (e instanceof Error) {
-            message.error(e.message);
-          } else {
-            message.error("删除访谈失败");
-          }
+          message.error(e instanceof Error ? e.message : "删除项目失败");
         }
       },
     });
@@ -415,7 +132,7 @@ export default function Home() {
                 项目列表
               </Title>
               <Paragraph className="!mb-0 !max-w-2xl !text-slate-300">
-                统一管理项目、访谈、题目与 Notes，上传音频后自动进入转录和工作流处理。
+                点击任意项目进入项目详情页，在详情页中管理 DG、项目 Key BQ、访谈创建和 CA。
               </Paragraph>
             </div>
             <div className="flex items-center gap-4">
@@ -426,13 +143,14 @@ export default function Home() {
             </div>
           </div>
         </div>
+
         <div className="p-6 md:p-8">
           <Row gutter={[16, 16]}>
             <Col span={24}>
               <Card className="summarynotes-project-list-shell">
-                <div className="flex items-center justify-between mb-4">
+                <div className="mb-4 flex items-center justify-between">
                   <Title level={4} style={{ marginBottom: 0 }} className="summarynotes-section-title">
-                    项目列表
+                    项目入口
                   </Title>
                   <Button type="primary" onClick={openCreateProject}>
                     新建项目
@@ -446,110 +164,66 @@ export default function Home() {
                     dataSource={projects}
                     renderItem={(project) => (
                       <List.Item className="summarynotes-project-list-item">
-                        <Card className="summarynotes-project-card">
+                        <Card
+                          className="summarynotes-project-card"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => router.push(`/projects/${project.id}`)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              router.push(`/projects/${project.id}`);
+                            }
+                          }}
+                          style={{ cursor: "pointer" }}
+                        >
                           <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                            <Space className="justify-between w-full">
-                              <Space>
-                                <Button
-                                  type="text"
-                                  size="small"
-                                  icon={
-                                    <DownOutlined
-                                      rotate={expandedProjectIds.includes(project.id) ? 180 : 0}
-                                    />
-                                  }
-                                  onClick={() => {
-                                    void toggleProjectExpanded(project);
-                                  }}
-                                />
+                            <Space className="justify-between w-full" align="start">
+                              <Space direction="vertical" size={4}>
                                 <Title level={5} style={{ marginBottom: 0 }}>
                                   {project.name}
                                 </Title>
+                                {project.keywords ? (
+                                  <Text type="secondary" style={{ fontSize: 12 }}>
+                                    关键词：{project.keywords}
+                                  </Text>
+                                ) : null}
                               </Space>
                               <Space>
                                 <Button
-                                  type="primary"
-                                  ghost
-                                  onClick={() => openCreateInterview(project)}
+                                  type="default"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openEditProject(project);
+                                  }}
                                 >
-                                  新建访谈
-                                </Button>
-                                <Button onClick={() => router.push(`/projects/${project.id}/ca`)}>
-                                  CA
-                                </Button>
-                                <Button type="default" onClick={() => openEditProject(project)}>
                                   编辑项目
                                 </Button>
-                                <Button danger onClick={() => handleDeleteProject(project)}>
+                                <Button
+                                  danger
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleDeleteProject(project);
+                                  }}
+                                >
                                   删除项目
                                 </Button>
                               </Space>
                             </Space>
-                            {project.core_problem && (
-                              <Paragraph style={{ marginBottom: 0 }}>
-                                核心描述：{project.core_problem}
+
+                            {project.core_problem ? (
+                              <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                {project.core_problem}
                               </Paragraph>
+                            ) : (
+                              <Text type="secondary">暂无项目背景说明。</Text>
                             )}
-                            {expandedProjectIds.includes(project.id) && (
-                              <div style={{ marginTop: 8 }} className="summarynotes-interview-panel">
-                                <Text strong className="summarynotes-subsection-title">
-                                  访谈列表
-                                </Text>
-                                {project.interviews && project.interviews.length > 0 ? (
-                                  <List
-                                    size="small"
-                                    dataSource={project.interviews}
-                                    renderItem={(interview) => (
-                                      <List.Item
-                                        className="summarynotes-interview-item"
-                                        actions={[
-                                          <Button
-                                            key="detail"
-                                            type="link"
-                                            size="small"
-                                            onClick={() => router.push(`/interviews/${interview.id}`)}
-                                          >
-                                            详情
-                                          </Button>,
-                                          <Button
-                                            key="delete"
-                                            type="link"
-                                            size="small"
-                                            danger
-                                            onClick={() =>
-                                              handleDeleteInterview(
-                                                project.id,
-                                                interview.id,
-                                                interview.name,
-                                              )
-                                            }
-                                          >
-                                            删除
-                                          </Button>,
-                                        ]}
-                                      >
-                                        <Space direction="vertical" size={0}>
-                                          <Text>{interview.name}</Text>
-                                          <Text type="secondary" style={{ fontSize: 12 }}>
-                                            {interview.date
-                                              ? `访谈时间：${formatInterviewDate(interview.date)}`
-                                              : ""}
-                                            {interview.audioFileName
-                                              ? `${interview.date ? "，" : ""}文件：${interview.audioFileName
-                                              }`
-                                              : ""}
-                                          </Text>
-                                        </Space>
-                                      </List.Item>
-                                    )}
-                                  />
-                                ) : (
-                                  <Text type="secondary" style={{ fontSize: 12 }} className="summarynotes-empty-hint">
-                                    暂无访谈。
-                                  </Text>
-                                )}
-                              </div>
-                            )}
+
+                            <Space wrap size={6}>
+                              <Tag color="cyan">问卷 {project.questionnaire_count ?? 0}</Tag>
+                              <Tag color="geekblue">Key BQ {project.key_bq_count ?? 0}</Tag>
+                              <Tag color="green">访谈 {project.interview_count ?? 0}</Tag>
+                            </Space>
                           </Space>
                         </Card>
                       </List.Item>
@@ -561,11 +235,15 @@ export default function Home() {
           </Row>
         </div>
       </Content>
+
       <Modal
         open={modalVisible}
         title={editingProject ? "编辑项目" : "新建项目"}
-        onOk={handleProjectOk}
-        onCancel={handleProjectCancel}
+        onOk={() => void handleProjectOk()}
+        onCancel={() => {
+          setModalVisible(false);
+          setGuideFileList([]);
+        }}
         okText="确认"
         cancelText="取消"
         destroyOnHidden
@@ -586,154 +264,23 @@ export default function Home() {
 访谈背景：这次访谈属于哪类业务？例如肺癌相关业务、糖尿病相关业务、患者教育、院内用药流程等。`}
             />
           </Form.Item>
+          {!editingProject ? (
+            <Form.Item label="上传指南">
+              <Upload
+                beforeUpload={() => false}
+                maxCount={1}
+                fileList={guideFileList}
+                onChange={({ fileList }) => setGuideFileList(fileList)}
+                accept=".docx"
+              >
+                <Button icon={<UploadOutlined />}>选择 docx 指南</Button>
+              </Upload>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
+                指南为可选附件，当前先预留 docx 上传能力，后续可扩展 md 等格式。
+              </Typography.Text>
+            </Form.Item>
+          ) : null}
         </Form>
-      </Modal>
-      <QuestionnaireHotwordReviewModal
-        open={questionnaireHotwordReviewVisible}
-        interviewName={pendingQuestionnaireHotwordInterview?.interviewName}
-        candidates={pendingQuestionnaireHotwordInterview?.candidates ?? []}
-        loading={questionnaireHotwordReviewSaving}
-        onCancel={handleQuestionnaireHotwordReviewCancel}
-        onConfirm={handleQuestionnaireHotwordReviewConfirm}
-      />
-      <Modal
-        open={interviewModalVisible}
-        title="新建访谈"
-        onOk={handleInterviewOk}
-        onCancel={handleInterviewCancel}
-        okText="确定"
-        cancelText="取消"
-        confirmLoading={interviewSubmitting}
-        cancelButtonProps={{ disabled: interviewSubmitting }}
-        closable={!interviewSubmitting}
-        maskClosable={!interviewSubmitting}
-        width={1040}
-        destroyOnHidden
-      >
-        {currentProjectForInterview ? (
-          <Form form={interviewForm} layout="vertical">
-            <Row gutter={16}>
-              <Col span={12}>
-                <Form.Item label="所属项目">
-                  <Text>{currentProjectForInterview.name}</Text>
-                </Form.Item>
-                <Form.Item
-                  label="访谈名称"
-                  name="interview_name"
-                  rules={[{ required: true, message: "请输入访谈名称" }]}
-                >
-                  <Input placeholder="请输入访谈名称" />
-                </Form.Item>
-                <Form.Item label="访谈时间" name="interview_date">
-                  <DatePicker style={{ width: "100%" }} placeholder="请选择访谈时间" />
-                </Form.Item>
-                <Row gutter={12}>
-                  <Col span={12}>
-                    <Form.Item
-                      label="医院所在城市"
-                      name="hospital_city"
-                      rules={[{ required: true, message: "请输入医院所在城市" }]}
-                    >
-                      <Input placeholder="例如：北京" />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item
-                      label="医院 Decile"
-                      name="hospital_decile"
-                      rules={[{ required: true, message: "请输入医院 Decile" }]}
-                    >
-                      <Input type="number" min={0} max={10} placeholder="请输入医院 Decile" />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <Form.Item
-                  label="医生级别"
-                  name="doctor_level"
-                  rules={[{ required: true, message: "请输入医生级别" }]}
-                >
-                  <Input placeholder="例如：主任医师" />
-                </Form.Item>
-                <Form.Item
-                  label="访谈 key BQ"
-                  name="key_bq_text"
-                  rules={[{ required: true, message: "请输入访谈 key BQ" }]}
-                >
-                  <Input.TextArea
-                    rows={8}
-                    placeholder={`请每行输入一个 key BQ，例如：
-该访谈主要关注哪些伴随诊断靶点？
-国产和进口产品在当前市场中的竞争情况如何？
-未来市场布局和准入障碍有哪些？`}
-                  />
-                </Form.Item>
-              </Col>
-              <Col span={12}>
-                <Form.Item label="访谈级热词">
-                  <HotwordSelector
-                    title="访谈热词"
-                    description="选择本次访谈热词。当前包含原项目级与访谈级词包。"
-                    options={INTERVIEW_HOTWORD_OPTIONS}
-                    selectedKeys={selectedInterviewHotwordValues}
-                    onChange={setSelectedInterviewHotwordValues}
-                  />
-                </Form.Item>
-                <Form.Item label="录音文件上传">
-                  <div>
-                    <Upload
-                      beforeUpload={() => false}
-                      maxCount={1}
-                      fileList={fileList}
-                      onChange={({ fileList: newList }) => setFileList(newList)}
-                      accept=".wav,.mp3,.m4a"
-                    >
-                      <Button>选择文件</Button>
-                    </Upload>
-                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                      支持上传wav、mp3、m4a格式音频文件，单次仅支持上传一个文件，文件大小不超过1G。
-                    </Text>
-                  </div>
-                </Form.Item>
-                <Form.Item label="访谈问卷上传">
-                  <div>
-                    <Upload
-                      beforeUpload={() => false}
-                      maxCount={1}
-                      fileList={questionnaireFileList}
-                      onChange={({ fileList: newList }) => setQuestionnaireFileList(newList)}
-                      accept=".docx"
-                    >
-                      <Button>选择问卷</Button>
-                    </Upload>
-                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                      仅支持 docx 格式的问卷文件，上传后会作为该访谈的备份文件保存，并自动解析为 md 和 json。
-                    </Text>
-                  </div>
-                </Form.Item>
-              </Col>
-            </Row>
-          </Form>
-        ) : (
-          <Paragraph>请选择一个项目后再新建访谈。</Paragraph>
-        )}
-      </Modal>
-      <Modal
-        open={interviewSubmitting}
-        title="正在处理问卷"
-        footer={null}
-        closable={false}
-        maskClosable={false}
-        centered
-        width={520}
-        destroyOnHidden
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 4px" }}>
-          <Spin size="large" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <Text strong>正在上传音频并解析问卷热词</Text>
-            <Text type="secondary">请稍候，完成后会自动进入热词确认或转录流程。</Text>
-          </div>
-        </div>
       </Modal>
     </Layout>
   );

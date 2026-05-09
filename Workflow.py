@@ -458,10 +458,36 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         interview_term_hints = load_term_hints_from_state(interview_id=interview_id)
         correction_rules = load_correction_rules_from_state(interview_id=interview_id)
         core_problem = interview_row.get("core_problem")
-        questionnaire_term_hints = load_reviewed_questionnaire_hotwords(
-            int(project_id),
-            interview_id,
-        )
+
+        questionnaire_term_hints: List[str] = []
+        questionnaire_id = interview_row.get("questionnaire_id")
+        if questionnaire_id is not None:
+            questionnaire_row = DbAccess.get_questionnaire_by_id(int(questionnaire_id))
+            if questionnaire_row:
+                raw_hotwords = questionnaire_row.get("hotwords")
+                parsed_hotwords: List[str] = []
+                if isinstance(raw_hotwords, list):
+                    parsed_hotwords = [str(item).strip() for item in raw_hotwords if str(item).strip()]
+                elif isinstance(raw_hotwords, str):
+                    try:
+                        loaded_hotwords = json.loads(raw_hotwords)
+                    except Exception:
+                        loaded_hotwords = None
+                    if isinstance(loaded_hotwords, list):
+                        parsed_hotwords = [str(item).strip() for item in loaded_hotwords if str(item).strip()]
+                    elif isinstance(loaded_hotwords, dict) and isinstance(loaded_hotwords.get("hotwords"), list):
+                        parsed_hotwords = [
+                            str(item).strip()
+                            for item in loaded_hotwords.get("hotwords") or []
+                            if str(item).strip()
+                        ]
+                questionnaire_term_hints = parsed_hotwords
+
+        if not questionnaire_term_hints:
+            questionnaire_term_hints = load_reviewed_questionnaire_hotwords(
+                int(project_id),
+                interview_id,
+            )
         term_hints = merge_term_hints(interview_term_hints, questionnaire_term_hints)
         _workflow_log(
             interview_id,

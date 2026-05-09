@@ -20,6 +20,8 @@ if str(ROOT_DIR) not in sys.path:
 from api.interviews import router as interviews_router
 from api.auth import router as auth_router
 from api.projects import router as projects_router
+from api.project_questionnaires import router as project_questionnaires_router
+from api.project_key_bq import router as project_key_bq_router
 from api.project_interviews import router as project_interviews_router
 from api.question_intents import router as question_intents_router
 from middleware.cors import setup_cors
@@ -30,6 +32,8 @@ app = FastAPI()
 setup_cors(app)
 
 app.include_router(projects_router)
+app.include_router(project_questionnaires_router)
+app.include_router(project_key_bq_router)
 app.include_router(project_interviews_router)
 app.include_router(question_intents_router)
 app.include_router(interviews_router)

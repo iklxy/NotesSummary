@@ -559,8 +559,8 @@ def generate_minutes_outline_from_transcript(
         "}\n\n"
         f"【整篇访谈转录】\n{transcript_text}\n\n"
         "补充要求：\n"
-        "1. 章节数量控制在 3 到 8 个之间，避免过碎。\n"
-        "2. 每个章节下列出 2 到 6 个小点。\n"
+        "1. 章节数量不限，不要过少但是也不要过多。\n"
+        "2. 每个章节下列出小点不限，旨在对章节进行完整全面的概括。\n"
         "3. 章节和小点要概括整场访谈的核心主题，而不是机械按问卷逐题抄写。\n"
         "4. 如果某些问题明显属于同一主题，请合并到同一章节或小点，但不能丢失原文信息。\n"
         "5. 如果原文没有对应内容，不要虚构章节或待办。\n"
@@ -574,7 +574,7 @@ def generate_minutes_outline_from_transcript(
         retry_system_prompt = (
             system_prompt
             + "上一轮输出可能过长或不完整。请重新生成，必须输出完整 JSON，"
-            + "章节数量控制在 3 到 5 个，每章 2 到 4 个小点，summary 保持简短，"
+            + "summary在准确的情况下保持简短，"
             + "不要输出多余解释，不要输出 markdown，不要省略任何 JSON 字段。"
         )
         retry_user_prompt = (
@@ -583,7 +583,7 @@ def generate_minutes_outline_from_transcript(
             "要求：\n"
             "1. 只能输出合法 JSON。\n"
             "2. 必须包含 core_summary、sections、action_items、highlights。\n"
-            "3. 章节数量控制在 3 到 5 个之间，每章 2 到 4 个小点。\n"
+            "3. 章节数量不限，不要过少但是也不要过多。\n"
             "4. 每个章节和小点的 summary 要尽量精炼，避免长段落。\n"
             "5. 不要输出分析过程、不要输出说明文字、不要输出 markdown。\n\n"
             f"【整篇访谈转录】\n{transcript_text}\n"
@@ -887,7 +887,7 @@ def generate_kbq_dimensions(
     user_prompt = (
         f"{project_context_block}"
         f"{interview_context_block}"
-        "下面是一条 key BQ，请你抽取 2 到 4 个适合后续生成 notes 的分析维度。"
+        "下面是一条 key BQ，请你抽取 3 到 4 个适合后续生成 notes 的分析维度。"
         "维度应当是可操作的分析框架，而不是空泛标签。\n\n"
         f"【key BQ】\n{key_bq_text}\n\n"
         "请输出 JSON，结构参考如下：\n"
@@ -1108,7 +1108,7 @@ def generate_ca_dimensions(
         f"{notes_block}\n\n"
         "要求：\n"
         "1. 维度必须稳定、可跨访谈比较，不要依赖某一位医生的个体化表述。\n"
-        "2. 维度数量控制在 3 到 6 个，每个维度下设置 2 到 4 个小点。\n"
+        "2. 维度数量不限，每个维度下设置 2 到 4 个小点。\n"
         "3. 维度标题要短、明确、可直接作为表格行标题。\n"
         "4. 小点标题要具体，能体现比较维度。\n"
         "5. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
@@ -1144,7 +1144,7 @@ def generate_ca_dimensions(
             "请重新生成一版更精简的 CA 维度骨架。\n"
             "要求：\n"
             "1. 只能输出 JSON。\n"
-            "2. 维度数量 3 到 5 个。\n"
+            "2. 维度数量不限。\n"
             "3. 每个维度 2 到 3 个小点。\n"
             "4. 不要输出任何解释文字。\n\n"
             f"{notes_block}\n"

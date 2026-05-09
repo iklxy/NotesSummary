@@ -13,6 +13,9 @@ import {
   InterviewOverallNotesResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
+  OverallNotesKbqUpdateResponse,
+  OverallNotesMinutesUpdateResponse,
+  OverallNotesSummaryUpdateResponse,
   RefreshKbqNotesResponse,
   QuestionCreateItem,
   QuestionCreateResponse,
@@ -51,6 +54,46 @@ export function getInterviewOverallNotes(
   interviewId: number,
 ): Promise<InterviewOverallNotesResponse> {
   return request<InterviewOverallNotesResponse>(`/api/interviews/${interviewId}/overall-notes`);
+}
+
+export function updateInterviewOverallNotesSummary(
+  interviewId: number,
+  text: string,
+): Promise<OverallNotesSummaryUpdateResponse> {
+  return request<OverallNotesSummaryUpdateResponse>(
+    `/api/interviews/${interviewId}/overall-notes/summary`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+    },
+  );
+}
+
+export function updateInterviewOverallNotesKbq(
+  interviewId: number,
+  kbqId: number,
+  noteJson: unknown,
+): Promise<OverallNotesKbqUpdateResponse> {
+  return request<OverallNotesKbqUpdateResponse>(
+    `/api/interviews/${interviewId}/overall-notes/kbq/${kbqId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ note_json: noteJson }),
+    },
+  );
+}
+
+export function updateInterviewOverallNotesMinutes(
+  interviewId: number,
+  minutesJson: unknown,
+): Promise<OverallNotesMinutesUpdateResponse> {
+  return request<OverallNotesMinutesUpdateResponse>(
+    `/api/interviews/${interviewId}/overall-notes/minutes`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ minutes_json: minutesJson }),
+    },
+  );
 }
 
 export function refreshInterviewKbqNotes(
@@ -160,6 +203,7 @@ export interface ProjectInterviewDTO {
   doctor_level?: string | null;
   status?: number | null;
   file_name?: string | null;
+  questionnaire_object_type?: string | null;
 }
 
 export interface InterviewSummaryItem {

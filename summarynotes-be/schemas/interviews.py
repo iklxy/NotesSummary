@@ -453,3 +453,52 @@ class SummaryUpdateResponse(BaseModel):
     reindex_indexed: Optional[int] = None
     reindex_warning: Optional[str] = None
     corrections_inserted: Optional[int] = None
+
+
+class OverallNotesSummaryUpdateRequest(BaseModel):
+    """
+    更新全文 Notes 中 A 区块的请求体。
+    """
+    text: str
+
+
+class OverallNotesSummaryUpdateResponse(BaseModel):
+    """
+    更新全文 Notes 中 A 区块的返回结果。
+    """
+    success: bool
+    interview_id: int
+    note_content: Optional[str] = None
+
+
+class OverallNotesKbqUpdateRequest(BaseModel):
+    """
+    更新全文 Notes 中单条 KBQ Notes 的请求体。
+    """
+    note_json: Any
+
+
+class OverallNotesKbqUpdateResponse(BaseModel):
+    """
+    更新全文 Notes 中单条 KBQ Notes 的返回结果。
+    """
+    success: bool
+    interview_id: int
+    kbq_id: int
+    note_json: Any = None
+
+
+class OverallNotesMinutesUpdateRequest(BaseModel):
+    """
+    更新全文 Notes 中 C 区块的请求体。
+    """
+    minutes_json: Any
+
+
+class OverallNotesMinutesUpdateResponse(BaseModel):
+    """
+    更新全文 Notes 中 C 区块的返回结果。
+    """
+    success: bool
+    interview_id: int
+    minutes_json: Any = None

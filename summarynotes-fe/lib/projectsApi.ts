@@ -1,9 +1,10 @@
-import { request } from "./apiClient";
+import { getBaseUrl, request } from "./apiClient";
 import type {
   DeleteProjectResponse,
   GenerateProjectCaTableRequest,
   GenerateProjectCaTableResponse,
   Project,
+  ProjectDetail,
   ProjectCaTableResponse,
 } from "./types";
 
@@ -11,17 +12,45 @@ interface CreateProjectPayload {
   name: string;
   keywords?: string;
   core_problem?: string;
+  guide_file?: File | null;
 }
 
-export function createProject(payload: CreateProjectPayload): Promise<Project> {
-  return request<Project>("/api/projects", {
+export async function createProject(payload: CreateProjectPayload): Promise<Project> {
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  if (payload.keywords) {
+    formData.append("keywords", payload.keywords);
+  }
+  if (payload.core_problem) {
+    formData.append("core_problem", payload.core_problem);
+  }
+  if (payload.guide_file) {
+    formData.append("guide_file", payload.guide_file);
+  }
+  const baseUrl = getBaseUrl().replace(/\/$/, "");
+  const resp = await fetch(`${baseUrl}/api/projects`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: formData,
+    credentials: "include",
   });
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`create project failed: ${JSON.stringify(detail)}`);
+  }
+  return (await resp.json()) as Project;
 }
 
 export function getProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
+}
+
+export function getProjectDetail(projectId: number): Promise<ProjectDetail> {
+  return request<ProjectDetail>(`/api/projects/${projectId}`);
 }
 
 export function deleteProject(projectId: number): Promise<DeleteProjectResponse> {

@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Button, Card, Layout, message, Space, Spin, Typography } from "antd";
-import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Layout, message, Space, Spin, Tag, Typography } from "antd";
+import { ArrowLeftOutlined, DownloadOutlined, EditOutlined, ReloadOutlined } from "@ant-design/icons";
 import MarkdownContent from "../../../../components/MarkdownContent";
 import {
   exportInterviewOverallNotesWord,
@@ -14,7 +14,7 @@ import {
 import type { InterviewOverallNotesResponse } from "../../../../lib/types";
 
 const { Header, Content } = Layout;
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 interface Props {
   interviewId: number;
@@ -48,33 +48,6 @@ function getNoteSummary(noteJson: unknown): string {
   }
   const value = noteObj.summary;
   return typeof value === "string" ? value : "";
-}
-
-function getMinutesHighlights(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => item.length > 0);
-}
-
-function getMinutesActionItems(
-  value: unknown,
-): Array<{ owner: string; time: string; content: string }> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((item): item is Record<string, unknown> => {
-      return item !== null && typeof item === "object" && !Array.isArray(item);
-    })
-    .map((item) => ({
-      owner: typeof item.owner === "string" ? item.owner : "",
-      time: typeof item.time === "string" ? item.time : "",
-      content: typeof item.content === "string" ? item.content : "",
-    }))
-    .filter((item) => item.owner.length > 0 || item.time.length > 0 || item.content.length > 0);
 }
 
 function stripMinutesHighlightsSection(text: string): string {
@@ -186,49 +159,70 @@ export default function OverallNotesClient({ interviewId }: Props) {
   const minutesSections = useMemo(() => data?.minutes?.sections ?? [], [data]);
 
   return (
-    <Layout className="min-h-screen bg-slate-50">
-      <Header className="flex items-center justify-between bg-slate-900 px-6 shadow">
-        <Space>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => router.push(`/interviews/${interviewId}`)}
-          >
-            返回访谈
-          </Button>
-          <Title level={3} className="mb-0" style={{ color: "#fff" }}>
-            整体 Notes #{interviewId > 0 ? interviewId : "无效"}
-          </Title>
-        </Space>
-        <Space>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => setReloadToken((v) => v + 1)}
-            loading={loading}
-          >
-            刷新页面
-          </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExportOverallNotesWord} loading={exporting}>
-            导出全文 Notes
-          </Button>
-          <Button onClick={handleRefreshMinutes} loading={minutesRefreshing}>
-            刷新智能纪要
-          </Button>
-          <Button onClick={handleRefreshKbqNotes} loading={kbqRefreshing} type="primary">
-            刷新 KBQ Notes
-          </Button>
-        </Space>
+    <Layout className="min-h-screen summarynotes-notes-page">
+      <Header className="summarynotes-hero">
+        <div className="summarynotes-hero-layout">
+          <div className="summarynotes-hero-badge">SUMMARYNOTES</div>
+          <div className="summarynotes-hero-inner">
+            <div className="summarynotes-hero-copy">
+              <Button
+                icon={<ArrowLeftOutlined />}
+                onClick={() => router.push(`/interviews/${interviewId}`)}
+                ghost
+                className="summarynotes-hero-back"
+              >
+                返回访谈
+              </Button>
+              <Title level={2} className="summarynotes-hero-title">
+                全文 Notes #{interviewId > 0 ? interviewId : "无效"}
+              </Title>
+              <Paragraph className="summarynotes-hero-description">
+                这里展示 A / B / C 三段全文 Notes，可直接跳转到编辑页进行修改。
+              </Paragraph>
+              <div className="summarynotes-hero-tags">
+                <Tag color="cyan">A 访谈总览</Tag>
+                <Tag color="geekblue">B KBQ Notes</Tag>
+                <Tag color="green">C 智能纪要</Tag>
+              </div>
+            </div>
+            <Space wrap className="summarynotes-hero-actions">
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={() => setReloadToken((v) => v + 1)}
+                loading={loading}
+              >
+                刷新页面
+              </Button>
+              <Button
+                icon={<EditOutlined />}
+                onClick={() => router.push(`/interviews/${interviewId}/overall-notes/edit`)}
+              >
+                编辑全文 Notes
+              </Button>
+              <Button icon={<DownloadOutlined />} onClick={handleExportOverallNotesWord} loading={exporting}>
+                导出全文 Notes
+              </Button>
+              <Button onClick={handleRefreshMinutes} loading={minutesRefreshing}>
+                刷新智能纪要
+              </Button>
+              <Button onClick={handleRefreshKbqNotes} loading={kbqRefreshing} type="primary">
+                刷新 KBQ Notes
+              </Button>
+            </Space>
+          </div>
+        </div>
       </Header>
-      <Content>
-        <div style={{ maxWidth: 1680, margin: "0 auto", padding: "24px" }}>
+      <Content className="summarynotes-notes-content">
+        <div className="summarynotes-notes-frame">
           {loading ? (
-            <div className="flex items-center justify-center py-16">
+            <div className="summarynotes-loading-shell">
               <Spin />
             </div>
           ) : error ? (
             <Alert type="error" message={error} />
           ) : (
             <Space direction="vertical" size="large" style={{ width: "100%" }}>
-              <Card style={{ borderRadius: 20 }} title="A. 访谈总览 Summary Notes">
+              <Card className="summarynotes-notes-section-card" title="A. 访谈总览 Summary Notes">
                 {data?.note_content ? (
                   <MarkdownContent content={data.note_content} />
                 ) : (
@@ -236,7 +230,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }} title="B. KBQ Notes">
+              <Card className="summarynotes-notes-section-card" title="B. KBQ Notes">
                 {data?.kbq_notes?.items?.length ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                     {data.kbq_notes.items.map((item) => {
@@ -288,7 +282,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }} title="C. 智能纪要">
+              <Card className="summarynotes-notes-section-card" title="C. 智能纪要">
                 <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                   {minutesText ? (
                     <MarkdownContent content={minutesText} />

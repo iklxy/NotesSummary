@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, Input, Modal, Space, Typography } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import type { QuestionnaireHotwordCandidate } from "../lib/types";
@@ -9,18 +9,26 @@ const { Text, Paragraph } = Typography;
 
 interface Props {
   open: boolean;
+  title?: string;
+  description?: string;
   interviewName?: string;
   candidates: QuestionnaireHotwordCandidate[];
   loading?: boolean;
+  confirmText?: string;
+  cancelText?: string;
   onCancel: () => void;
   onConfirm: (hotwords: string[]) => Promise<void> | void;
 }
 
 export default function QuestionnaireHotwordReviewModal({
   open,
+  title,
+  description,
   interviewName,
   candidates,
   loading,
+  confirmText,
+  cancelText,
   onCancel,
   onConfirm,
 }: Props) {
@@ -29,14 +37,53 @@ export default function QuestionnaireHotwordReviewModal({
       (item) => (item.normalized_term || item.term || "").trim(),
     );
   }, [candidates]);
-  const [items, setItems] = useState<string[]>(initialItems);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setItems(initialItems);
-  }, [open, initialItems]);
+  return (
+    <HotwordReviewEditor
+      key={`${open ? "open" : "closed"}-${initialItems.join("|")}`}
+      open={open}
+      title={title}
+      description={description}
+      interviewName={interviewName}
+      candidates={candidates}
+      initialItems={initialItems}
+      loading={loading}
+      confirmText={confirmText}
+      cancelText={cancelText}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+interface EditorProps {
+  open: boolean;
+  title?: string;
+  description?: string;
+  interviewName?: string;
+  candidates: QuestionnaireHotwordCandidate[];
+  initialItems: string[];
+  loading?: boolean;
+  confirmText?: string;
+  cancelText?: string;
+  onCancel: () => void;
+  onConfirm: (hotwords: string[]) => Promise<void> | void;
+}
+
+function HotwordReviewEditor({
+  open,
+  title,
+  description,
+  interviewName,
+  candidates,
+  initialItems,
+  loading,
+  confirmText,
+  cancelText,
+  onCancel,
+  onConfirm,
+}: EditorProps) {
+  const [items, setItems] = useState<string[]>(initialItems);
 
   const updateItem = (index: number, value: string) => {
     setItems((prev) => prev.map((item, idx) => (idx === index ? value : item)));
@@ -64,20 +111,21 @@ export default function QuestionnaireHotwordReviewModal({
   return (
     <Modal
       open={open}
-      title={`问卷热词确认${interviewName ? ` - ${interviewName}` : ""}`}
+      title={title || `问卷热词确认${interviewName ? ` - ${interviewName}` : ""}`}
       width={960}
       onCancel={onCancel}
       onOk={() => {
         void submit();
       }}
-      okText="确认并启动"
-      cancelText="稍后处理"
+      okText={confirmText || "确认并启动"}
+      cancelText={cancelText || "稍后处理"}
       confirmLoading={loading}
       destroyOnHidden
     >
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
         <Paragraph style={{ marginBottom: 0 }}>
-          系统已从问卷中抽取候选热词。你可以直接修改、删除或追加条目；确认后将保存为访谈级热词，并启动 ASR。
+          {description ||
+            "系统已从问卷中抽取候选热词。你可以直接修改、删除或追加条目；确认后将保存并继续后续处理。"}
         </Paragraph>
         <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflow: "auto" }}>
           {items.map((item, index) => {
