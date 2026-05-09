@@ -537,8 +537,14 @@ def run_kbq_notes_generation_for_interview(
     返回:
         KBQ Notes 生成与写库的聚合结果。
     """
+    log_interview(
+        "KBQ",
+        interview_id,
+        f"run_kbq_notes start top_k={top_k} project_context_present={bool(project_context)} interview_context_present={bool(interview_context)}",
+    )
     interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
+        log_interview("KBQ", interview_id, "run_kbq_notes failed: interview not found")
         return {
             "success": False,
             "stage": "fetch_interview",
@@ -548,6 +554,7 @@ def run_kbq_notes_generation_for_interview(
     project_id = int(interview.get("parse_project_id") or 0)
     kbq_result = fetch_kbq_items_step(interview_id)
     if not kbq_result.get("success"):
+        log_interview("KBQ", interview_id, f"run_kbq_notes failed stage=fetch_kbq detail={kbq_result}")
         return {
             "success": False,
             "stage": "fetch_kbq",
@@ -568,9 +575,15 @@ def run_kbq_notes_generation_for_interview(
         interview_context=interview_context,
     )
     if not notes_result.get("success"):
+        log_interview("KBQ", interview_id, f"run_kbq_notes failed stage=generate_kbq detail={notes_result}")
         return notes_result
 
     write_result = write_kbq_notes_results_step(notes_result)
+    log_interview(
+        "KBQ",
+        interview_id,
+        f"run_kbq_notes done generated={len(notes_result.get('results') or [])} inserted={write_result.get('inserted', 0)}",
+    )
     return {
         "success": True,
         "project_id": project_id,

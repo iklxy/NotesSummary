@@ -38,8 +38,10 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
     如果 bh_project_interview 已存在 file_path，则直接用它作为 object_key 并生成预签名 URL。
     """
     try:
+        _workflow_log(interview_id, "upload", "start")
         row = DbAccess.get_interview_by_id(interview_id)
         if not row:
+            _workflow_log(interview_id, "upload", f"failed interview={interview_id} not found")
             return {"success": False, "message": f"interview {interview_id} not found"}
 
         project_id = row.get("parse_project_id")
@@ -51,6 +53,7 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
             object_key = build_object_key(project_id, interview_id, file_name)
             upload_result = upload_local_file(local_path, object_key)
             if not upload_result.get("success"):
+                _workflow_log(interview_id, "upload", f"failed upload_result={upload_result}")
                 return {"success": False, "message": "upload failed", "detail": upload_result}
             audio_url = upload_result["data"]["audio_url"]
             try:
@@ -62,7 +65,9 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
                     audio_url=audio_url,
                 )
             except Exception as e:
+                _workflow_log(interview_id, "upload", f"failed update after upload error={e}")
                 return {"success": False, "message": f"update after upload failed: {e}"}
+            _workflow_log(interview_id, "upload", f"done object_key={object_key}")
             return {"success": True, "object_key": object_key, "audio_url": audio_url}
         else:
             client = get_tos_client()
@@ -73,8 +78,10 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
                 expires=config.TOS_URL_EXPIRE_SECONDS,
             )
             audio_url = pre.signed_url
+            _workflow_log(interview_id, "upload", f"done existing_object_key={object_key}")
             return {"success": True, "object_key": object_key, "audio_url": audio_url}
     except Exception as e:
+        _workflow_log(interview_id, "upload", f"failed error={e} traceback={traceback.format_exc()}")
         return {"success": False, "message": f"upload step unexpected error: {e}"}
 
 
@@ -108,8 +115,10 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
     将 ASR 结果组装为 file_content JSON 并写入 bh_project_interview.file_content。
     """
     try:
+        _workflow_log(interview_id, "store_file_content", "start")
         row = DbAccess.get_interview_by_id(interview_id)
         if not row:
+            _workflow_log(interview_id, "store_file_content", f"failed interview={interview_id} not found")
             return {"success": False, "message": f"interview {interview_id} not found"}
         project_id = row.get("parse_project_id")
         file_name = row.get("file_name") or f"{interview_id}.wav"
@@ -146,7 +155,9 @@ def step_store_file_content(interview_id: int, object_key: str, audio_url: str, 
         }
         DbAccess.update_interview_file_content(interview_id, json.dumps(payload, ensure_ascii=False))
     except Exception as e:
+        _workflow_log(interview_id, "store_file_content", f"failed error={e} traceback={traceback.format_exc()}")
         return {"success": False, "message": f"write file_content failed: {e}"}
+    _workflow_log(interview_id, "store_file_content", "done")
     return {"success": True, "file_content": payload}
 
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from DbAccess import DbAccess
-from InterviewLogger import log_interview
+from InterviewLogger import log_interview, log_project
 from Model import ModelClient
 from ModelCA import generate_ca_cells_for_sub_point, generate_ca_dimensions
 from NotesMarkdownBuilder import build_interview_full_notes_markdown, build_project_full_notes_markdowns
@@ -45,7 +45,7 @@ def log(message: str, project_id: int | None = None) -> None:
         message: 日志内容。
         project_id: 可选项目 ID。
     """
-    log_interview("CA", project_id, message, subject_label="project_id")
+    log_project("CA", project_id, message)
 
 
 def _get_data_root() -> Path:
@@ -493,6 +493,10 @@ def generate_ca_table_for_project(
             "project_id": project_id,
         }
 
+    log(
+        f"CA 表生成完成 interview_count={len(usable_interviews)} dimension_count={len(dimensions)}",
+        project_id=project_id,
+    )
     return {
         "success": True,
         "project_id": project_id,

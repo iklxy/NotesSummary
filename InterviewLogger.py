@@ -2,10 +2,10 @@
 @Date: 2026-05-08
 @Author: lixinyang
 
-访谈级日志记录工具。
+访谈/项目级日志记录工具。
 
-用于将引擎、工作流、清洗、Notes、KBQ、Minutes 等阶段日志按访谈 ID
-拆分落盘，方便单访谈排查与回放。
+用于将引擎、工作流、清洗、Notes、KBQ、Minutes 等阶段日志按访谈 ID 或
+项目 ID 拆分落盘，方便单访谈或单项目排查与回放。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Optional
 ROOT_DIR = Path(__file__).resolve().parent
 LOG_ROOT = ROOT_DIR / "runtime" / "logs"
 INTERVIEW_LOG_DIR = LOG_ROOT / "interviews"
+PROJECT_LOG_DIR = LOG_ROOT / "projects"
 SYSTEM_LOG_PATH = LOG_ROOT / "system.log"
 _LOG_LOCK = Lock()
 
@@ -31,6 +32,7 @@ def _ensure_log_dir() -> None:
         无。
     """
     INTERVIEW_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    PROJECT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -100,3 +102,24 @@ def log_interview(
         _write_line(SYSTEM_LOG_PATH, line)
     else:
         _write_line(INTERVIEW_LOG_DIR / f"interview_{interview_id}.log", line)
+
+
+def log_project(component: str, project_id: Optional[int], message: str) -> None:
+    """
+    输出项目级日志，同时写入对应项目的独立日志文件。
+
+    参数:
+        component: 日志来源组件名。
+        project_id: 项目 ID；若为空则只输出到系统日志。
+        message: 日志内容。
+
+    返回:
+        无。
+    """
+    _ensure_log_dir()
+    line = _build_log_line(component, project_id, message, subject_label="project_id")
+    print(line, flush=True)
+    if project_id is None:
+        _write_line(SYSTEM_LOG_PATH, line)
+    else:
+        _write_line(PROJECT_LOG_DIR / f"project_{project_id}.log", line)

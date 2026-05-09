@@ -605,8 +605,10 @@ def generate_minutes_for_interview(
     返回:
         智能纪要生成与写库的聚合结果。
     """
+    log(interview_id=interview_id, message=f"run_minutes start top_k={top_k} project_context_present={bool(project_context)} interview_context_present={bool(interview_context)}")
     interview = DbAccess.get_interview_by_id(interview_id)
     if not interview:
+        log(interview_id=interview_id, message="run_minutes failed: interview not found")
         return {
             "success": False,
             "stage": "fetch_interview",
@@ -615,6 +617,7 @@ def generate_minutes_for_interview(
 
     project_id = int(interview.get("parse_project_id") or 0)
     if project_id <= 0:
+        log(interview_id=interview_id, message="run_minutes failed: project id missing from interview")
         return {
             "success": False,
             "stage": "fetch_project",
@@ -628,6 +631,7 @@ def generate_minutes_for_interview(
 
     backup_dir = _get_interview_backup_dir(project_id, interview_id)
     if not backup_dir.exists():
+        log(interview_id=interview_id, message=f"run_minutes failed: backup directory not found: {backup_dir}")
         return {
             "success": False,
             "stage": "resolve_questionnaire",
@@ -639,6 +643,7 @@ def generate_minutes_for_interview(
     try:
         summary_rows = DbAccess.fetch_interview_summary(interview_id)
         if not summary_rows:
+            log(interview_id=interview_id, message="run_minutes failed: no cleaned summary rows found")
             return {
                 "success": False,
                 "stage": "fetch_summary",
@@ -650,6 +655,7 @@ def generate_minutes_for_interview(
         summary_segments = _build_summary_segments(summary_rows)
         full_text = _build_summary_full_text(summary_segments)
         if not full_text.strip():
+            log(interview_id=interview_id, message="run_minutes failed: cleaned summary text is empty")
             return {
                 "success": False,
                 "stage": "build_summary_text",
@@ -681,6 +687,7 @@ def generate_minutes_for_interview(
         )
         outline_sections = _normalize_outline_sections(outline_payload.get("sections") or outline_payload.get("outline"))
         if not outline_sections:
+            log(interview_id=interview_id, message="run_minutes failed: no outline sections generated")
             return {
                 "success": False,
                 "stage": "generate_outline",
@@ -735,6 +742,17 @@ def generate_minutes_for_interview(
             error_message=None,
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
+        log(
+            interview_id=interview_id,
+            message=(
+                "run_minutes done "
+                f"outline_generated={len(outline_sections)} "
+                f"generated={generated_count} "
+                f"inserted={written} "
+                f"minutes_json_path={minutes_json_path} "
+                f"minutes_txt_path={minutes_txt_path}"
+            ),
+        )
 
         return {
             "success": True,
@@ -751,6 +769,7 @@ def generate_minutes_for_interview(
         }
     except Exception as exc:
         error_message = f"generate minutes failed: {exc}"
+        log(interview_id=interview_id, message=f"run_minutes failed error={exc}\n{traceback.format_exc()}")
         try:
             DbAccess.upsert_interview_minutes(
                 project_id=project_id,

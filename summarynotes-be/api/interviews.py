@@ -55,6 +55,7 @@ from schemas.interviews import (
 )
 from storage import delete_remote_object
 from docx_export import build_overall_notes_docx_bytes, build_transcript_docx_bytes, DOCX_MIME_TYPE
+from InterviewLogger import log_interview
 
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -1433,53 +1434,59 @@ def export_interview_overall_notes_word(
     B. KBQ Notes
     C. 智能纪要
     """
-    payload = _resolve_overall_notes_payload(interview_id, current_user_id)
-    interview = payload.pop("interview", None) or _get_owned_interview_or_404(interview_id, current_user_id)
-    project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
+    log_interview("NOTES", interview_id, "overall-notes export-word start")
+    try:
+        payload = _resolve_overall_notes_payload(interview_id, current_user_id)
+        interview = payload.pop("interview", None) or _get_owned_interview_or_404(interview_id, current_user_id)
+        project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
 
-    note_content = str(payload.get("note_content") or "")
-    kbq_items = []
-    kbq_payload = payload.get("kbq_notes") or {}
-    if isinstance(kbq_payload, dict):
-        raw_items = kbq_payload.get("items") or []
-        if isinstance(raw_items, list):
-            kbq_items = [item for item in raw_items if isinstance(item, dict)]
-    minutes_payload = payload.get("minutes") or {}
-    minutes_text = ""
-    if isinstance(minutes_payload, dict):
-        minutes_text = str(minutes_payload.get("minutes_text") or "")
-        if minutes_text:
-            minutes_text = re.sub(
-                r"(?ms)^\s*##\s*关键高亮\s*$.*?(?=^\s*##\s+|\Z)",
-                "",
-                minutes_text,
-            ).strip()
+        note_content = str(payload.get("note_content") or "")
+        kbq_items = []
+        kbq_payload = payload.get("kbq_notes") or {}
+        if isinstance(kbq_payload, dict):
+            raw_items = kbq_payload.get("items") or []
+            if isinstance(raw_items, list):
+                kbq_items = [item for item in raw_items if isinstance(item, dict)]
+        minutes_payload = payload.get("minutes") or {}
+        minutes_text = ""
+        if isinstance(minutes_payload, dict):
+            minutes_text = str(minutes_payload.get("minutes_text") or "")
+            if minutes_text:
+                minutes_text = re.sub(
+                    r"(?ms)^\s*##\s*关键高亮\s*$.*?(?=^\s*##\s+|\Z)",
+                    "",
+                    minutes_text,
+                ).strip()
 
-    project_name = project_row.get("name") if project_row else None
-    interview_name = interview.get("name")
-    interview_date = interview.get("interview_date")
-    subtitle_lines = [
-        f"项目：{project_name or interview.get('parse_project_id')}",
-        f"访谈：{interview_name or interview_id}",
-        f"访谈日期：{interview_date or '未填写'}",
-        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    ]
-    docx_bytes = build_overall_notes_docx_bytes(
-        title=f"全文 Notes - {interview_name or interview_id}",
-        subtitle_lines=subtitle_lines,
-        note_content=note_content,
-        kbq_items=kbq_items,
-        minutes_text=minutes_text,
-    )
-    filename = _build_overall_notes_export_filename(interview_name, interview_id)
-    headers = {
-        "Content-Disposition": _build_download_content_disposition(filename),
-    }
-    return Response(
-        content=docx_bytes,
-        media_type=DOCX_MIME_TYPE,
-        headers=headers,
-    )
+        project_name = project_row.get("name") if project_row else None
+        interview_name = interview.get("name")
+        interview_date = interview.get("interview_date")
+        subtitle_lines = [
+            f"项目：{project_name or interview.get('parse_project_id')}",
+            f"访谈：{interview_name or interview_id}",
+            f"访谈日期：{interview_date or '未填写'}",
+            f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+        docx_bytes = build_overall_notes_docx_bytes(
+            title=f"全文 Notes - {interview_name or interview_id}",
+            subtitle_lines=subtitle_lines,
+            note_content=note_content,
+            kbq_items=kbq_items,
+            minutes_text=minutes_text,
+        )
+        filename = _build_overall_notes_export_filename(interview_name, interview_id)
+        headers = {
+            "Content-Disposition": _build_download_content_disposition(filename),
+        }
+        log_interview("NOTES", interview_id, f"overall-notes export-word done filename={filename}")
+        return Response(
+            content=docx_bytes,
+            media_type=DOCX_MIME_TYPE,
+            headers=headers,
+        )
+    except Exception as e:
+        log_interview("NOTES", interview_id, f"overall-notes export-word failed error={e}\n{traceback.format_exc()}")
+        raise
 
 
 @router.post(
@@ -1496,12 +1503,14 @@ def refresh_interview_kbq_notes(
     返回:
         内部引擎服务返回的刷新结果。
     """
+    log_interview("KBQ", interview_id, "refresh kbq notes start")
     _get_owned_interview_or_404(interview_id, current_user_id)
 
     url = f"{_get_internal_base()}/internal/interviews/{interview_id}/refresh-kbq-notes"
     try:
         resp = requests.post(url, timeout=600)
     except Exception as e:
+        log_interview("KBQ", interview_id, f"refresh kbq notes request failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"refresh kbq notes request failed: {e}")
 
     if resp.status_code >= 400:
@@ -1512,8 +1521,14 @@ def refresh_interview_kbq_notes(
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
     try:
-        return resp.json()
+        result = resp.json()
+        if isinstance(result, dict) and result.get("success"):
+            log_interview("KBQ", interview_id, f"refresh kbq notes done inserted={result.get('inserted')}")
+        else:
+            log_interview("KBQ", interview_id, f"refresh kbq notes failed detail={result}")
+        return result
     except Exception as e:
+        log_interview("KBQ", interview_id, f"parse refresh kbq notes response failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"parse refresh kbq notes response failed: {e}")
 
 
@@ -1531,12 +1546,14 @@ def refresh_interview_minutes(
     返回:
         内部引擎服务返回的智能纪要生成结果。
     """
+    log_interview("MINUTES", interview_id, "refresh minutes start")
     _get_owned_interview_or_404(interview_id, current_user_id)
 
     url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-minutes"
     try:
         resp = requests.post(url, timeout=3600)
     except Exception as e:
+        log_interview("MINUTES", interview_id, f"refresh minutes request failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"refresh minutes request failed: {e}")
 
     if resp.status_code >= 400:
@@ -1547,8 +1564,14 @@ def refresh_interview_minutes(
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
     try:
-        return resp.json()
+        result = resp.json()
+        if isinstance(result, dict) and result.get("success"):
+            log_interview("MINUTES", interview_id, f"refresh minutes done inserted={result.get('inserted')}")
+        else:
+            log_interview("MINUTES", interview_id, f"refresh minutes failed detail={result}")
+        return result
     except Exception as e:
+        log_interview("MINUTES", interview_id, f"parse refresh minutes response failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"parse refresh minutes response failed: {e}")
 
 
@@ -1783,45 +1806,51 @@ def export_interview_trans_word(
 
     导出的内容和全文 trans 页面保持一致，直接基于 summary 明细组装。
     """
-    interview = _get_owned_interview_or_404(interview_id, current_user_id)
-    project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
-    summary_rows = fetch_interview_summary(project_interview_id=interview_id)
+    log_interview("TRANSCRIBE", interview_id, "trans export-word start")
+    try:
+        interview = _get_owned_interview_or_404(interview_id, current_user_id)
+        project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
+        summary_rows = fetch_interview_summary(project_interview_id=interview_id)
 
-    transcript_items: List[Dict[str, Any]] = []
-    for row in summary_rows:
-        transcript_items.append(
-            {
-                "speaker": row.get("speaker"),
-                "timestamp": row.get("timestamp"),
-                "text": row.get("text"),
-            }
+        transcript_items: List[Dict[str, Any]] = []
+        for row in summary_rows:
+            transcript_items.append(
+                {
+                    "speaker": row.get("speaker"),
+                    "timestamp": row.get("timestamp"),
+                    "text": row.get("text"),
+                }
+            )
+
+        project_name = None
+        if project_row:
+            project_name = project_row.get("name")
+        interview_name = interview.get("name")
+        interview_date = interview.get("interview_date")
+        subtitle_lines = [
+            f"项目：{project_name or interview.get('parse_project_id')}",
+            f"访谈：{interview_name or interview_id}",
+            f"访谈日期：{interview_date or '未填写'}",
+            f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+        docx_bytes = build_transcript_docx_bytes(
+            title=f"全文 trans - {interview_name or interview_id}",
+            subtitle_lines=subtitle_lines,
+            transcript_items=transcript_items,
         )
-
-    project_name = None
-    if project_row:
-        project_name = project_row.get("name")
-    interview_name = interview.get("name")
-    interview_date = interview.get("interview_date")
-    subtitle_lines = [
-        f"项目：{project_name or interview.get('parse_project_id')}",
-        f"访谈：{interview_name or interview_id}",
-        f"访谈日期：{interview_date or '未填写'}",
-        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    ]
-    docx_bytes = build_transcript_docx_bytes(
-        title=f"全文 trans - {interview_name or interview_id}",
-        subtitle_lines=subtitle_lines,
-        transcript_items=transcript_items,
-    )
-    filename = _build_transcript_export_filename(interview_name, interview_id)
-    fallback_filename = f"interview_{interview_id}_trans.docx"
-    headers = {
-        "Content-Disposition": (
-            f"attachment; filename=\"{fallback_filename}\"; "
-            f"filename*=UTF-8''{quote(filename)}"
-        ),
-    }
-    return Response(content=docx_bytes, media_type=DOCX_MIME_TYPE, headers=headers)
+        filename = _build_transcript_export_filename(interview_name, interview_id)
+        fallback_filename = f"interview_{interview_id}_trans.docx"
+        headers = {
+            "Content-Disposition": (
+                f"attachment; filename=\"{fallback_filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+        }
+        log_interview("TRANSCRIBE", interview_id, f"trans export-word done filename={filename}")
+        return Response(content=docx_bytes, media_type=DOCX_MIME_TYPE, headers=headers)
+    except Exception as e:
+        log_interview("TRANSCRIBE", interview_id, f"trans export-word failed error={e}\n{traceback.format_exc()}")
+        raise
 
 
 def _reindex_summary_chunks(interview_id: int) -> tuple[bool, int | None, str | None]:

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, FastAPI, HTTPException
 
 from DbAccess import DbAccess
-from InterviewLogger import log_interview
+from InterviewLogger import log_interview, log_project
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from CAWorkflow import generate_ca_table_for_project
 from MinutesWorkflow import generate_minutes_for_interview
@@ -291,13 +291,33 @@ def api_generate_notes(
     异常:
         HTTPException: 当 Notes 工作流执行失败时抛出 500。
     """
+    log_interview(
+        "NOTES",
+        interview_id,
+        f"internal generate-notes start question_id={question_id} source_kind={source_kind}",
+    )
     try:
-        return run_notes_generation_for_interview(
+        result = run_notes_generation_for_interview(
             interview_id,
             question_id=question_id,
             source_kind=source_kind,
         )
+        if isinstance(result, dict):
+            if result.get("success"):
+                log_interview(
+                    "NOTES",
+                    interview_id,
+                    f"internal generate-notes done generated={result.get('generated')} inserted={result.get('inserted')} warnings={result.get('warnings')}",
+                )
+            else:
+                log_interview(
+                    "NOTES",
+                    interview_id,
+                    f"internal generate-notes failed stage={result.get('stage')} detail={result.get('detail')}",
+                )
+        return result
     except Exception as e:
+        log_interview("NOTES", interview_id, f"internal generate-notes exception error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"generate notes failed: {e}")
 
 
@@ -315,6 +335,7 @@ def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
     异常:
         HTTPException: 当纪要工作流执行失败时抛出 500。
     """
+    log_interview("MINUTES", interview_id, "internal generate-minutes start")
     try:
         interview = _load_interview_or_404(interview_id)
         project_id = int(interview.get("parse_project_id") or 0)
@@ -326,11 +347,26 @@ def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
                 project_context = load_project_context_by_id(project_id)
             except Exception:
                 project_context = None
-        return generate_minutes_for_interview(
+        result = generate_minutes_for_interview(
             interview_id,
             project_context=project_context,
         )
+        if isinstance(result, dict):
+            if result.get("success"):
+                log_interview(
+                    "MINUTES",
+                    interview_id,
+                    f"internal generate-minutes done outline_generated={result.get('outline_generated')} generated={result.get('generated')} inserted={result.get('inserted')}",
+                )
+            else:
+                log_interview(
+                    "MINUTES",
+                    interview_id,
+                    f"internal generate-minutes failed stage={result.get('stage')} detail={result.get('detail')}",
+                )
+        return result
     except Exception as e:
+        log_interview("MINUTES", interview_id, f"internal generate-minutes exception error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"generate minutes failed: {e}")
 
 
@@ -349,7 +385,7 @@ def api_generate_ca_table(
     body = payload or {}
     interview_ids = body.get("interview_ids") or []
     column_meta_fields = body.get("column_meta_fields") or []
-    log_interview(
+    log_project(
         "CA",
         project_id,
         "开始生成 CA 表 "
@@ -364,7 +400,7 @@ def api_generate_ca_table(
         )
         if isinstance(result, dict):
             if result.get("success"):
-                log_interview(
+                log_project(
                     "CA",
                     project_id,
                     "CA 表生成完成 "
@@ -373,7 +409,7 @@ def api_generate_ca_table(
                     f"skipped_interview_ids={result.get('skipped_interview_ids')}",
                 )
             else:
-                log_interview(
+                log_project(
                     "CA",
                     project_id,
                     "CA 表生成返回失败 "
@@ -382,7 +418,7 @@ def api_generate_ca_table(
                 )
         return result
     except Exception as e:
-        log_interview(
+        log_project(
             "CA",
             project_id,
             "CA 表生成异常 "
@@ -402,6 +438,7 @@ def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
     返回:
         KBQ 刷新结果，包含回填条数、生成条数以及 warnings。
     """
+    log_interview("KBQ", interview_id, "internal refresh-kbq-notes start")
     interview = _load_interview_or_404(interview_id)
     project_id = int(interview.get("parse_project_id") or 0)
     key_bq_items = _extract_key_bq_items(interview.get("core_problem"))
@@ -415,17 +452,31 @@ def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
             key_bq_items=key_bq_items,
         )
     except Exception as e:
+        log_interview("KBQ", interview_id, f"internal refresh-kbq-notes replace_key_bq failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"refresh key bq failed: {e}")
 
     try:
         kbq_result = run_kbq_notes_generation_for_interview(interview_id)
     except Exception as e:
+        log_interview("KBQ", interview_id, f"internal refresh-kbq-notes generate failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"refresh kbq notes failed: {e}")
 
     if not isinstance(kbq_result, dict):
         kbq_result = {"success": False, "message": "invalid kbq result"}
     kbq_result["key_bq_inserted"] = written
     kbq_result["refreshed_from_core_problem"] = True
+    if kbq_result.get("success"):
+        log_interview(
+            "KBQ",
+            interview_id,
+            f"internal refresh-kbq-notes done key_bq_inserted={written} generated={kbq_result.get('generated')} inserted={kbq_result.get('inserted')}",
+        )
+    else:
+        log_interview(
+            "KBQ",
+            interview_id,
+            f"internal refresh-kbq-notes failed stage={kbq_result.get('stage')} detail={kbq_result.get('detail')}",
+        )
     return kbq_result
 
 

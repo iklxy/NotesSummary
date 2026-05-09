@@ -288,8 +288,14 @@ def run_notes_generation_for_interview(
     """
     对指定访谈执行 RAG + LLM Notes 生成并落库。
     """
+    log_interview(
+        "NOTES",
+        interview_id,
+        f"run_notes_generation start question_id={question_id} top_k={top_k} source_kind={source_kind} ensure_index={ensure_index}",
+    )
     row = DbAccess.get_interview_by_id(interview_id)
     if not row:
+        log_interview("NOTES", interview_id, "run_notes_generation failed: interview not found")
         return {
             "success": False,
             "stage": "fetch_interview",
@@ -299,6 +305,11 @@ def run_notes_generation_for_interview(
     project_id = row.get("parse_project_id") or 0
     question_result = fetch_questions_step(interview_id, source_kind=source_kind)
     if not question_result.get("success"):
+        log_interview(
+            "NOTES",
+            interview_id,
+            f"run_notes_generation failed stage=fetch_questions detail={question_result}",
+        )
         return {
             "success": False,
             "stage": "fetch_questions",
@@ -325,6 +336,11 @@ def run_notes_generation_for_interview(
             }
         questions = [row for row in questions if int(row.get("id") or 0) == target_question_id]
         if not questions:
+            log_interview(
+                "NOTES",
+                interview_id,
+                f"run_notes_generation failed stage=filter_question detail={{'message': 'question {target_question_id} not found'}}",
+            )
             return {
                 "success": False,
                 "stage": "filter_question",
@@ -343,9 +359,19 @@ def run_notes_generation_for_interview(
         ensure_index=ensure_index,
     )
     if not notes_result.get("success"):
+        log_interview(
+            "NOTES",
+            interview_id,
+            f"run_notes_generation failed stage=generate_notes detail={notes_result}",
+        )
         return notes_result
 
     write_result = write_notes_results_step(notes_result)
+    log_interview(
+        "NOTES",
+        interview_id,
+        f"run_notes_generation done generated={len(notes_result.get('results') or [])} inserted={write_result.get('inserted', 0)}",
+    )
     return {
         "success": True,
         "project_id": project_id,
