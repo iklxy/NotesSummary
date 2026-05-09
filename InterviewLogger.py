@@ -60,6 +60,15 @@ def _build_log_line(
     return f"{timestamp} [{component}] {subject_label}={subject_value} {message}"
 
 
+def eng(message: str) -> str:
+    """
+    预留的日志英文化转换入口。
+
+    当前只做原样返回，便于后续逐步统一英文日志文案时保持调用位置稳定。
+    """
+    return message
+
+
 def _write_line(path: Path, line: str) -> None:
     """
     线程安全地追加一行日志到指定文件。

@@ -496,11 +496,11 @@ def generate_project_ca_table(
         "interview_ids": body.get("interview_ids") or [],
         "column_meta_fields": body.get("column_meta_fields") or [],
     }
-    log_project("CA", project_id, f"BFF 开始请求 CA 生成 request_payload={request_payload}")
+    log_project("CA", project_id, f"BFF request CA generation start request_payload={request_payload}")
     try:
         resp = requests.post(url, json=request_payload, timeout=3600)
     except Exception as e:
-        log_project("CA", project_id, f"BFF 请求 CA 生成异常 error={e}\n{traceback.format_exc()}")
+        log_project("CA", project_id, f"BFF request CA generation exception error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"generate ca table request failed: {e}")
 
     if resp.status_code >= 400:
@@ -508,18 +508,14 @@ def generate_project_ca_table(
             detail = resp.json()
         except Exception:
             detail = resp.text
-        log_project(
-            "CA",
-            project_id,
-            f"BFF 收到 CA 生成失败响应 status_code={resp.status_code} detail={detail}",
-        )
+        log_project("CA", project_id, f"BFF received CA generation failure response status_code={resp.status_code} detail={detail}")
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
     try:
-        log_project("CA", project_id, "BFF 收到 CA 生成成功响应")
+        log_project("CA", project_id, "BFF received CA generation success response")
         return resp.json()
     except Exception as e:
-        log_project("CA", project_id, f"BFF 解析 CA 生成响应失败 error={e}\n{traceback.format_exc()}")
+        log_project("CA", project_id, f"BFF parse CA generation response failed error={e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"parse generate ca table response failed: {e}")
 
 
@@ -535,7 +531,7 @@ def export_project_ca_table_xlsx(
     支持在请求体中携带 `ca_json`，用于在前端编辑后直接导出并回填数据库。
     """
     project = _get_owned_project_or_404(project_id, current_user_id)
-    log_project("CA", project_id, "开始导出 CA Excel")
+    log_project("CA", project_id, "CA Excel export start")
     body = payload or {}
     ca_json = body.get("ca_json") if isinstance(body, dict) else None
     if not isinstance(ca_json, dict):
@@ -547,7 +543,7 @@ def export_project_ca_table_xlsx(
         if fallback_payload is not None:
             ca_json = fallback_payload
     if not isinstance(ca_json, dict):
-        log_project("CA", project_id, "导出 CA Excel 失败：未找到可用 CA 数据")
+        log_project("CA", project_id, "CA Excel export failed: no CA data available")
         raise HTTPException(status_code=404, detail="ca table not found")
 
     try:
@@ -559,13 +555,13 @@ def export_project_ca_table_xlsx(
             generated_at=ca_json.get("generated_at"),
         )
     except Exception as e:
-        log_project("CA", project_id, f"CA Excel 回填数据库失败 error={e}")
+        log_project("CA", project_id, f"CA Excel database backfill failed error={e}")
         raise HTTPException(status_code=500, detail=f"save ca table failed: {e}")
 
     try:
         xlsx_bytes = build_ca_table_xlsx_bytes(ca_json)
     except Exception as e:
-        log_project("CA", project_id, f"CA Excel 导出失败：build xlsx failed error={e}")
+        log_project("CA", project_id, f"CA Excel export failed: build xlsx failed error={e}")
         raise HTTPException(status_code=500, detail=f"build ca xlsx failed: {e}")
 
     project_name = project.get("name")
@@ -573,7 +569,7 @@ def export_project_ca_table_xlsx(
     headers = {
         "Content-Disposition": _build_download_content_disposition(filename),
     }
-    log_project("CA", project_id, f"CA Excel 导出完成 filename={filename}")
+    log_project("CA", project_id, f"CA Excel export done filename={filename}")
     return Response(content=xlsx_bytes, media_type=XLSX_MIME_TYPE, headers=headers)
 
 

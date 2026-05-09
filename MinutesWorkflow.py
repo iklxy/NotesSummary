@@ -671,10 +671,13 @@ def generate_minutes_for_interview(
                 project_context=project_context,
             )
         except Exception as exc:
-            log(f"访谈 {interview_id} 提炼访谈背景失败，继续使用外部背景或空背景：{exc}", interview_id=interview_id)
+            log(
+                f"failed to derive interview context for interview {interview_id}; use provided context or empty context: {exc}",
+                interview_id=interview_id,
+            )
         interview_context = derived_interview_context or interview_context
 
-        log(f"开始为访谈 {interview_id} 生成智能纪要大纲", interview_id=interview_id)
+        log(f"start generating minutes outline for interview {interview_id}", interview_id=interview_id)
         outline_payload = _extract_minutes_outline_from_summary_text(
             backup_dir,
             summary_rows,

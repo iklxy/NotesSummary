@@ -371,10 +371,10 @@ def generate_kbq_notes_step(
         model_client = ModelClient()
     except Exception as exc:
         model_client_error = f"init model client failed: {exc}"
-        log_interview("KBQ", interview_id, f"{model_client_error}，将写入降级 KBQ Notes")
+        log_interview("KBQ", interview_id, f"{model_client_error}; fall back to degraded KBQ Notes")
 
     results: List[Dict[str, Any]] = []
-    log_interview("KBQ", interview_id, f"共 {len(kbq_items)} 条 key BQ，开始生成 KBQ Notes")
+    log_interview("KBQ", interview_id, f"start generating KBQ Notes for {len(kbq_items)} key BQ items")
 
     for row in kbq_items:
         kbq_id = row.get("id")
@@ -383,7 +383,7 @@ def generate_kbq_notes_step(
         if not key_bq_text:
             continue
 
-        log_interview("KBQ", interview_id, f"开始为 key BQ {kbq_id} 生成 KBQ Notes")
+        log_interview("KBQ", interview_id, f"start generating KBQ Notes for key BQ {kbq_id}")
         try:
             dimensions_result = (
                 model_client.generate_kbq_dimensions(
@@ -397,7 +397,7 @@ def generate_kbq_notes_step(
             dimensions = dimensions_result.get("dimensions") or []
             query_text = _build_kbq_query_text(key_bq_text, dimensions)
             segments = _retrieve_segments_from_summary(minutes_segments, query_text, top_k=top_k)
-            log_interview("KBQ", interview_id, f"key BQ {kbq_id} 本地检索到 {len(segments)} 条相关片段")
+            log_interview("KBQ", interview_id, f"key BQ {kbq_id} retrieved {len(segments)} local segments")
 
             if model_client is None:
                 notes = {

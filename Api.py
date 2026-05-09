@@ -69,15 +69,15 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
             无返回值。执行结果仅用于日志输出。
         """
         try:
-            log_interview("TRANSCRIBE", interview_id, "job_start")
+            log_interview("TRANSCRIBE", interview_id, "job start")
             result = run_workflow(interview_id)
-            log_interview("TRANSCRIBE", interview_id, f"finished: {json.dumps(result, ensure_ascii=False)}")
+            log_interview("TRANSCRIBE", interview_id, f"job done: {json.dumps(result, ensure_ascii=False)}")
         except Exception as e:
             try:
                 DbAccess.update_interview_status(interview_id, 3)
             except Exception:
                 pass
-            log_interview("TRANSCRIBE", interview_id, f"unexpected error: {e}\n{traceback.format_exc()}")
+            log_interview("TRANSCRIBE", interview_id, f"job failed: {e}\n{traceback.format_exc()}")
 
     try:
         TRANSCRIBE_EXECUTOR.submit(_job)
@@ -388,7 +388,7 @@ def api_generate_ca_table(
     log_project(
         "CA",
         project_id,
-        "开始生成 CA 表 "
+        "CA table generation start "
         f"interview_ids={interview_ids} "
         f"column_meta_fields={column_meta_fields}",
     )
@@ -403,7 +403,7 @@ def api_generate_ca_table(
                 log_project(
                     "CA",
                     project_id,
-                    "CA 表生成完成 "
+                    "CA table generation done "
                     f"interview_count={result.get('interview_count')} "
                     f"dimension_count={result.get('dimension_count')} "
                     f"skipped_interview_ids={result.get('skipped_interview_ids')}",
@@ -412,7 +412,7 @@ def api_generate_ca_table(
                 log_project(
                     "CA",
                     project_id,
-                    "CA 表生成返回失败 "
+                    "CA table generation returned failure "
                     f"stage={result.get('stage')} "
                     f"detail={result.get('detail')}",
                 )
@@ -421,7 +421,7 @@ def api_generate_ca_table(
         log_project(
             "CA",
             project_id,
-            "CA 表生成异常 "
+            "CA table generation exception "
             f"error={e}\n{traceback.format_exc()}",
         )
         raise HTTPException(status_code=500, detail=f"generate ca table failed: {e}")

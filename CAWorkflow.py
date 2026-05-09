@@ -237,7 +237,7 @@ def generate_ca_table_for_project(
     为指定项目生成 CA 表。
     """
     log(
-        "开始生成 CA 表 "
+        "CA generation start "
         f"project_id={project_id} "
         f"interview_ids={interview_ids} "
         f"column_meta_fields={column_meta_fields}",
@@ -245,7 +245,7 @@ def generate_ca_table_for_project(
     )
     project = DbAccess.get_project_by_id(project_id)
     if not project:
-        log("CA 表生成失败：项目不存在", project_id=project_id)
+        log("CA generation failed: project not found", project_id=project_id)
         return {
             "success": False,
             "stage": "fetch_project",
@@ -259,7 +259,7 @@ def generate_ca_table_for_project(
     if not selected_fields:
         selected_fields = DEFAULT_COLUMN_META_FIELDS[:]
     log(
-        f"项目背景加载完成，project_name={project_name}, selected_fields={selected_fields}",
+        f"project context loaded project_name={project_name}, selected_fields={selected_fields}",
         project_id=project_id,
     )
 
@@ -273,7 +273,7 @@ def generate_ca_table_for_project(
         completed_id_set = {int(row.get("id")) for row in interview_rows}
         skipped_interview_ids = [item for item in requested_interview_ids if item not in completed_id_set]
     log(
-        f"已完成访谈查询完成，返回 {len(interview_rows)} 条，skipped_interview_ids={skipped_interview_ids}",
+        f"completed interviews fetched count={len(interview_rows)} skipped_interview_ids={skipped_interview_ids}",
         project_id=project_id,
     )
     if len(interview_rows) < 2:
@@ -281,7 +281,7 @@ def generate_ca_table_for_project(
             "success": False,
             "stage": "fetch_interviews",
             "detail": {
-                "message": "访谈数量小于2，无法生成对应的CA表格",
+                "message": "not enough interviews to build CA table",
                 "skipped_interview_ids": skipped_interview_ids,
             },
             "project_id": project_id,
@@ -292,7 +292,7 @@ def generate_ca_table_for_project(
         interview_ids=[int(row["id"]) for row in interview_rows],
     )
     log(
-        f"全文 Notes Markdown 组装完成，共 {len(interviews_notes)} 条",
+        f"full notes markdown built count={len(interviews_notes)}",
         project_id=project_id,
     )
     interviews_notes_by_id = {item["interview_id"]: item for item in interviews_notes if item.get("interview_id") is not None}
@@ -307,7 +307,7 @@ def generate_ca_table_for_project(
         usable_interviews.append(
             {
                 "interview_id": interview_id,
-                "name": str(row.get("name") or item.get("name") or f"访谈 {interview_id}").strip(),
+            "name": str(row.get("name") or item.get("name") or f"Interview {interview_id}").strip(),
                 "interview_date": row.get("interview_date"),
                 "meta": meta,
                 "notes_markdown": notes_markdown,
@@ -315,7 +315,7 @@ def generate_ca_table_for_project(
             }
         )
         log(
-            f"访谈 {interview_id} 可用全文 Notes 长度={len(notes_markdown)} 片段数={len(segments)}",
+            f"interview {interview_id} notes_len={len(notes_markdown)} segments={len(segments)}",
             project_id=project_id,
         )
 
@@ -323,7 +323,7 @@ def generate_ca_table_for_project(
         return {
             "success": False,
             "stage": "build_notes_markdown",
-            "detail": {"message": "有效访谈数量小于2，无法生成 CA"},
+            "detail": {"message": "not enough usable interviews to build CA table"},
             "project_id": project_id,
         }
 
@@ -332,7 +332,7 @@ def generate_ca_table_for_project(
             "success": False,
             "stage": "build_notes_markdown",
             "detail": {
-                "message": "当前选择集没有可用的全文 Notes Markdown",
+                "message": "no available full notes markdown in selected interviews",
                 "skipped_interview_ids": skipped_interview_ids,
             },
             "project_id": project_id,
@@ -340,7 +340,7 @@ def generate_ca_table_for_project(
 
     try:
         log(
-            f"开始生成 CA 维度骨架，访谈数={len(usable_interviews)}",
+            f"CA outline start interview_count={len(usable_interviews)}",
             project_id=project_id,
         )
         outline_payload = ModelClient.generate_ca_dimensions(
@@ -362,7 +362,7 @@ def generate_ca_table_for_project(
 
     dimensions = _normalize_dimension_items(outline_payload.get("dimensions"))
     if not dimensions:
-        log("CA 维度骨架生成后为空", project_id=project_id)
+        log("CA outline is empty", project_id=project_id)
         return {
             "success": False,
             "stage": "generate_dimensions",
@@ -375,7 +375,7 @@ def generate_ca_table_for_project(
 
     interview_id_list = [int(item["interview_id"]) for item in usable_interviews]
     log(
-        f"CA 维度骨架生成完成，维度数={len(dimensions)}，开始逐小点生成单元格",
+        f"CA outline done dimension_count={len(dimensions)} start cells",
         project_id=project_id,
     )
     for dimension in dimensions:
@@ -385,10 +385,7 @@ def generate_ca_table_for_project(
             sub_title = str(sub_point.get("title") or "").strip()
             sub_summary = str(sub_point.get("summary") or "").strip()
             query_text = "\n".join(part for part in [dimension_title, dimension_summary, sub_title, sub_summary] if part)
-            log(
-                f"开始生成 CA 单元格 dimension={dimension_title} sub_point={sub_title}",
-                project_id=project_id,
-            )
+            log(f"CA cell start dimension={dimension_title} sub_point={sub_title}", project_id=project_id)
 
             interview_blocks: List[Dict[str, Any]] = []
             for item in usable_interviews:
@@ -420,10 +417,10 @@ def generate_ca_table_for_project(
                 cell_map = cell_payload.get("cells") or {}
             except Exception as exc:
                 log(
-                    f"CA 小点 {dimension_title} / {sub_title} 生成失败：{exc}",
+                    f"CA cell failed dimension={dimension_title} sub_point={sub_title} error={exc}",
                     project_id=project_id,
                 )
-                cell_map = {str(interview_id): "生成失败" for interview_id in interview_id_list}
+                cell_map = {str(interview_id): "failed" for interview_id in interview_id_list}
 
             if not isinstance(cell_map, dict):
                 cell_map = {}
@@ -437,10 +434,7 @@ def generate_ca_table_for_project(
                 normalized_cells[key] = value
 
             sub_point["cells"] = normalized_cells
-            log(
-                f"完成 CA 单元格 dimension={dimension_title} sub_point={sub_title}",
-                project_id=project_id,
-            )
+            log(f"CA cell done dimension={dimension_title} sub_point={sub_title}", project_id=project_id)
 
     ca_payload: Dict[str, Any] = {
         "project_id": project_id,
@@ -465,11 +459,11 @@ def generate_ca_table_for_project(
     }
 
     cache_path = _build_ca_cache_path(project_id)
-    log(f"开始写入 CA 缓存文件：{cache_path}", project_id=project_id)
+    log(f"Writing CA cache file: {cache_path}", project_id=project_id)
     safe_ca_payload = _json_safe_value(ca_payload)
     cache_path.write_text(json.dumps(safe_ca_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        log("开始写入 CA 数据库表", project_id=project_id)
+        log("Writing CA table to database", project_id=project_id)
         DbAccess.upsert_ca_table(
             project_id=project_id,
             ca_json=safe_ca_payload,
@@ -478,10 +472,7 @@ def generate_ca_table_for_project(
             generated_at=safe_ca_payload["generated_at"],
         )
     except Exception as exc:
-        log(
-            f"CA 表写库失败：{exc}\n{traceback.format_exc()}",
-            project_id=project_id,
-        )
+        log(f"CA table write failed: {exc}\n{traceback.format_exc()}", project_id=project_id)
         return {
             "success": False,
             "stage": "upsert_ca_table",
@@ -493,10 +484,7 @@ def generate_ca_table_for_project(
             "project_id": project_id,
         }
 
-    log(
-        f"CA 表生成完成 interview_count={len(usable_interviews)} dimension_count={len(dimensions)}",
-        project_id=project_id,
-    )
+    log(f"CA generation done interview_count={len(usable_interviews)} dimension_count={len(dimensions)}", project_id=project_id)
     return {
         "success": True,
         "project_id": project_id,
