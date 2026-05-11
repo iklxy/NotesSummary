@@ -708,7 +708,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         项目指南学习
                       </Title>
                       <Text type="secondary">
-                        上传 PDF 指南后，系统会异步抽取正文并生成学习总结。这里展示当前处理状态和学习结果。
+                        上传 PDF 指南后，系统会异步处理。这里仅展示当前处理状态，详情可点击右侧按钮查看。
                       </Text>
                     </div>
                     <Space>
@@ -741,21 +741,6 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         description="学习完成后，你可以在这里查看总结结果；创建访谈时建议先等待学习结束。"
                       />
                     ) : null}
-                    {guideSummaryText ? (
-                      <div
-                        style={{
-                          borderRadius: 16,
-                          background: "rgba(15, 23, 42, 0.03)",
-                          padding: 16,
-                          maxHeight: 260,
-                          overflow: "auto",
-                        }}
-                      >
-                        <MarkdownContent content={guideSummaryText} />
-                      </div>
-                    ) : (
-                      <Text type="secondary">暂无学习总结，请先上传 PDF 指南并等待处理完成。</Text>
-                    )}
                   </Space>
                 </Card>
               </Col>

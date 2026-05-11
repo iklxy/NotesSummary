@@ -85,6 +85,66 @@ def insert_project(
     return new_id
 
 
+def update_project(
+    project_id: int,
+    name: Optional[str] = None,
+    keywords: Optional[str] = None,
+    core_problem: Optional[str] = None,
+    created_by_user_id: int | None = None,
+) -> int:
+    """
+    更新项目基础信息。
+
+    参数:
+        project_id: 项目主键 ID。
+        name: 项目名称，可选。
+        keywords: 项目关键词，可选。
+        core_problem: 项目背景说明，可选。
+        created_by_user_id: 当前用户 ID，可选，用于权限校验。
+
+    返回:
+        受影响行数。
+    """
+    fields: list[str] = []
+    params: list[Any] = []
+
+    if name is not None:
+        fields.append("name = %s")
+        params.append(name)
+    if keywords is not None:
+        fields.append("keywords = %s")
+        params.append(keywords)
+    if core_problem is not None:
+        fields.append("core_problem = %s")
+        params.append(core_problem)
+
+    if not fields:
+        return 0
+
+    sql = f"""
+        UPDATE bh_project
+        SET {", ".join(fields)}
+        WHERE id = %s
+    """
+    params.append(project_id)
+    if created_by_user_id is not None:
+        sql += " AND created_by_user_id = %s"
+        params.append(created_by_user_id)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            affected = cursor.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return affected
+
+
 def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
     """
     从 bh_project 表中查询所有项目的基础信息。

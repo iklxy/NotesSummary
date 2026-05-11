@@ -15,6 +15,11 @@ interface CreateProjectPayload {
   guide_file?: File | null;
 }
 
+interface UpdateProjectPayload {
+  name: string;
+  core_problem?: string;
+}
+
 export async function createProject(payload: CreateProjectPayload): Promise<Project> {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -51,6 +56,13 @@ export function getProjects(): Promise<Project[]> {
 
 export function getProjectDetail(projectId: number): Promise<ProjectDetail> {
   return request<ProjectDetail>(`/api/projects/${projectId}`);
+}
+
+export function updateProject(projectId: number, payload: UpdateProjectPayload): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function deleteProject(projectId: number): Promise<DeleteProjectResponse> {

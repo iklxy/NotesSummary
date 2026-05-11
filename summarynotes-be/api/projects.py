@@ -25,6 +25,7 @@ from db import (
     fetch_projects,
     fetch_questionnaires_by_project,
     insert_project,
+    update_project,
     update_project_guide,
     upsert_ca_table,
 )
@@ -43,6 +44,21 @@ class ProjectCreate(BaseModel):
     """
 
     name: str
+    keywords: Optional[str] = None
+    core_problem: Optional[str] = None
+
+
+class ProjectUpdate(BaseModel):
+    """
+    更新项目的请求体结构。
+
+    字段:
+        name:             项目名称，可选。
+        keywords:         项目关键词，可选。
+        core_problem:     访谈核心描述，可选。
+    """
+
+    name: Optional[str] = None
     keywords: Optional[str] = None
     core_problem: Optional[str] = None
 
@@ -542,6 +558,47 @@ def create_project(
     if not project_row:
         raise HTTPException(status_code=500, detail="create project failed")
     return _normalize_project_row(project_row)
+
+
+@router.put("/{project_id}", response_model=Dict[str, Any])
+def update_project_detail(
+    project_id: int,
+    payload: ProjectUpdate = Body(...),
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    更新项目基础信息。
+    """
+    _get_owned_project_or_404(project_id, current_user_id)
+    clean_name = payload.name.strip() if isinstance(payload.name, str) else None
+    clean_keywords = payload.keywords.strip() if isinstance(payload.keywords, str) else None
+    clean_core_problem = payload.core_problem.strip() if isinstance(payload.core_problem, str) else None
+
+    if clean_name is not None and not clean_name:
+        raise HTTPException(status_code=400, detail="项目名称不能为空")
+    if clean_core_problem == "":
+        clean_core_problem = None
+    if clean_keywords == "":
+        clean_keywords = None
+
+    try:
+        affected = update_project(
+            project_id=project_id,
+            name=clean_name,
+            keywords=clean_keywords,
+            core_problem=clean_core_problem,
+            created_by_user_id=current_user_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update project failed: {e}")
+
+    if affected <= 0:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    updated_project = fetch_project_by_id(project_id, current_user_id)
+    if not updated_project:
+        raise HTTPException(status_code=500, detail="update project failed")
+    return _normalize_project_row(updated_project)
 
 
 @router.get("", response_model=list[Dict[str, Any]])

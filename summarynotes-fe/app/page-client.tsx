@@ -21,7 +21,7 @@ import {
 import type { UploadFile } from "antd/es/upload/interface";
 import { UploadOutlined } from "@ant-design/icons";
 import { Project } from "../lib/types";
-import { createProject, deleteProject, getProjects } from "../lib/projectsApi";
+import { createProject, deleteProject, getProjects, updateProject } from "../lib/projectsApi";
 
 const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -67,13 +67,16 @@ export default function Home() {
     try {
       const values = await form.validateFields();
       if (editingProject) {
+        const updated = await updateProject(editingProject.id, {
+          name: values.name as string,
+          core_problem: String(values.core_description ?? ""),
+        });
         setProjects((prev) =>
           prev.map((item) =>
             item.id === editingProject.id
               ? {
                   ...item,
-                  name: values.name as string,
-                  core_problem: (values.core_description as string) || null,
+                  ...updated,
                 }
               : item,
           ),
@@ -214,14 +217,6 @@ export default function Home() {
                                 </Button>
                               </Space>
                             </Space>
-
-                            {project.core_problem ? (
-                              <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                {project.core_problem}
-                              </Paragraph>
-                            ) : (
-                              <Text type="secondary">暂无项目背景说明。</Text>
-                            )}
 
                             <Space wrap size={6}>
                               <Tag color="cyan">问卷 {project.questionnaire_count ?? 0}</Tag>
