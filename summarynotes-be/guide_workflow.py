@@ -157,7 +157,7 @@ def _ocr_page_text(
             user_prompt=user_prompt,
             model_name=model_name,
             images=[{"mime_type": "image/png", "data": page_image_bytes}],
-            max_tokens=4096,
+            max_tokens=30000,
             temperature=0.0,
         ).strip()
     except Exception as exc:
@@ -219,7 +219,7 @@ def _summarize_chunks(chunk_summaries: Sequence[str]) -> str:
         system_prompt=system_prompt,
         user_prompt=f"{user_prompt}\n\n{combined}",
         model_name=model_name,
-        max_tokens=5000,
+        max_tokens=30000,
         temperature=0.2,
     ).strip()
 
@@ -239,7 +239,7 @@ def _build_final_summary(extracted_text: str) -> str:
             system_prompt=system_prompt,
             user_prompt=prompt,
             model_name=model_name,
-            max_tokens=3000,
+            max_tokens=30000,
             temperature=0.2,
         ).strip()
         if summary:

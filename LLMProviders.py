@@ -18,7 +18,7 @@ class BaseLLMProvider:
         system_prompt: str,
         user_prompt: str,
         model_name: str,
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -42,7 +42,7 @@ class BaseLLMProvider:
         user_prompt: str,
         model_name: str,
         images: List[Dict[str, Any]],
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -82,7 +82,7 @@ class AnthropicProvider(BaseLLMProvider):
         system_prompt: str,
         user_prompt: str,
         model_name: str,
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -123,7 +123,7 @@ class AnthropicProvider(BaseLLMProvider):
         user_prompt: str,
         model_name: str,
         images: List[Dict[str, Any]],
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -195,7 +195,7 @@ class GeminiProvider(BaseLLMProvider):
         system_prompt: str,
         user_prompt: str,
         model_name: str,
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -258,7 +258,7 @@ class GeminiProvider(BaseLLMProvider):
         user_prompt: str,
         model_name: str,
         images: List[Dict[str, Any]],
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -344,7 +344,7 @@ class DoubaoProvider(BaseLLMProvider):
         system_prompt: str,
         user_prompt: str,
         model_name: str,
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -400,7 +400,7 @@ class DoubaoProvider(BaseLLMProvider):
         user_prompt: str,
         model_name: str,
         images: List[Dict[str, Any]],
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
@@ -486,7 +486,7 @@ class OpenAIProvider(BaseLLMProvider):
         system_prompt: str,
         user_prompt: str,
         model_name: str,
-        max_tokens: int = 2048,
+        max_tokens: int = 30000,
         temperature: float = 0.2,
     ) -> str:
         """
