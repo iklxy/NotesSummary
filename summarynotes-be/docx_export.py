@@ -175,6 +175,25 @@ def _w_table_cell(text: str, width: Optional[int] = None) -> str:
     return f"<w:tc><w:tcPr>{width_xml}</w:tcPr>{cell_paragraph}</w:tc>"
 
 
+def _w_table_borders() -> str:
+    """
+    生成表格边框定义。
+
+    返回:
+        table borders XML 字符串。
+    """
+    return (
+        "<w:tblBorders>"
+        '<w:top w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        '<w:left w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        '<w:right w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        '<w:insideH w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        '<w:insideV w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
+        "</w:tblBorders>"
+    )
+
+
 def _w_table(header: List[str], rows: List[List[str]]) -> str:
     """
     生成 Word 表格 XML。
@@ -205,6 +224,7 @@ def _w_table(header: List[str], rows: List[List[str]]) -> str:
         '<w:tblPr>'
         '<w:tblStyle w:val="TableGrid"/>'
         '<w:tblW w:w="0" w:type="auto"/>'
+        f"{_w_table_borders()}"
         "</w:tblPr>"
         f"<w:tblGrid>{grid}</w:tblGrid>"
         f"{''.join(tr_parts)}"
