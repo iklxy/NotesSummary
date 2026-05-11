@@ -1121,7 +1121,6 @@ def generate_kbq_notes(
         "2. 不要输出分析过程和证据。\n"
         "3. 只输出 JSON。\n"
         "4. 维度总结要简洁、准确、书面化，适合直接写入研究笔记。\n"
-        "5. 如果片段不足以支撑某个维度的总结，请不要输出该维度的总结。\n"
     )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_notes_response(generate_fn, content)
