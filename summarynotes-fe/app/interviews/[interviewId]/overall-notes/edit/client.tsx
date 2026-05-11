@@ -61,23 +61,8 @@ interface KbqDraft {
   dimension_notes: KbqDimensionDraft[];
 }
 
-interface MinutesItemDraft {
-  order: number;
-  title: string;
-  summary: string;
-}
-
-interface MinutesSectionDraft {
-  order: number;
-  title: string;
-  summary: string;
-  items: MinutesItemDraft[];
-}
-
 interface MinutesDraft {
-  document_title: string;
-  core_summary: string;
-  sections: MinutesSectionDraft[];
+  text: string;
 }
 
 function getString(value: unknown): string {
@@ -195,136 +180,30 @@ function serializeKbqDraft(baseNoteJson: unknown, draft: KbqDraft): Record<strin
   };
 }
 
-function createEmptyMinutesItemDraft(order = 1): MinutesItemDraft {
+function createEmptyMinutesDraft(): MinutesDraft {
   return {
-    order,
-    title: "",
-    summary: "",
-  };
-}
-
-function createEmptyMinutesSectionDraft(order = 1): MinutesSectionDraft {
-  return {
-    order,
-    title: `第 ${order} 部分`,
-    summary: "",
-    items: [createEmptyMinutesItemDraft(1)],
-  };
-}
-
-function createEmptyMinutesDraft(order = 1): MinutesDraft {
-  return {
-    document_title: "",
-    core_summary: "",
-    sections: [createEmptyMinutesSectionDraft(order)],
+    text: "",
   };
 }
 
 function normalizeMinutesDraft(minutes: InterviewMinutesResponse | null | undefined): MinutesDraft {
   const minutesSource = getNoteObject(minutes?.minutes_json) ?? (minutes as unknown as Record<string, unknown>) ?? {};
-  const rawSections = Array.isArray(minutesSource.sections) ? minutesSource.sections : [];
-  const sections: MinutesSectionDraft[] = [];
-
-  rawSections.forEach((section, sectionIndex) => {
-    if (!section || typeof section !== "object" || Array.isArray(section)) {
-      return;
-    }
-    const record = section as Record<string, unknown>;
-    const rawItems = Array.isArray(record.items) ? record.items : [];
-    const items: MinutesItemDraft[] = [];
-    rawItems.forEach((item, itemIndex) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return;
-      }
-      const itemRecord = item as Record<string, unknown>;
-      items.push({
-        order: Number(itemRecord.order) || itemIndex + 1,
-        title: getString(itemRecord.title),
-        summary: getString(itemRecord.summary),
-      });
-    });
-    sections.push({
-      order: Number(record.order) || sectionIndex + 1,
-      title: getString(record.title) || `第 ${sectionIndex + 1} 部分`,
-      summary: getString(record.summary),
-      items: items.length > 0 ? items : [],
-    });
-  });
-
-  if (sections.length === 0) {
-    sections.push(createEmptyMinutesSectionDraft(1));
-  }
-
+  const rawMinutesText =
+    getString(minutesSource.raw_minutes_text) ||
+    getString(minutesSource.minutes_text) ||
+    getString(minutes?.minutes_text) ||
+    "";
   return {
-    document_title: getString(minutesSource.document_title) || getString(minutes?.document_title),
-    core_summary: getString(minutesSource.core_summary) || getString(minutes?.core_summary),
-    sections,
+    text: rawMinutesText,
   };
 }
 
-function serializeMinutesDraft(baseMinutes: InterviewMinutesResponse | null | undefined, draft: MinutesDraft): Record<string, unknown> {
-  const base = getNoteObject(baseMinutes?.minutes_json) ?? (baseMinutes as unknown as Record<string, unknown>) ?? {};
-  return {
-    ...base,
-    document_title: draft.document_title.trim(),
-    core_summary: draft.core_summary.trim(),
-    sections: draft.sections.map((section, sectionIndex) => ({
-      order: sectionIndex + 1,
-      title: section.title.trim(),
-      summary: section.summary.trim(),
-      items: section.items.map((item, itemIndex) => ({
-        order: itemIndex + 1,
-        title: item.title.trim(),
-        summary: item.summary.trim(),
-      })),
-    })),
-  };
+function serializeMinutesDraft(draft: MinutesDraft): string {
+  return draft.text.trim();
 }
 
-function renderMinutesDraftMarkdown(draft: MinutesDraft): string {
-  const lines: string[] = [];
-  const documentTitle = draft.document_title.trim();
-  if (documentTitle) {
-    lines.push(`# ${documentTitle}`);
-    lines.push("");
-  }
-
-  const coreSummary = draft.core_summary.trim();
-  if (coreSummary) {
-    lines.push("## 核心总结");
-    lines.push(coreSummary);
-    lines.push("");
-  }
-
-  draft.sections.forEach((section) => {
-    const sectionTitle = section.title.trim();
-    if (sectionTitle) {
-      lines.push(`## 第${section.order}部分：${sectionTitle}`);
-    } else {
-      lines.push(`## 第${section.order}部分`);
-    }
-
-    const sectionSummary = section.summary.trim();
-    if (sectionSummary) {
-      lines.push(sectionSummary);
-    }
-
-    section.items.forEach((item) => {
-      const itemTitle = item.title.trim();
-      const itemSummary = item.summary.trim();
-      if (itemTitle && itemSummary) {
-        lines.push(`${item.order}. ${itemTitle}：${itemSummary}`);
-      } else if (itemTitle) {
-        lines.push(`${item.order}. ${itemTitle}`);
-      } else if (itemSummary) {
-        lines.push(`${item.order}. ${itemSummary}`);
-      }
-    });
-
-    lines.push("");
-  });
-
-  return lines.join("\n").trim();
+function renderMinutesDraftMarkdown(text: string): string {
+  return text.trim();
 }
 
 function getKbqDimensionNotes(noteJson: unknown): Array<Record<string, unknown>> {
@@ -364,10 +243,6 @@ function removeArrayItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
 }
 
-function getKbqLabel(item: KbqNoteItem): string {
-  return `${item.bq_order}. ${item.bq_text}`;
-}
-
 export default function OverallNotesEditClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
@@ -383,7 +258,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
   const [summaryDraft, setSummaryDraft] = useState("");
   const [kbqDrafts, setKbqDrafts] = useState<Record<number, KbqDraft>>({});
   const [selectedKbqId, setSelectedKbqId] = useState<number | null>(null);
-  const [minutesDraft, setMinutesDraft] = useState<MinutesDraft>(createEmptyMinutesDraft(1));
+  const [minutesDraft, setMinutesDraft] = useState<MinutesDraft>(createEmptyMinutesDraft());
 
   useEffect(() => {
     const load = async () => {
@@ -435,7 +310,10 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
     });
   }, [kbqItems, selectedKbqDraft, selectedKbqId]);
   const summaryPreview = summaryDraft.trim();
-  const minutesPreviewMarkdown = useMemo(() => renderMinutesDraftMarkdown(minutesDraft), [minutesDraft]);
+  const minutesPreviewMarkdown = useMemo(
+    () => renderMinutesDraftMarkdown(minutesDraft.text),
+    [minutesDraft.text],
+  );
 
   const updateSelectedKbqDraft = (updater: (draft: KbqDraft) => KbqDraft) => {
     if (selectedKbqId === null) {
@@ -554,13 +432,16 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
   const handleSaveMinutes = async () => {
     try {
       setSavingMinutes(true);
-      const savedMinutesJson = serializeMinutesDraft(data?.minutes, minutesDraft);
+      const savedMinutesJson = serializeMinutesDraft(minutesDraft);
       const resp = await updateInterviewOverallNotesMinutes(interviewId, savedMinutesJson);
       const nextMinutesJson = resp.minutes_json ?? savedMinutesJson;
+      const nextMinutesText =
+        typeof resp.minutes_text === "string" && resp.minutes_text.trim() ? resp.minutes_text : savedMinutesJson;
       message.success("C 区块已保存");
       const nextMinutes = normalizeMinutesDraft({
         ...data?.minutes,
         minutes_json: nextMinutesJson,
+        minutes_text: nextMinutesText,
       } as InterviewMinutesResponse);
       setMinutesDraft(nextMinutes);
       setData((prev) =>
@@ -569,15 +450,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
               ...prev,
               minutes: {
                 ...prev.minutes,
-                document_title: nextMinutes.document_title,
-                core_summary: nextMinutes.core_summary,
-                minutes_text: renderMinutesDraftMarkdown(nextMinutes),
-                sections: nextMinutes.sections.map((section) => ({
-                  order: section.order,
-                  title: section.title,
-                  summary: section.summary,
-                  items: section.items,
-                })),
+                minutes_text: nextMinutesText,
                 minutes_json: nextMinutesJson,
               },
             }
@@ -617,84 +490,6 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
       dimension_notes: updateArrayItem(draft.dimension_notes, index, (item) => ({
         ...item,
         [field]: value,
-      })),
-    }));
-  };
-
-  const addMinutesSection = () => {
-    setMinutesDraft((draft) => ({
-      ...draft,
-      sections: [...draft.sections, createEmptyMinutesSectionDraft(draft.sections.length + 1)],
-    }));
-  };
-
-  const removeMinutesSection = (index: number) => {
-    setMinutesDraft((draft) => {
-      if (draft.sections.length <= 1) {
-        return draft;
-      }
-      return {
-        ...draft,
-        sections: removeArrayItem(draft.sections, index).map((section, nextIndex) => ({
-          ...section,
-          order: nextIndex + 1,
-        })),
-      };
-    });
-  };
-
-  const updateMinutesSection = (index: number, field: keyof Omit<MinutesSectionDraft, "items">, value: string) => {
-    setMinutesDraft((draft) => ({
-      ...draft,
-      sections: updateArrayItem(draft.sections, index, (section) => ({
-        ...section,
-        [field]: value,
-      })),
-    }));
-  };
-
-  const addMinutesItem = (sectionIndex: number) => {
-    setMinutesDraft((draft) => ({
-      ...draft,
-      sections: updateArrayItem(draft.sections, sectionIndex, (section) => ({
-        ...section,
-        items: [...section.items, createEmptyMinutesItemDraft(section.items.length + 1)],
-      })),
-    }));
-  };
-
-  const removeMinutesItem = (sectionIndex: number, itemIndex: number) => {
-    setMinutesDraft((draft) => ({
-      ...draft,
-      sections: updateArrayItem(draft.sections, sectionIndex, (section) => {
-        if (section.items.length <= 1) {
-          return section;
-        }
-        return {
-          ...section,
-          items: removeArrayItem(section.items, itemIndex).map((item, nextIndex) => ({
-            ...item,
-            order: nextIndex + 1,
-          })),
-        };
-      }),
-    }));
-  };
-
-  const updateMinutesItem = (
-    sectionIndex: number,
-    itemIndex: number,
-    field: keyof MinutesItemDraft,
-    value: string,
-  ) => {
-    setMinutesDraft((draft) => ({
-      ...draft,
-      sections: updateArrayItem(draft.sections, sectionIndex, (section) => ({
-        ...section,
-        items: updateArrayItem(section.items, itemIndex, (item) => ({
-          ...item,
-          [field]: value,
-        })),
       })),
     }));
   };
@@ -898,12 +693,12 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                           </Paragraph>
                         </div>
 
-                        <Select
+                          <Select
                           value={selectedKbqId ?? undefined}
                           onChange={(value) => setSelectedKbqId(value)}
                           options={kbqItems.map((item) => ({
                             value: item.id,
-                            label: getKbqLabel(item),
+                            label: `${item.bq_order}. ${item.bq_text}`,
                           }))}
                           placeholder="请选择要编辑的 Key BQ"
                           disabled={kbqItems.length === 0}
@@ -1032,141 +827,22 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                         <div>
                           <Text className="summarynotes-panel-label">编辑 C 区块</Text>
                           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                            这里按章节和小点逐层编辑智能纪要。
+                            直接编辑整篇智能纪要长文本，保存后会覆盖当前内容。
                           </Paragraph>
                         </div>
-
-                        <div className="summarynotes-edit-form-block">
-                          <Text className="summarynotes-panel-label" style={{ marginBottom: 6 }}>
-                            文档标题
-                          </Text>
-                          <Input
-                            value={minutesDraft.document_title}
-                            onChange={(event) => {
-                              setMinutesDraft((draft) => ({
-                                ...draft,
-                                document_title: event.target.value,
-                              }));
-                            }}
-                            placeholder="例如：访谈智能纪要"
-                          />
-                        </div>
-
-                        <div className="summarynotes-edit-form-block">
-                          <Text className="summarynotes-panel-label" style={{ marginBottom: 6 }}>
-                            核心总结
-                          </Text>
-                          <TextArea
-                            value={minutesDraft.core_summary}
-                            onChange={(event) => {
-                              setMinutesDraft((draft) => ({
-                                ...draft,
-                                core_summary: event.target.value,
-                              }));
-                            }}
-                            rows={4}
-                            placeholder="简要填写智能纪要的核心总结"
-                          />
-                        </div>
-
-                        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                          {minutesDraft.sections.map((section, sectionIndex) => (
-                            <Card
-                              key={`minutes-section-${sectionIndex}`}
-                              size="small"
-                              className="summarynotes-edit-preview-card"
-                              title={`章节 ${section.order}`}
-                              extra={
-                                <Button
-                                  type="link"
-                                  danger
-                                  icon={<DeleteOutlined />}
-                                  onClick={() => removeMinutesSection(sectionIndex)}
-                                  disabled={minutesDraft.sections.length <= 1}
-                                >
-                                  删除
-                                </Button>
-                              }
-                            >
-                              <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                                <Input
-                                  value={section.title}
-                                  onChange={(event) => {
-                                    updateMinutesSection(sectionIndex, "title", event.target.value);
-                                  }}
-                                  placeholder="章节标题"
-                                />
-                                <TextArea
-                                  value={section.summary}
-                                  onChange={(event) => {
-                                    updateMinutesSection(sectionIndex, "summary", event.target.value);
-                                  }}
-                                  rows={3}
-                                  placeholder="章节摘要"
-                                />
-
-                                <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                                  {section.items.map((item, itemIndex) => (
-                                    <Card
-                                      key={`minutes-section-${sectionIndex}-item-${itemIndex}`}
-                                      size="small"
-                                      style={{
-                                        borderRadius: 14,
-                                        background: "#fafafa",
-                                        borderColor: "#ececec",
-                                      }}
-                                      title={`小点 ${item.order}`}
-                                      extra={
-                                        <Button
-                                          type="link"
-                                          danger
-                                          icon={<DeleteOutlined />}
-                                          onClick={() => removeMinutesItem(sectionIndex, itemIndex)}
-                                          disabled={section.items.length <= 1}
-                                        >
-                                          删除
-                                        </Button>
-                                      }
-                                    >
-                                      <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                                        <Input
-                                          value={item.title}
-                                          onChange={(event) => {
-                                            updateMinutesItem(sectionIndex, itemIndex, "title", event.target.value);
-                                          }}
-                                          placeholder="小点标题"
-                                        />
-                                        <TextArea
-                                          value={item.summary}
-                                          onChange={(event) => {
-                                            updateMinutesItem(sectionIndex, itemIndex, "summary", event.target.value);
-                                          }}
-                                          rows={3}
-                                          placeholder="小点摘要"
-                                        />
-                                      </Space>
-                                    </Card>
-                                  ))}
-                                </Space>
-
-                                <Button
-                                  icon={<PlusOutlined />}
-                                  onClick={() => addMinutesItem(sectionIndex)}
-                                  type="dashed"
-                                >
-                                  增加小点
-                                </Button>
-                              </Space>
-                            </Card>
-                          ))}
-                        </Space>
-
-                        <Button icon={<PlusOutlined />} onClick={addMinutesSection} type="dashed">
-                          增加章节
-                        </Button>
-
+                        <TextArea
+                          value={minutesDraft.text}
+                          onChange={(event) => {
+                            setMinutesDraft({
+                              text: event.target.value,
+                            });
+                          }}
+                          rows={28}
+                          placeholder="请输入完整的智能纪要长文本"
+                          className="summarynotes-json-editor"
+                        />
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          右侧预览会实时同步当前编辑内容。
+                          右侧预览会实时同步当前编辑内容。保存后会直接覆盖当前智能纪要全文。
                         </Text>
 
                         <div className="summarynotes-editor-actions">

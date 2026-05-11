@@ -650,16 +650,18 @@ class ModelClient:
         cls,
         transcript_text: str,
         project_context: Optional[str] = None,
+        questionnaire_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        基于整篇访谈转录生成智能纪要大纲。
+        基于整篇访谈转录直接生成智能纪要。
 
         参数:
             transcript_text: 经清洗后的整篇访谈转录全文。
             project_context: 可选项目背景文本。
+            questionnaire_text: 访谈关联的 DG / 问卷 Markdown 文本（可选）。
 
         返回:
-            结构化纪要大纲字典。
+            结构化智能纪要字典。
         """
         return generate_minutes_outline_from_transcript(
             generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
@@ -670,6 +672,7 @@ class ModelClient:
             ),
             project_context_block=cls._build_project_context_block(project_context),
             transcript_text=transcript_text,
+            questionnaire_text=questionnaire_text,
         )
 
     @classmethod

@@ -324,18 +324,18 @@ def api_generate_notes(
 @app.post("/internal/interviews/{interview_id}/generate-minutes")
 def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
     """
-    生成并落库指定访谈的智能纪要。
+    直接生成并落库指定访谈的智能纪要。
 
     参数:
         interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
 
     返回:
-        智能纪要工作流执行结果，包含大纲生成、条目生成与写库信息。
+        智能纪要工作流执行结果，包含文本长度、兼容章节数与写库信息。
 
     异常:
         HTTPException: 当纪要工作流执行失败时抛出 500。
     """
-    log_interview("MINUTES", interview_id, "internal generate-minutes start")
+    log_interview("MINUTES", interview_id, "internal generate-minutes start direct_text_generation")
     try:
         interview = _load_interview_or_404(interview_id)
         project_id = int(interview.get("parse_project_id") or 0)
@@ -356,7 +356,7 @@ def api_generate_minutes(interview_id: int) -> Dict[str, Any]:
                 log_interview(
                     "MINUTES",
                     interview_id,
-                    f"internal generate-minutes done outline_generated={result.get('outline_generated')} generated={result.get('generated')} inserted={result.get('inserted')}",
+                    f"internal generate-minutes done minutes_chars={result.get('minutes_chars')} inserted={result.get('inserted')}",
                 )
             else:
                 log_interview(

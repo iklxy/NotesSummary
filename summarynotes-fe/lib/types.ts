@@ -25,6 +25,7 @@ export interface GenerateMinutesResponse {
   project_id?: number | null;
   outline_generated?: number | null;
   generated?: number | null;
+  minutes_chars?: number | null;
   inserted?: number | null;
   warnings?: string[] | null;
   message?: string | null;
@@ -189,6 +190,7 @@ export interface OverallNotesMinutesUpdateResponse {
   success: boolean;
   interview_id: number;
   minutes_json?: unknown;
+  minutes_text?: string | null;
 }
 
 export interface KbqDimensionItem {
@@ -247,6 +249,7 @@ export interface InterviewMinutesResponse {
   document_title?: string | null;
   core_summary?: string | null;
   minutes_text?: string | null;
+  raw_minutes_text?: string | null;
   outline?: unknown;
   sections: InterviewMinutesSection[];
   action_items?: InterviewMinutesActionItem[];

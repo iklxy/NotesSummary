@@ -191,6 +191,30 @@ def create_key_bq(
     return response_row
 
 
+@router.get("/{project_id}/key-bq/current", response_model=Dict[str, Any])
+def get_current_key_bq(
+    project_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    return _to_singleton_response(project)
+
+
+@router.put("/{project_id}/key-bq/current", response_model=Dict[str, Any])
+def update_current_key_bq(
+    project_id: int,
+    payload: ProjectKeyBqSingletonRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    _get_owned_project_or_404(project_id, current_user_id)
+    normalized_json = _normalize_key_bq_json(payload.key_bq_json)
+    upsert_project_key_bq(project_id, normalized_json)
+    refreshed_project = fetch_project_by_id(project_id, current_user_id)
+    if not refreshed_project:
+        raise HTTPException(status_code=500, detail="update project key bq failed")
+    return _to_singleton_response(refreshed_project)
+
+
 @router.get("/{project_id}/key-bq", response_model=list[Dict[str, Any]])
 def list_key_bq(
     project_id: int,
@@ -277,27 +301,3 @@ def remove_key_bq_item(
         "key_bq_name": deleted_row.get("name"),
         "deleted": True,
     }
-
-
-@router.get("/{project_id}/key-bq/current", response_model=Dict[str, Any])
-def get_current_key_bq(
-    project_id: int,
-    current_user_id: int = Depends(require_current_user_id),
-) -> Dict[str, Any]:
-    project = _get_owned_project_or_404(project_id, current_user_id)
-    return _to_singleton_response(project)
-
-
-@router.put("/{project_id}/key-bq/current", response_model=Dict[str, Any])
-def update_current_key_bq(
-    project_id: int,
-    payload: ProjectKeyBqSingletonRequest,
-    current_user_id: int = Depends(require_current_user_id),
-) -> Dict[str, Any]:
-    _get_owned_project_or_404(project_id, current_user_id)
-    normalized_json = _normalize_key_bq_json(payload.key_bq_json)
-    upsert_project_key_bq(project_id, normalized_json)
-    refreshed_project = fetch_project_by_id(project_id, current_user_id)
-    if not refreshed_project:
-        raise HTTPException(status_code=500, detail="update project key bq failed")
-    return _to_singleton_response(refreshed_project)

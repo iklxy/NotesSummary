@@ -502,3 +502,4 @@ class OverallNotesMinutesUpdateResponse(BaseModel):
     success: bool
     interview_id: int
     minutes_json: Any = None
+    minutes_text: Optional[str] = None

@@ -122,8 +122,9 @@ export default function OverallNotesClient({ interviewId }: Props) {
       if (!resp.success) {
         throw new Error(resp.message || "刷新智能纪要失败");
       }
+      const minutesChars = resp.minutes_chars ?? 0;
       message.success(
-        `智能纪要已刷新：大纲 ${resp.outline_generated ?? 0} 条，生成 ${resp.generated ?? 0} 条，写入 ${resp.inserted ?? 0} 条`,
+        `智能纪要已刷新：文本长度 ${minutesChars} 字，写入 ${resp.inserted ?? 0} 条`,
       );
       setReloadToken((v) => v + 1);
     } catch (e) {

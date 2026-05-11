@@ -5,7 +5,7 @@
 
 智能纪要生成工作流。
 
-该模块负责把“清洗后的 summary 全文 -> 智能纪要大纲 -> 逐小点检索 -> 逐小点总结”
+该模块负责把“清洗后的 summary 全文 -> 直接生成智能纪要”
 这条链路串起来，并将最终结果落到 `bh_project_interview_minutes`。
 
 它的定位是用来替代原先按题生成 Delivery Notes 的流程，但保留相同的触发时机：
@@ -335,10 +335,10 @@ def _retrieve_segments_from_summary(
 
 def _normalize_outline_sections(raw_outline: Any) -> List[Dict[str, Any]]:
     """
-    将模型生成的大纲归一化为统一结构。
+    将模型返回的智能纪要章节归一化为统一结构。
 
     参数:
-        raw_outline: 模型返回的 outline 列表。
+        raw_outline: 模型返回的章节列表。
 
     返回:
         标准化后的章节列表。
@@ -394,7 +394,12 @@ def _render_minutes_text(payload: Dict[str, Any]) -> str:
     返回:
         适合人工查看的 Markdown 风格文本。
     """
+    raw_minutes_text = str(payload.get("raw_minutes_text") or payload.get("minutes_text") or "").strip()
+    if raw_minutes_text:
+        return raw_minutes_text
+
     lines: List[str] = []
+
     document_title = str(payload.get("document_title") or "").strip()
     if document_title:
         lines.append(f"# {document_title}")
@@ -457,17 +462,19 @@ def _extract_minutes_outline_from_summary_text(
     backup_dir: Path,
     summary_rows: List[Dict[str, Any]],
     project_context: Optional[str] = None,
+    questionnaire_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    从清洗后的 summary 明细生成智能纪要大纲。
+    从清洗后的 summary 明细直接生成智能纪要。
 
     参数:
         backup_dir: 访谈备份目录。
         summary_rows: bh_project_interview_summary 的原始记录。
         project_context: 可选项目背景文本。
+        questionnaire_text: 可选问卷 Markdown 文本。
 
     返回:
-        标准化后的 outline payload。
+        标准化后的 minutes payload。
     """
     summary_segments = _build_summary_segments(summary_rows)
     full_text = _build_summary_full_text(summary_segments)
@@ -480,6 +487,7 @@ def _extract_minutes_outline_from_summary_text(
     outline_payload = ModelClient.generate_minutes_outline_from_transcript(
         transcript_text=full_text,
         project_context=project_context,
+        questionnaire_text=questionnaire_text,
     )
     outline_payload["source_file"] = str(source_text_path)
     outline_payload["input_path"] = str(backup_dir)
@@ -494,99 +502,6 @@ def _extract_minutes_outline_from_summary_text(
     return outline_payload
 
 
-def _build_minutes_sections(
-    summary_segments: List[Dict[str, Any]],
-    outline_sections: List[Dict[str, Any]],
-    model_client: Optional[ModelClient],
-    project_context: Optional[str],
-    interview_context: Optional[Any],
-    top_k: int,
-    interview_id: Optional[int] = None,
-) -> Tuple[List[Dict[str, Any]], int]:
-    """
-    根据 outline 逐小点生成智能纪要正文。
-
-    参数:
-        summary_segments: 清洗后的 summary 片段列表。
-        outline_sections: outline 章节列表。
-        model_client: 已初始化的大模型客户端；若为 None 则降级为直出占位文本。
-        project_context: 可选项目背景文本。
-        interview_context: 可选访谈背景摘要。
-        top_k: 每个小点检索 summary 片段数量上限。
-
-    返回:
-        (minutes_sections, generated_count) 二元组。
-    """
-    minutes_sections: List[Dict[str, Any]] = []
-    generated_count = 0
-
-    for section in outline_sections:
-        if not isinstance(section, dict):
-            continue
-
-        section_order = int(section.get("order") or len(minutes_sections) + 1)
-        section_title = str(section.get("title") or "").strip()
-        section_summary = str(section.get("summary") or "").strip()
-        section_items: List[Dict[str, Any]] = []
-
-        raw_items = section.get("items") or []
-        if isinstance(raw_items, list):
-            for item in raw_items:
-                if not isinstance(item, dict):
-                    continue
-                item_order = int(item.get("order") or len(section_items) + 1)
-                item_title = str(item.get("title") or "").strip()
-                item_summary = _normalize_minutes_text_fragment(item.get("summary"))
-                if not item_title and not item_summary:
-                    continue
-
-                query_parts = [section_title, section_summary, item_title, item_summary]
-                query_text = "\n".join(part for part in query_parts if part)
-                segments = _retrieve_segments_from_summary(
-                    summary_segments=summary_segments,
-                    query_text=query_text,
-                    top_k=top_k,
-                )
-                log(
-                    f"章节 {section_order} 小点 {item_order} 检索到 {len(segments)} 条相关片段",
-                    interview_id=interview_id,
-                )
-
-                if model_client is None:
-                    point_summary = item_summary or section_summary or "当前访谈中信息不足"
-                else:
-                    point_summary = model_client.generate_minutes_item_summary(
-                        section_title=section_title,
-                        section_summary=section_summary,
-                        item_title=item_title,
-                        item_summary=item_summary,
-                        segments=segments,
-                        project_context=project_context,
-                        interview_context=interview_context,
-                    )
-                point_summary = _normalize_minutes_text_fragment(point_summary) or "当前访谈中信息不足"
-
-                section_items.append(
-                    {
-                        "order": item_order,
-                        "title": item_title,
-                        "summary": point_summary,
-                    }
-                )
-                generated_count += 1
-
-        minutes_sections.append(
-            {
-                "order": section_order,
-                "title": section_title,
-                "summary": section_summary,
-                "items": section_items,
-            }
-        )
-
-    return minutes_sections, generated_count
-
-
 def generate_minutes_for_interview(
     interview_id: int,
     project_context: Optional[str] = None,
@@ -599,48 +514,59 @@ def generate_minutes_for_interview(
     参数:
         interview_id: 访谈 ID。
         project_context: 可选项目背景文本。
-        interview_context: 可选访谈背景摘要，若为空则由清洗 summary 全文自动提炼。
-        top_k: 每个小点检索 summary 片段数量上限。
+        interview_context: 兼容保留参数，当前直接生成路径不再使用。
+        top_k: 兼容保留参数，当前直接生成路径不再使用。
 
     返回:
         智能纪要生成与写库的聚合结果。
     """
-    log(interview_id=interview_id, message=f"run_minutes start top_k={top_k} project_context_present={bool(project_context)} interview_context_present={bool(interview_context)}")
-    interview = DbAccess.get_interview_by_id(interview_id)
-    if not interview:
-        log(interview_id=interview_id, message="run_minutes failed: interview not found")
-        return {
-            "success": False,
-            "stage": "fetch_interview",
-            "detail": {"message": f"interview {interview_id} not found"},
-        }
-
-    project_id = int(interview.get("parse_project_id") or 0)
-    if project_id <= 0:
-        log(interview_id=interview_id, message="run_minutes failed: project id missing from interview")
-        return {
-            "success": False,
-            "stage": "fetch_project",
-            "detail": {"message": "project id missing from interview"},
-            "project_id": project_id,
-            "interview_id": interview_id,
-        }
-
-    if not project_context:
-        project_context = load_project_context_by_id(project_id)
-
-    backup_dir = _get_interview_backup_dir(project_id, interview_id)
-    if not backup_dir.exists():
-        log(interview_id=interview_id, message=f"run_minutes failed: backup directory not found: {backup_dir}")
-        return {
-            "success": False,
-            "stage": "resolve_questionnaire",
-            "detail": {"message": f"backup directory not found: {backup_dir}"},
-            "project_id": project_id,
-            "interview_id": interview_id,
-        }
+    log(
+        interview_id=interview_id,
+        message=(
+            "run_minutes start direct_minutes_generation "
+            f"project_context_present={bool(project_context)} "
+            f"compat_interview_context_present={bool(interview_context)} "
+            f"compat_top_k={top_k}"
+        ),
+    )
+    project_id = 0
 
     try:
+        interview = DbAccess.get_interview_by_id(interview_id)
+        if not interview:
+            log(interview_id=interview_id, message="run_minutes failed: interview not found")
+            return {
+                "success": False,
+                "stage": "fetch_interview",
+                "detail": {"message": f"interview {interview_id} not found"},
+                "interview_id": interview_id,
+            }
+
+        project_id = int(interview.get("parse_project_id") or 0)
+        if project_id <= 0:
+            log(interview_id=interview_id, message="run_minutes failed: project id missing from interview")
+            return {
+                "success": False,
+                "stage": "fetch_project",
+                "detail": {"message": "project id missing from interview"},
+                "project_id": project_id,
+                "interview_id": interview_id,
+            }
+
+        if not project_context:
+            project_context = load_project_context_by_id(project_id)
+
+        backup_dir = _get_interview_backup_dir(project_id, interview_id)
+        if not backup_dir.exists():
+            log(interview_id=interview_id, message=f"run_minutes failed: backup directory not found: {backup_dir}")
+            return {
+                "success": False,
+                "stage": "resolve_backup_dir",
+                "detail": {"message": f"backup directory not found: {backup_dir}"},
+                "project_id": project_id,
+                "interview_id": interview_id,
+            }
+
         summary_rows = DbAccess.fetch_interview_summary(interview_id)
         if not summary_rows:
             log(interview_id=interview_id, message="run_minutes failed: no cleaned summary rows found")
@@ -664,93 +590,91 @@ def generate_minutes_for_interview(
                 "interview_id": interview_id,
             }
 
-        derived_interview_context: Optional[Any] = None
+        questionnaire_text: Optional[str] = None
+        questionnaire_id = interview.get("questionnaire_id")
         try:
-            derived_interview_context = ModelClient().extract_interview_context(
-                full_text=full_text,
-                project_context=project_context,
-            )
-        except Exception as exc:
+            questionnaire_id_int = int(questionnaire_id) if questionnaire_id is not None else None
+        except (TypeError, ValueError):
+            questionnaire_id_int = None
+        if questionnaire_id_int and questionnaire_id_int > 0:
+            try:
+                questionnaire_text = DbAccess.fetch_questionnaire_markdown_text_by_id(questionnaire_id_int)
+            except Exception as exc:
+                log(
+                    f"failed to load questionnaire markdown for interview {interview_id}; using transcript-only prompt: {exc}",
+                    interview_id=interview_id,
+                )
+                questionnaire_text = None
+            if questionnaire_text is None:
+                log(
+                    f"questionnaire markdown missing or unreadable for interview {interview_id} questionnaire_id={questionnaire_id_int}; using transcript-only prompt",
+                    interview_id=interview_id,
+                )
+        else:
             log(
-                f"failed to derive interview context for interview {interview_id}; use provided context or empty context: {exc}",
+                f"interview {interview_id} has no questionnaire_id; using transcript-only prompt",
                 interview_id=interview_id,
             )
-        interview_context = derived_interview_context or interview_context
 
-        log(f"start generating minutes outline for interview {interview_id}", interview_id=interview_id)
-        outline_payload = _extract_minutes_outline_from_summary_text(
+        log(f"call direct minutes generation for interview {interview_id}", interview_id=interview_id)
+        minutes_payload = _extract_minutes_outline_from_summary_text(
             backup_dir,
             summary_rows,
             project_context=project_context,
+            questionnaire_text=questionnaire_text,
         )
-        outline_payload["document_title"] = (
-            outline_payload.get("document_title")
+        minutes_payload["document_title"] = (
+            minutes_payload.get("document_title")
             or str(interview.get("name") or "").strip()
             or f"interview_{interview_id}"
         )
-        outline_sections = _normalize_outline_sections(outline_payload.get("sections") or outline_payload.get("outline"))
-        if not outline_sections:
-            log(interview_id=interview_id, message="run_minutes failed: no outline sections generated")
+        raw_minutes_text = str(minutes_payload.get("raw_minutes_text") or minutes_payload.get("minutes_text") or "").strip()
+        minutes_sections = minutes_payload.get("sections") or []
+        if (not isinstance(minutes_sections, list) or not minutes_sections) and not raw_minutes_text:
+            log(interview_id=interview_id, message="run_minutes failed: no minutes text generated")
             return {
                 "success": False,
-                "stage": "generate_outline",
-                "detail": {"message": "no outline sections generated"},
+                "stage": "generate_minutes",
+                "detail": {"message": "no minutes text generated"},
                 "project_id": project_id,
                 "interview_id": interview_id,
             }
 
-        model_client: Optional[ModelClient] = None
-        model_client_error: Optional[str] = None
-        try:
-            model_client = ModelClient()
-        except Exception as exc:
-            model_client_error = f"init model client failed: {exc}"
-            log(model_client_error, interview_id=interview_id)
-
-        minutes_sections, generated_count = _build_minutes_sections(
-            summary_segments=summary_segments,
-            outline_sections=outline_sections,
-            model_client=model_client,
-            project_context=project_context,
-            interview_context=interview_context,
-            top_k=top_k,
-            interview_id=interview_id,
-        )
-
         minutes_payload: Dict[str, Any] = {
-            "document_title": outline_payload.get("document_title") or "",
-            "core_summary": outline_payload.get("core_summary") or "",
-            "source_file": outline_payload.get("source_file"),
-            "source_text_path": outline_payload.get("source_text_path"),
-            "source_text_len": outline_payload.get("source_text_len"),
-            "outline_json_path": outline_payload.get("outline_json_path"),
-            "outline_txt_path": outline_payload.get("outline_txt_path"),
+            "document_title": minutes_payload.get("document_title") or "",
+            "core_summary": minutes_payload.get("core_summary") or "",
+            "source_file": minutes_payload.get("source_file"),
+            "source_text_path": minutes_payload.get("source_text_path"),
+            "source_text_len": minutes_payload.get("source_text_len"),
+            "outline_json_path": minutes_payload.get("outline_json_path"),
+            "outline_txt_path": minutes_payload.get("outline_txt_path"),
+            "raw_minutes_text": raw_minutes_text,
+            "minutes_text": raw_minutes_text or minutes_payload.get("minutes_text") or "",
             "sections": minutes_sections,
-            "action_items": outline_payload.get("action_items") or [],
-            "highlights": outline_payload.get("highlights") or [],
+            "action_items": minutes_payload.get("action_items") or [],
+            "highlights": minutes_payload.get("highlights") or [],
         }
-        if model_client_error:
-            minutes_payload["warnings"] = [model_client_error]
 
         minutes_json_path, minutes_txt_path = _build_minutes_output_paths(backup_dir)
         minutes_json_path.write_text(json.dumps(minutes_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        minutes_txt_path.write_text(_render_minutes_text(minutes_payload) + "\n", encoding="utf-8")
+        minutes_txt = raw_minutes_text or _render_minutes_text(minutes_payload)
+        minutes_txt_path.write_text(minutes_txt.rstrip() + "\n", encoding="utf-8")
 
         written = DbAccess.upsert_interview_minutes(
             project_id=project_id,
             interview_id=interview_id,
-            outline_json=outline_payload,
+            outline_json=minutes_payload,
             minutes_json=minutes_payload,
             status="done",
             error_message=None,
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
+        minutes_chars = len(minutes_txt.strip())
         log(
             interview_id=interview_id,
             message=(
                 "run_minutes done "
-                f"outline_generated={len(outline_sections)} "
-                f"generated={generated_count} "
+                f"minutes_chars={minutes_chars} "
                 f"inserted={written} "
                 f"minutes_json_path={minutes_json_path} "
                 f"minutes_txt_path={minutes_txt_path}"
@@ -761,23 +685,24 @@ def generate_minutes_for_interview(
             "success": True,
             "project_id": project_id,
             "interview_id": interview_id,
-            "outline_generated": len(outline_sections),
-            "generated": generated_count,
+            "outline_generated": len(minutes_sections) if isinstance(minutes_sections, list) else 0,
+            "generated": 0,
+            "minutes_chars": minutes_chars,
             "inserted": written,
-            "outline_json_path": outline_payload.get("outline_json_path"),
-            "outline_txt_path": outline_payload.get("outline_txt_path"),
+            "outline_json_path": minutes_payload.get("outline_json_path"),
+            "outline_txt_path": minutes_payload.get("outline_txt_path"),
             "minutes_json_path": str(minutes_json_path),
             "minutes_txt_path": str(minutes_txt_path),
-            "warnings": [warning for warning in [model_client_error] if warning],
+            "warnings": [],
         }
     except Exception as exc:
         error_message = f"generate minutes failed: {exc}"
         log(interview_id=interview_id, message=f"run_minutes failed error={exc}\n{traceback.format_exc()}")
         try:
             DbAccess.upsert_interview_minutes(
-                project_id=project_id,
+                project_id=locals().get("project_id") or 0,
                 interview_id=interview_id,
-                outline_json=outline_payload if "outline_payload" in locals() else None,
+                outline_json=minutes_payload if "minutes_payload" in locals() else None,
                 minutes_json=None,
                 status="failed",
                 error_message=error_message,

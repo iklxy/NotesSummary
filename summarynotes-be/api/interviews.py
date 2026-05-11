@@ -128,7 +128,10 @@ def _is_minutes_payload_complete(payload: Dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
     raw_sections = payload.get("sections") or []
-    return isinstance(raw_sections, list) and len(raw_sections) > 0
+    if isinstance(raw_sections, list) and len(raw_sections) > 0:
+        return True
+    raw_text = str(payload.get("raw_minutes_text") or payload.get("minutes_text") or "").strip()
+    return bool(raw_text)
 
 
 def _load_minutes_payload_from_files(project_id: int, interview_id: int) -> tuple[Dict[str, Any] | None, Path | None]:
@@ -226,6 +229,10 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
                     return conclusion.strip()
             return text
         return text
+
+    raw_minutes_text = str(payload.get("raw_minutes_text") or payload.get("minutes_text") or "").strip()
+    if raw_minutes_text:
+        return raw_minutes_text
 
     document_title = str(payload.get("document_title") or "").strip()
     if document_title:
@@ -603,7 +610,11 @@ def _build_interview_minutes_response(
         try:
             minutes_json = json.loads(minutes_json_raw)
         except Exception:
-            minutes_json = minutes_json_raw
+            minutes_json = {
+                "raw_minutes_text": minutes_json_raw,
+                "minutes_text": minutes_json_raw,
+                "sections": [],
+            }
     else:
         minutes_json = minutes_json_raw
 
@@ -1497,7 +1508,7 @@ def update_interview_overall_notes_minutes(
     current_user_id: int = Depends(require_current_user_id),
 ) -> OverallNotesMinutesUpdateResponse:
     """
-    更新全文 Notes 中 C 区块的 minutes_json。
+    更新全文 Notes 中 C 区块的长文本智能纪要。
     """
     interview = _get_owned_interview_or_404(interview_id, current_user_id)
     project_id = int(interview.get("parse_project_id") or 0)
@@ -1512,11 +1523,17 @@ def update_interview_overall_notes_minutes(
         try:
             minutes_json = json.loads(minutes_json)
         except Exception:
-            pass
+            minutes_json = {
+                "raw_minutes_text": minutes_json,
+                "minutes_text": minutes_json,
+                "sections": [],
+            }
+    minutes_text = _render_minutes_payload_text(minutes_json) if isinstance(minutes_json, dict) else str(minutes_json or "")
     return OverallNotesMinutesUpdateResponse(
         success=True,
         interview_id=interview_id,
         minutes_json=minutes_json,
+        minutes_text=minutes_text or None,
     )
 
 
@@ -1647,7 +1664,7 @@ def refresh_interview_minutes(
     返回:
         内部引擎服务返回的智能纪要生成结果。
     """
-    log_interview("MINUTES", interview_id, "refresh minutes start")
+    log_interview("MINUTES", interview_id, "refresh minutes start direct_text_generation")
     _get_owned_interview_or_404(interview_id, current_user_id)
 
     url = f"{_get_internal_base()}/internal/interviews/{interview_id}/generate-minutes"
@@ -1667,7 +1684,11 @@ def refresh_interview_minutes(
     try:
         result = resp.json()
         if isinstance(result, dict) and result.get("success"):
-            log_interview("MINUTES", interview_id, f"refresh minutes done inserted={result.get('inserted')}")
+            log_interview(
+                "MINUTES",
+                interview_id,
+                f"refresh minutes done minutes_chars={result.get('minutes_chars')} inserted={result.get('inserted')}",
+            )
         else:
             log_interview("MINUTES", interview_id, f"refresh minutes failed detail={result}")
         return result

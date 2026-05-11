@@ -577,7 +577,11 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             minutes_warning = minutes_result.get("message") or "generate minutes failed"
             _workflow_log(interview_id, "generate_minutes", f"warning detail={minutes_result}")
         else:
-            _workflow_log(interview_id, "generate_minutes", f"done inserted={minutes_result.get('inserted', 0)}")
+            _workflow_log(
+                interview_id,
+                "generate_minutes",
+                f"done minutes_chars={minutes_result.get('minutes_chars', 0)} inserted={minutes_result.get('inserted', 0)}",
+            )
 
         kbq_result = {"success": False, "message": "kbq skipped because smart minutes generation failed", "inserted": 0}
         if minutes_result.get("success"):

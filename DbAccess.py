@@ -3,6 +3,7 @@
 
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import pymysql
@@ -26,6 +27,35 @@ class DbAccess:
     # ------------------------------------------------------------------
     # 连接与基础读写辅助方法
     # ------------------------------------------------------------------
+    @staticmethod
+    def _get_data_root() -> Path:
+        """
+        获取项目数据目录。
+
+        返回:
+            仓库根目录下的 `data` 目录路径。
+        """
+        return Path(__file__).resolve().parent / "data"
+
+    @classmethod
+    def _resolve_data_path(cls, raw_path: str) -> Optional[Path]:
+        """
+        将数据库里保存的相对路径解析为本地绝对路径。
+
+        参数:
+            raw_path: 数据库中保存的路径字符串。
+
+        返回:
+            解析后的本地文件路径；若输入为空则返回 `None`。
+        """
+        text = str(raw_path or "").strip()
+        if not text:
+            return None
+        path = Path(text)
+        if not path.is_absolute():
+            path = cls._get_data_root() / path
+        return path
+
     @staticmethod
     def _format_summary_timestamp(seg: Dict[str, Any]) -> str:
         """
@@ -267,6 +297,37 @@ class DbAccess:
             LIMIT 1
         """
         return cls._fetch_one(sql, (questionnaire_id,))
+
+    @classmethod
+    def fetch_questionnaire_markdown_text_by_id(cls, questionnaire_id: int) -> Optional[str]:
+        """
+        根据问卷 ID 加载其 Markdown 文本内容。
+
+        参数:
+            questionnaire_id: 问卷主键 ID，对应 `bh_project_questionnaire.id`。
+
+        返回:
+            若 `md_path` 存在且文件可读，返回 Markdown 文本；否则返回 `None`。
+        """
+        questionnaire = cls.get_questionnaire_by_id(questionnaire_id)
+        if not questionnaire:
+            return None
+
+        md_path = str(questionnaire.get("md_path") or "").strip()
+        if not md_path:
+            return None
+
+        resolved_path = cls._resolve_data_path(md_path)
+        if resolved_path is None or not resolved_path.exists() or not resolved_path.is_file():
+            return None
+
+        try:
+            markdown_text = resolved_path.read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+        cleaned_text = markdown_text.strip()
+        return cleaned_text or None
 
     @classmethod
     def get_project_by_id(cls, project_id: int) -> Optional[Dict[str, Any]]:

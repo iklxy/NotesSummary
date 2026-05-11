@@ -369,7 +369,7 @@ def generate_overall_interview_note(
 
 def _normalize_minutes_outline_items(raw_items: Any) -> List[Dict[str, Any]]:
     """
-    将模型返回的纪要大纲小点列表归一化为统一结构。
+    将模型返回的智能纪要小点列表归一化为统一结构。
 
     参数:
         raw_items: 模型返回的 items / points / children 原始内容。
@@ -400,7 +400,7 @@ def _normalize_minutes_outline_items(raw_items: Any) -> List[Dict[str, Any]]:
 
 def _normalize_minutes_outline_sections(raw_sections: Any) -> List[Dict[str, Any]]:
     """
-    将模型返回的纪要大纲章节列表归一化为统一结构。
+    将模型返回的智能纪要章节列表归一化为统一结构。
 
     参数:
         raw_sections: 模型返回的 sections / outline 原始内容。
@@ -433,7 +433,7 @@ def _normalize_minutes_outline_sections(raw_sections: Any) -> List[Dict[str, Any
 
 def parse_minutes_outline_response(content: str) -> Dict[str, Any]:
     """
-    将模型返回的智能纪要大纲文本解析为结构化字典。
+    将模型返回的智能纪要文本解析为结构化字典。
 
     参数:
         content: 模型原始输出文本。
@@ -485,21 +485,16 @@ def parse_minutes_outline_response(content: str) -> Dict[str, Any]:
     }
 
 
-def generate_minutes_outline_from_transcript(
-    generate_fn: Callable[[str, str], str],
-    project_context_block: str,
-    transcript_text: str,
-) -> Dict[str, Any]:
+def _build_legacy_minutes_outline_prompts(project_context_block: str, transcript_text: str) -> tuple[str, str]:
     """
-    基于整篇转录文本生成智能纪要大纲。
+    构建旧版智能纪要 prompt。
 
     参数:
-        generate_fn: 实际执行 LLM 调用的函数。
         project_context_block: 已格式化好的项目背景块。
         transcript_text: 经清洗后的整篇访谈转录全文。
 
     返回:
-        结构化纪要大纲字典。
+        (system_prompt, user_prompt)。
     """
     system_prompt = (
         "你是专业的医疗咨询行业专家与信息提炼专家，精通医疗领域专业术语、咨询场景核心要点，"
@@ -567,27 +562,180 @@ def generate_minutes_outline_from_transcript(
         "6. 行动项若存在，必须标注负责人、时间；若无则输出“无”。\n"
         "7. 所有 summary 字段必须输出为自然语言正文，禁止输出 JSON 对象、键值对、大括号、代码块或字段名。\n"
     )
+    return system_prompt, user_prompt
+
+
+def _build_dg_minutes_outline_prompts(
+    project_context_block: str,
+    transcript_text: str,
+    questionnaire_text: str,
+) -> tuple[str, str]:
+    """
+    构建引入 DG 的智能纪要 prompt。
+
+    参数:
+        project_context_block: 已格式化好的项目背景块。
+        transcript_text: 经清洗后的整篇访谈转录全文。
+        questionnaire_text: 访谈使用的 DG / 问卷 Markdown 原文。
+
+    返回:
+        (system_prompt, user_prompt)。
+    """
+    dg_text = questionnaire_text.strip()
+    system_prompt = (
+        "你是专业医疗访谈纪要专家，擅长基于访谈原文（Transcript）与问卷（DG），生成严谨、客观、"
+        "可直接交付、字数≥4000 字的标准化结构化访谈纪要。\n"
+        "你不固定模块，完全以用户提供的 DG 为唯一框架，逐题对齐、逐题覆盖，适配所有科室、"
+        "所有疾病、所有治疗领域。\n"
+        "请严格执行以下铁律，无例外：\n\n"
+        "一、核心信息提取规则\n"
+        "1. 唯一信息来源\n"
+        "仅使用访谈原文，不添加任何外部知识、行业常识、主观推断、脑补结论。\n"
+        "2. DG 100% 覆盖\n"
+        "以用户提供的DG / 提纲为最终结构，逐题对应、逐题回答，不遗漏、不跳过、不合并、不自行增删模块。\n"
+        "3. 内容清洗\n"
+        "自动过滤寒暄、重复、打断、噪音、无关对话，仅保留数据、观点、药物评价、诊疗流程、患者特征。\n"
+        "4. 疾病 / 分型 / 分期严格准确\n"
+        "自动识别并严格区分疾病名称、亚型、分期、分级，严禁混淆、错写、误归类。\n"
+        "5. 原文忠实\n"
+        "不漏信息、不改观点、不合并语义、不调整顺序，100% 还原专家原意。\n\n"
+        "二、内容标注规则（通用）\n"
+        "1. 提纲问题已明确回答：按原文整理输出。\n"
+        "2. 访谈出现DG 未涉及的新增观点 / 数据：标注 【DG 未涉及，访谈新增内容】。"
+        "需要结合上下文连贯的展示出来，不能很突兀的展示在结尾\n"
+        "4. 访谈员提出的信息、产品介绍、数据引导：标注 【访谈员提出】。\n"
+        "5. 专家原话、关键判断、核心结论：必须使用 “” 标出。\n\n"
+        "三、药物 / 方案 / 器械精细化评价（强制通用）\n"
+        "对访谈中出现的所有药物、治疗方案、手术、在研产品、器械、检查方法，必须逐条、独立、完整整理以下 3 项，颗粒度精细、不笼统、不省略：\n"
+        "1. 适用 / 推荐人群（疾病 / 分型 / 分期、临床特征、场景偏好、使用条件）\n"
+        "2. 优势 / 获益点（疗效、安全性、便利性、医保、可及性、依从性）\n"
+        "3. 劣势 / 顾虑 / 限制（不良反应、禁忌、可及性、疗效短板、使用门槛）\n\n"
+        "四、数据与格式规则（通用）\n"
+        "1. 完整保留：患者量、例数、比例、年份、周期、费用、处方占比、发生率、评估周期、关键阈值。\n"
+        "2. 关键数据、核心结论、专业术语必须加粗高亮。\n"
+        "3. 能用表格呈现：分型占比、处方分布、药物对比、路径选择时，可以用表格呈现，切记不可以自己推断，只能根据原文来找数。\n"
+        "4. 语言专业、书面、正式、通顺，仅输出最终纪要，不输出任何过程、解释、原文对话。\n\n"
+        "五、输出结构规则（最重要）\n"
+        "结构完全跟随 DG：\n"
+        "--先思考出完整问卷（DG）的所有大纲模块（严格按问卷原题顺序、原题号、原模块标题） \n"
+        "--再按问卷模块顺序，逐模块进行内容总结 \n\n"
+        "--全程不新增、不删减、不调换模块顺序 \n\n"
+        "- 最终仅输出一份完整、通顺、书面化的访谈纪要，需要大于4000字。\n"
+        "- 切记不输出任何思考过程、中间步骤或原始对话、不添加任何主观推理、不编造信息。 \n"
+        "-能用表格呈现比例/分布时，可以用表格呈现\n"
+        "- 纪要按逻辑分段，结构清晰，语言专业。 \n"
+        "- 关键数据、比例、阈值、核心结论必须加粗高亮。\n"
+        "-切记任何数字 都不能自行推断得出，只能展示原文有的数字，百分比\n\n"
+        "请再次注意以下要求：\n"
+        "1. 原文复刻原则：所有内容需100%来源于访谈原文，如实呈现原文明确提及的表述、数值、观点，不增删、不修改、不延伸语义，未提及的内容统一标注【未提及】。\n"
+        "2. 禁止自主计算：严禁AI通过原文已有数值进行任何推导、计算、换算（例：原文仅提及“某类人群误诊率不超过30%-40%”，仅保留该原文表述，不得计算、补充“正确率为60%-70%”；原文未提及相关数值计算结果，不得自行生成）。\n"
+        "3. 禁止主观推导：严禁AI自行推导、补充原文未明确提及的信息（例：原文未提及“换药方向”相关具体比例，不得新增“90%以上的换药为升阶换药”等任何推导性表述，仅标注【未提及】或保留原文已有相关内容）。\n"
+        "4. 数值与表述规范：原文中的关键数据、专家原话、专业术语需完整复刻，不得擅自修改、替换，不得添加任何AI自主判断的表述。\n"
+        "5. 杜绝任何形式的\n"
+        "6. 严厉禁止AI自主加工、计算、推导，一定要确保纪要的真实性、客观性和准确性。\n"
+    )
+    user_prompt = (
+        "请基于以下 Transcript 和 DG 生成最终智能纪要。\n\n"
+        "【Transcript 原文】\n"
+        f"{transcript_text}\n\n"
+        "【DG 原文】\n"
+        f"{dg_text}\n\n"
+        "补充要求：\n"
+        "1. 所有数字只能保留原文明确出现的数字、百分比、比例、阈值，不得自行推断、计算、换算或补齐。\n"
+        "2. DG 未涉及的新信息，需要在对应模块中结合上下文自然展示，不要集中堆在结尾。\n"
+        "3. 原文未提及的内容统一标注【未提及】。\n"
+    )
+    return system_prompt, user_prompt
+
+
+def generate_minutes_outline_from_transcript(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    transcript_text: str,
+    questionnaire_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    基于整篇转录文本直接生成智能纪要。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        transcript_text: 经清洗后的整篇访谈转录全文。
+        questionnaire_text: 访谈关联的 DG / 问卷 Markdown 文本（可选）。
+
+    返回:
+        结构化智能纪要字典。
+    """
+    if questionnaire_text and questionnaire_text.strip():
+        system_prompt, user_prompt = _build_dg_minutes_outline_prompts(
+            project_context_block=project_context_block,
+            transcript_text=transcript_text,
+            questionnaire_text=questionnaire_text,
+        )
+        raw_output = generate_fn(system_prompt, user_prompt)
+        payload: Dict[str, Any]
+        parsed_payload = parse_minutes_outline_response(raw_output)
+        if isinstance(parsed_payload, dict) and parsed_payload.get("sections"):
+            payload = parsed_payload
+        else:
+            payload = {
+                "document_title": "",
+                "core_summary": "",
+                "sections": [],
+                "action_items": [],
+                "highlights": [],
+            }
+        raw_text = raw_output.strip()
+        payload["raw_minutes_text"] = raw_text
+        payload["minutes_text"] = raw_text
+        payload["llm_raw_output"] = raw_output
+        if not payload.get("document_title"):
+            payload["document_title"] = ""
+        return payload
+    else:
+        system_prompt, user_prompt = _build_legacy_minutes_outline_prompts(
+            project_context_block=project_context_block,
+            transcript_text=transcript_text,
+        )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_minutes_outline_response(raw_output)
 
     if not payload.get("sections"):
+        questionnaire_text_clean = questionnaire_text.strip() if questionnaire_text else ""
         retry_system_prompt = (
             system_prompt
             + "上一轮输出可能过长或不完整。请重新生成，必须输出完整 JSON，"
-            + "summary在准确的情况下保持简短，"
+            + "summary 在准确的情况下保持简短，"
             + "不要输出多余解释，不要输出 markdown，不要省略任何 JSON 字段。"
         )
-        retry_user_prompt = (
-            f"{project_context_block}"
-            "请重新生成一版更精简但完整的智能纪要大纲。\n"
-            "要求：\n"
-            "1. 只能输出合法 JSON。\n"
-            "2. 必须包含 core_summary、sections、action_items、highlights。\n"
-            "3. 章节数量不限，不要过少但是也不要过多。\n"
-            "4. 每个章节和小点的 summary 要尽量精炼，避免长段落。\n"
-            "5. 不要输出分析过程、不要输出说明文字、不要输出 markdown。\n\n"
-            f"【整篇访谈转录】\n{transcript_text}\n"
-        )
+        if questionnaire_text_clean:
+            retry_user_prompt = (
+                "请重新生成一版更精简但完整的智能纪要大纲，仍然需要遵守 DG 作为参考框架的规则。\n"
+                "要求：\n"
+                "1. 只能输出合法 JSON。\n"
+                "2. 必须包含 core_summary、sections、action_items、highlights。\n"
+                "3. 章节数量不限，不要过少但是也不要过多。\n"
+                "4. 每个章节和小点的 summary 要尽量精炼，避免长段落。\n"
+                "5. 不要输出分析过程、不要输出说明文字、不要输出 markdown。\n"
+                "6. DG 中未覆盖但访谈中出现的新主题可以保留，但仍需按语义顺序插入并标注为 DG 之外的内容。\n\n"
+                "【讨论指南（DG）/ 访谈问卷】\n"
+                "以下内容是本次访谈使用的讨论指南：\n\n"
+                f"{questionnaire_text_clean}\n\n"
+                "【整篇访谈转录】\n"
+                f"{transcript_text}\n"
+            )
+        else:
+            retry_user_prompt = (
+                f"{project_context_block}"
+                "请重新生成一版更精简但完整的智能纪要大纲。\n"
+                "要求：\n"
+                "1. 只能输出合法 JSON。\n"
+                "2. 必须包含 core_summary、sections、action_items、highlights。\n"
+                "3. 章节数量不限，不要过少但是也不要过多。\n"
+                "4. 每个章节和小点的 summary 要尽量精炼，避免长段落。\n"
+                "5. 不要输出分析过程、不要输出说明文字、不要输出 markdown。\n\n"
+                f"【整篇访谈转录】\n{transcript_text}\n"
+            )
         retry_raw_output = generate_fn(retry_system_prompt, retry_user_prompt)
         retry_payload = parse_minutes_outline_response(retry_raw_output)
         if retry_payload.get("sections"):
