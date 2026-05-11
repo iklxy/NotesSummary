@@ -331,11 +331,12 @@ export async function exportInterviewOverallNotesWord(
     credentials: "include",
   });
   if (!resp.ok) {
-    let detail: unknown;
+    const detailText = await resp.text();
+    let detail: unknown = detailText;
     try {
-      detail = await resp.json();
+      detail = detailText ? JSON.parse(detailText) : detailText;
     } catch {
-      detail = await resp.text();
+      detail = detailText;
     }
     throw new Error(`export overall notes word failed: ${JSON.stringify(detail)}`);
   }

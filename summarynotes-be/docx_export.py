@@ -316,11 +316,14 @@ def _append_markdown_text(
         if joined:
             paragraphs.append(_paragraph_from_text(joined, size=base_size))
 
-    for raw_line in lines:
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index]
         line = raw_line.strip()
         if not line:
             flush_buffer()
             paragraphs.append(_w_blank_paragraph())
+            index += 1
             continue
 
         heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
@@ -335,6 +338,7 @@ def _append_markdown_text(
                     size=heading_sizes.get(level, 22),
                 )
             )
+            index += 1
             continue
 
         if re.match(r"^(?:-|\*|\+)\s+", line) or re.match(r"^\d+[.)]\s+", line):
@@ -342,6 +346,7 @@ def _append_markdown_text(
             item_text = re.sub(r"^(?:-|\*|\+)\s+|^\d+[.)]\s+", "", line).strip()
             if item_text:
                 paragraphs.append(_paragraph_from_text(f"· {item_text}", size=base_size))
+            index += 1
             continue
 
         if "|" in line and index + 1 < len(lines):
@@ -366,6 +371,7 @@ def _append_markdown_text(
         if line.startswith("·"):
             flush_buffer()
             paragraphs.append(_paragraph_from_text(line, size=base_size))
+            index += 1
             continue
 
         if line.startswith(">"):
@@ -373,9 +379,11 @@ def _append_markdown_text(
             quote_text = re.sub(r"^>\s?", "", line).strip()
             if quote_text:
                 paragraphs.append(_paragraph_from_text(f"“{quote_text}”", size=base_size))
+            index += 1
             continue
 
         buffer.append(line)
+        index += 1
 
     flush_buffer()
 

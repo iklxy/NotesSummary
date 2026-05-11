@@ -25,14 +25,18 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     headers,
     credentials: "include",
   });
+  const responseText = await response.text();
   if (!response.ok) {
-    let detail: unknown;
+    let detail: unknown = responseText;
     try {
-      detail = await response.json();
+      detail = responseText ? JSON.parse(responseText) : responseText;
     } catch {
-      detail = await response.text();
+      detail = responseText;
     }
     throw new Error(`Request failed: ${response.status} ${JSON.stringify(detail)}`);
   }
-  return (await response.json()) as T;
+  if (!responseText) {
+    return undefined as T;
+  }
+  return JSON.parse(responseText) as T;
 }
