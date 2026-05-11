@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import require_current_user_id
+from ProjectContext import build_project_context
 from db import (
     count_questionnaire_usage,
     delete_questionnaire,
@@ -216,7 +217,7 @@ async def create_questionnaire(
 
         hotword_result = extract_questionnaire_hotword_candidates(
             markdown_text=md_text,
-            project_context=str(project_row.get("core_problem") or ""),
+            project_context=build_project_context(project_row),
         )
         candidates_raw = hotword_result.get("hotword_candidates") or []
         hotword_candidates: list[dict[str, Any]] = []

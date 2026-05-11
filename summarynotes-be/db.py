@@ -7,6 +7,9 @@ import pymysql
 
 from interview_detail_fields import build_interview_detail_meta, normalize_interview_detail_payload
 
+
+PROJECT_KEY_BQ_CURRENT_NAME = "__current__"
+
 dotenv.load_dotenv()
 
 
@@ -49,8 +52,6 @@ def insert_project(
     keywords: Optional[str],
     core_problem: Optional[str],
     created_by_user_id: int,
-    guide_file_name: Optional[str] = None,
-    guide_file_path: Optional[str] = None,
 ) -> int:
     """
     插入一条项目记录到 bh_project 表。
@@ -64,15 +65,15 @@ def insert_project(
         新插入记录的自增 ID。
     """
     sql = """
-        INSERT INTO bh_project (name, keywords, core_problem, guide_file_name, guide_file_path, created_by_user_id)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO bh_project (name, keywords, core_problem, created_by_user_id)
+        VALUES (%s, %s, %s, %s)
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 sql,
-                (name, keywords, core_problem, guide_file_name, guide_file_path, created_by_user_id),
+                (name, keywords, core_problem, created_by_user_id),
             )
             new_id = cursor.lastrowid
         conn.commit()
@@ -101,29 +102,55 @@ def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
             p.name,
             p.keywords,
             p.core_problem,
-            p.key_bq_json,
-            p.guide_file_name,
-            p.guide_file_path,
             p.created_by_user_id,
+            g.guide_file_name,
+            g.guide_file_path,
+            g.file_type AS guide_file_type,
+            g.extracted_text AS guide_extracted_text,
+            g.summary_text AS guide_summary_text,
+            g.status AS guide_status,
+            g.error_message AS guide_error_message,
+            g.generated_at AS guide_generated_at,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_questionnaire q
                 WHERE q.project_id = p.id
             ), 0) AS questionnaire_count,
-            CASE WHEN p.key_bq_json IS NULL OR JSON_LENGTH(p.key_bq_json) = 0 THEN 0 ELSE 1 END AS key_bq_count,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_key_bq k
+                WHERE k.project_id = p.id
+                  AND k.name = %s
+            ), 0) AS key_bq_count,
+            (
+                SELECT k.key_bq_json
+                FROM bh_project_key_bq k
+                WHERE k.project_id = p.id
+                  AND k.name = %s
+                LIMIT 1
+            ) AS key_bq_json,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_interview i
                 WHERE i.parse_project_id = p.id
             ), 0) AS interview_count
         FROM bh_project p
+        LEFT JOIN bh_project_guide g ON g.project_id = p.id
         WHERE (%s IS NULL OR p.created_by_user_id = %s)
         ORDER BY p.id DESC
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (created_by_user_id, created_by_user_id))
+            cursor.execute(
+                sql,
+                (
+                    PROJECT_KEY_BQ_CURRENT_NAME,
+                    PROJECT_KEY_BQ_CURRENT_NAME,
+                    created_by_user_id,
+                    created_by_user_id,
+                ),
+            )
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
@@ -149,22 +176,40 @@ def fetch_project_by_id(
             p.name,
             p.keywords,
             p.core_problem,
-            p.key_bq_json,
-            p.guide_file_name,
-            p.guide_file_path,
             p.created_by_user_id,
+            g.guide_file_name,
+            g.guide_file_path,
+            g.file_type AS guide_file_type,
+            g.extracted_text AS guide_extracted_text,
+            g.summary_text AS guide_summary_text,
+            g.status AS guide_status,
+            g.error_message AS guide_error_message,
+            g.generated_at AS guide_generated_at,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_questionnaire q
                 WHERE q.project_id = p.id
             ), 0) AS questionnaire_count,
-            CASE WHEN p.key_bq_json IS NULL OR JSON_LENGTH(p.key_bq_json) = 0 THEN 0 ELSE 1 END AS key_bq_count,
+            COALESCE((
+                SELECT COUNT(1)
+                FROM bh_project_key_bq k
+                WHERE k.project_id = p.id
+                  AND k.name = %s
+            ), 0) AS key_bq_count,
+            (
+                SELECT k.key_bq_json
+                FROM bh_project_key_bq k
+                WHERE k.project_id = p.id
+                  AND k.name = %s
+                LIMIT 1
+            ) AS key_bq_json,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_interview i
                 WHERE i.parse_project_id = p.id
             ), 0) AS interview_count
         FROM bh_project p
+        LEFT JOIN bh_project_guide g ON g.project_id = p.id
         WHERE p.id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
         LIMIT 1
@@ -172,7 +217,16 @@ def fetch_project_by_id(
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            cursor.execute(
+                sql,
+                (
+                    PROJECT_KEY_BQ_CURRENT_NAME,
+                    PROJECT_KEY_BQ_CURRENT_NAME,
+                    project_id,
+                    created_by_user_id,
+                    created_by_user_id,
+                ),
+            )
             row = cursor.fetchone()
     finally:
         conn.close()
@@ -270,20 +324,54 @@ def update_project_guide(
     project_id: int,
     guide_file_name: Optional[str] = None,
     guide_file_path: Optional[str] = None,
+    file_type: Optional[str] = None,
+    extracted_text: Any = None,
+    summary_text: Any = None,
+    status: Optional[str] = None,
+    error_message: Optional[str] = None,
+    generated_at: Optional[str] = None,
 ) -> int:
     """
-    更新项目级指南文件信息。
+    更新项目级指南信息。
     """
     sql = """
-        UPDATE bh_project
-        SET guide_file_name = %s,
-            guide_file_path = %s
-        WHERE id = %s
+        INSERT INTO bh_project_guide
+            (project_id, guide_file_name, guide_file_path, file_type, extracted_text, summary_text, status, error_message, generated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            guide_file_name = VALUES(guide_file_name),
+            guide_file_path = VALUES(guide_file_path),
+            file_type = VALUES(file_type),
+            extracted_text = VALUES(extracted_text),
+            summary_text = VALUES(summary_text),
+            status = VALUES(status),
+            error_message = VALUES(error_message),
+            generated_at = VALUES(generated_at)
     """
+
+    def _text_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (guide_file_name, guide_file_path, project_id))
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    _text_or_none(guide_file_name),
+                    _text_or_none(guide_file_path),
+                    _text_or_none(file_type) or "pdf",
+                    _text_or_none(extracted_text),
+                    _text_or_none(summary_text),
+                    _text_or_none(status) or "queued",
+                    _text_or_none(error_message),
+                    generated_at,
+                ),
+            )
             affected = cursor.rowcount
         conn.commit()
     except Exception:
@@ -292,6 +380,38 @@ def update_project_guide(
     finally:
         conn.close()
     return affected
+
+
+def fetch_project_guide_by_project_id(project_id: int) -> dict | None:
+    """
+    查询项目级指南记录。
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            guide_file_name,
+            guide_file_path,
+            file_type,
+            extracted_text,
+            summary_text,
+            status,
+            error_message,
+            generated_at,
+            created_at,
+            updated_at
+        FROM bh_project_guide
+        WHERE project_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
 
 
 def _json_or_none(value: Any) -> Optional[str]:
@@ -734,14 +854,16 @@ def upsert_project_key_bq(
     保存项目级单例 Key BQ。
     """
     sql = """
-        UPDATE bh_project
-        SET key_bq_json = %s
-        WHERE id = %s
+        INSERT INTO bh_project_key_bq
+            (project_id, name, key_bq_json)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            key_bq_json = VALUES(key_bq_json)
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (_json_or_none(key_bq_json), project_id))
+            cursor.execute(sql, (project_id, PROJECT_KEY_BQ_CURRENT_NAME, _json_or_none(key_bq_json)))
             affected = cursor.rowcount
         conn.commit()
     except Exception:
@@ -877,13 +999,17 @@ def fetch_key_bq_by_project(
         FROM bh_project_key_bq k
         INNER JOIN bh_project p ON p.id = k.project_id
         WHERE k.project_id = %s
+          AND k.name <> %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
         ORDER BY k.id DESC
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            cursor.execute(
+                sql,
+                (project_id, PROJECT_KEY_BQ_CURRENT_NAME, created_by_user_id, created_by_user_id),
+            )
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
@@ -951,13 +1077,13 @@ def fetch_project_stats(project_id: int) -> dict:
     sql = """
         SELECT
             (SELECT COUNT(1) FROM bh_project_questionnaire WHERE project_id = %s) AS questionnaire_count,
-            (SELECT CASE WHEN key_bq_json IS NULL OR JSON_LENGTH(key_bq_json) = 0 THEN 0 ELSE 1 END FROM bh_project WHERE id = %s) AS key_bq_count,
+            (SELECT COUNT(1) FROM bh_project_key_bq WHERE project_id = %s AND name = %s) AS key_bq_count,
             (SELECT COUNT(1) FROM bh_project_interview WHERE parse_project_id = %s) AS interview_count
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id, project_id, project_id))
+            cursor.execute(sql, (project_id, project_id, PROJECT_KEY_BQ_CURRENT_NAME, project_id))
             row = cursor.fetchone() or {}
     finally:
         conn.close()

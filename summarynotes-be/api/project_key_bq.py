@@ -22,6 +22,8 @@ from db import (
 
 router = APIRouter(prefix="/api/projects", tags=["project_key_bq"])
 
+_CURRENT_KEY_BQ_NAME = "__current__"
+
 
 class ProjectKeyBqCreateRequest(BaseModel):
     name: str
@@ -176,6 +178,8 @@ def create_key_bq(
     clean_name = payload.name.strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="key bq name is required")
+    if clean_name == _CURRENT_KEY_BQ_NAME:
+        raise HTTPException(status_code=400, detail="reserved key bq name")
 
     existing = fetch_key_bq_by_project(project_id, current_user_id)
     if any(str(row.get("name") or "").strip() == clean_name for row in existing):

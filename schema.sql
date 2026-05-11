@@ -40,6 +40,37 @@ CREATE TABLE `bh_project` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `bh_project_guide`
+--
+
+DROP TABLE IF EXISTS `bh_project_guide`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bh_project_guide` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `project_id` bigint NOT NULL COMMENT '关联 bh_project.id',
+  `guide_file_name` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '项目指南原始文件名',
+  `guide_file_path` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '项目指南文件路径',
+  `file_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pdf' COMMENT '文件类型：pdf 等',
+  `extracted_text` longtext COLLATE utf8mb4_unicode_ci COMMENT 'PDF 抽取 / OCR 后的全文文本',
+  `summary_text` longtext COLLATE utf8mb4_unicode_ci COMMENT '模型生成的项目指南学习总结',
+  `status` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued' COMMENT 'queued/extracting/summarizing/done/failed',
+  `error_message` text COLLATE utf8mb4_unicode_ci COMMENT '失败原因',
+  `generated_at` datetime DEFAULT NULL COMMENT '最近一次成功生成时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_bh_project_guide_project_id` (`project_id`),
+  KEY `idx_bh_project_guide_status` (`status`),
+  CONSTRAINT `fk_bh_project_guide_project`
+    FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `bh_project_guide_chk_1`
+    CHECK (`file_type` <> '' AND `status` <> '')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `bh_project_ca_table`
 --
 

@@ -1,6 +1,7 @@
 "@Date: 2026-04-24"
 "@Author: lixinyang"
 
+import base64
 import json
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,22 @@ class BaseLLMProvider:
 
         返回:
             模型返回的文本结果。
+        """
+        raise NotImplementedError
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        执行一次多模态生成。
+
+        默认实现只用于提示不支持图像输入的 provider。
         """
         raise NotImplementedError
 
@@ -87,6 +104,54 @@ class AnthropicProvider(BaseLLMProvider):
             temperature=temperature,
             system=system_prompt,
             messages=[{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
+        )
+        if not resp.content:
+            raise RuntimeError(f"LLM 返回内容为空: {resp}")
+
+        first = resp.content[0]
+        if getattr(first, "type", None) == "text":
+            return first.text
+
+        try:
+            return json.dumps(resp.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(resp)
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        调用 Anthropic messages API，支持图片输入。
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for image in images:
+            image_bytes = image.get("data")
+            mime_type = str(image.get("mime_type") or "image/png").strip() or "image/png"
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+                continue
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": base64.b64encode(bytes(image_bytes)).decode("ascii"),
+                    },
+                }
+            )
+
+        resp = self._client.messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}],
         )
         if not resp.content:
             raise RuntimeError(f"LLM 返回内容为空: {resp}")
@@ -187,6 +252,68 @@ class GeminiProvider(BaseLLMProvider):
         except Exception:
             return str(response)
 
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        调用 Gemini generate_content，支持图片输入。
+        """
+        try:
+            from google.genai import types  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "google-genai package 未安装，请先执行 `pip install google-genai` 后再使用 Gemini provider"
+            ) from exc
+
+        contents: List[Any] = [user_prompt]
+        for image in images:
+            image_bytes = image.get("data")
+            mime_type = str(image.get("mime_type") or "image/png").strip() or "image/png"
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+                continue
+            contents.append(types.Part.from_bytes(data=bytes(image_bytes), mime_type=mime_type))
+
+        response = self._client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+            ),
+        )
+        text = getattr(response, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text
+
+        candidates = getattr(response, "candidates", None)
+        if not candidates:
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            parts: List[str] = []
+            for part in getattr(content, "parts", []) or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
 
 class DoubaoProvider(BaseLLMProvider):
     """
@@ -238,6 +365,67 @@ class DoubaoProvider(BaseLLMProvider):
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=False,
+        )
+        if not getattr(response, "choices", None):
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        调用 Ark chat.completions，支持图片输入。
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for image in images:
+            image_bytes = image.get("data")
+            mime_type = str(image.get("mime_type") or "image/png").strip() or "image/png"
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+                continue
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{base64.b64encode(bytes(image_bytes)).decode('ascii')}",
+                    },
+                }
+            )
+
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
             ],
             max_tokens=max_tokens,
             temperature=temperature,

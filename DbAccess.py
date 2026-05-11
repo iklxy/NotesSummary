@@ -347,12 +347,21 @@ class DbAccess:
         """
         sql = """
             SELECT
-                id,
-                name,
-                keywords,
-                core_problem
-            FROM bh_project
-            WHERE id = %s
+                p.id,
+                p.name,
+                p.keywords,
+                p.core_problem,
+                g.guide_file_name,
+                g.guide_file_path,
+                g.file_type AS guide_file_type,
+                g.extracted_text AS guide_extracted_text,
+                g.summary_text AS guide_summary_text,
+                g.status AS guide_status,
+                g.error_message AS guide_error_message,
+                g.generated_at AS guide_generated_at
+            FROM bh_project p
+            LEFT JOIN bh_project_guide g ON g.project_id = p.id
+            WHERE p.id = %s
             LIMIT 1
         """
         return cls._fetch_one(sql, (project_id,))

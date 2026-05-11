@@ -18,6 +18,7 @@ import {
   Row,
   Select,
   Space,
+  Tabs,
   Spin,
   Tag,
   Typography,
@@ -33,6 +34,7 @@ import {
   ReloadOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
+import MarkdownContent from "../../../components/MarkdownContent";
 import QuestionnaireHotwordReviewModal from "../../../components/QuestionnaireHotwordReviewModal";
 import { createInterview } from "../../../lib/interviewsApi";
 import {
@@ -164,6 +166,34 @@ function getKeyBqCount(value?: KeyBqJson | null): number {
   return value?.key_bq_list?.length ?? 0;
 }
 
+function getGuideStatusTag(status?: string | null) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) {
+    return <Tag>未上传</Tag>;
+  }
+  if (normalized === "done") {
+    return <Tag color="green">学习完成</Tag>;
+  }
+  if (normalized === "failed") {
+    return <Tag color="red">学习失败</Tag>;
+  }
+  if (normalized === "extracting") {
+    return <Tag color="blue">正在抽取正文</Tag>;
+  }
+  if (normalized === "summarizing") {
+    return <Tag color="gold">正在学习总结</Tag>;
+  }
+  if (normalized === "queued" || normalized === "uploaded") {
+    return <Tag color="orange">等待学习</Tag>;
+  }
+  return <Tag>{status}</Tag>;
+}
+
+function isGuideLearning(status?: string | null): boolean {
+  const normalized = String(status || "").trim().toLowerCase();
+  return ["queued", "uploaded", "extracting", "summarizing"].includes(normalized);
+}
+
 function normalizeInterviewDetailValues(values?: Record<string, unknown> | null): InterviewDetailValues {
   const normalized: InterviewDetailValues = {};
   if (!values) {
@@ -224,6 +254,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [keyBqSaving, setKeyBqSaving] = useState(false);
   const [keyBqForm] = Form.useForm<KeyBqFormValues>();
 
+  const [guideResultVisible, setGuideResultVisible] = useState(false);
+
   const [interviewModalOpen, setInterviewModalOpen] = useState(false);
   const [interviewSaving, setInterviewSaving] = useState(false);
   const [interviewForm] = Form.useForm<InterviewFormValues>();
@@ -252,9 +284,29 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
   }, [projectId]);
 
+  const questionnaires = useMemo(() => projectDetail?.questionnaires ?? [], [projectDetail]);
+  const interviews = useMemo(() => projectDetail?.interviews ?? [], [projectDetail]);
+  const project = useMemo(() => projectDetail?.project ?? null, [projectDetail]);
+  const projectKeyBq = useMemo(() => project?.key_bq_json ?? null, [project]);
+  const guideStatus = useMemo(() => project?.guide_status ?? null, [project]);
+  const guideSummaryText = useMemo(() => project?.guide_summary_text ?? "", [project]);
+  const guideExtractedText = useMemo(() => project?.guide_extracted_text ?? "", [project]);
+
   useEffect(() => {
     void loadProjectDetail();
   }, [loadProjectDetail]);
+
+  useEffect(() => {
+    if (!guideStatus || !isGuideLearning(guideStatus)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadProjectDetail();
+    }, 5000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [guideStatus, loadProjectDetail]);
 
   useEffect(() => {
     const loadFields = async () => {
@@ -269,11 +321,6 @@ export default function ProjectDetailClient({ projectId }: Props) {
     };
     void loadFields();
   }, []);
-
-  const questionnaires = useMemo(() => projectDetail?.questionnaires ?? [], [projectDetail]);
-  const interviews = useMemo(() => projectDetail?.interviews ?? [], [projectDetail]);
-  const project = useMemo(() => projectDetail?.project ?? null, [projectDetail]);
-  const projectKeyBq = useMemo(() => project?.key_bq_json ?? null, [project]);
 
   const questionnaireByObjectType = useMemo(() => {
     const map = new Map<string, ProjectQuestionnaire>();
@@ -446,6 +493,10 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
   };
 
+  const openGuideResultModal = () => {
+    setGuideResultVisible(true);
+  };
+
   const handleQuestionnaireDelete = (item: ProjectQuestionnaire) => {
     Modal.confirm({
       title: "确认删除 DG",
@@ -470,6 +521,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
     setInterviewFileList([]);
     setInterviewDetailDraft({});
     interviewDetailForm.resetFields();
+    if (isGuideLearning(guideStatus)) {
+      message.warning("项目指南仍在学习中，建议完成后再创建访谈。");
+    }
     if (objectTypeOptions.length > 0) {
       interviewForm.setFieldsValue({
         object_type: objectTypeOptions[0].value,
@@ -634,15 +688,75 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         项目概览
                       </Title>
                       <Space wrap>
-                        {project.keywords ? <Tag color="blue">关键词：{project.keywords}</Tag> : null}
                         <Tag color="gold">项目 ID：{project.id}</Tag>
+                        {getGuideStatusTag(guideStatus)}
                       </Space>
                     </div>
                   </div>
                   <Divider style={{ margin: "18px 0" }} />
                   <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                    {project.core_problem || "暂无项目背景说明。"}
+                    {project.core_problem || "暂无旧项目背景说明。"}
                   </Paragraph>
+                </Card>
+              </Col>
+
+              <Col span={24}>
+                <Card className="summarynotes-project-list-shell">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
+                    <div>
+                      <Title level={4} style={{ marginBottom: 4 }} className="summarynotes-section-title">
+                        项目指南学习
+                      </Title>
+                      <Text type="secondary">
+                        上传 PDF 指南后，系统会异步抽取正文并生成学习总结。这里展示当前处理状态和学习结果。
+                      </Text>
+                    </div>
+                    <Space>
+                      <Button onClick={openGuideResultModal} disabled={!guideSummaryText && !guideExtractedText}>
+                        查看学习结果
+                      </Button>
+                    </Space>
+                  </div>
+                  <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                    <Space wrap>
+                      {getGuideStatusTag(guideStatus)}
+                      {project.guide_file_name ? <Tag color="blue">文件：{project.guide_file_name}</Tag> : null}
+                      {project.guide_generated_at ? (
+                        <Tag color="green">完成时间：{formatDate(project.guide_generated_at)}</Tag>
+                      ) : null}
+                    </Space>
+                    {project.guide_error_message ? (
+                      <Alert
+                        type="error"
+                        showIcon
+                        message="指南学习失败"
+                        description={project.guide_error_message}
+                      />
+                    ) : null}
+                    {isGuideLearning(guideStatus) ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="指南正在学习中"
+                        description="学习完成后，你可以在这里查看总结结果；创建访谈时建议先等待学习结束。"
+                      />
+                    ) : null}
+                    {guideSummaryText ? (
+                      <div
+                        style={{
+                          borderRadius: 16,
+                          background: "rgba(15, 23, 42, 0.03)",
+                          padding: 16,
+                          maxHeight: 260,
+                          overflow: "auto",
+                        }}
+                      >
+                        <MarkdownContent content={guideSummaryText} />
+                      </div>
+                    ) : (
+                      <Text type="secondary">暂无学习总结，请先上传 PDF 指南并等待处理完成。</Text>
+                    )}
+                  </Space>
                 </Card>
               </Col>
 
@@ -936,6 +1050,77 @@ export default function ProjectDetailClient({ projectId }: Props) {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        open={guideResultVisible}
+        title="项目指南学习结果"
+        onCancel={() => setGuideResultVisible(false)}
+        footer={null}
+        width={1100}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space wrap>
+            {getGuideStatusTag(guideStatus)}
+            {project?.guide_file_name ? <Tag color="blue">文件：{project.guide_file_name}</Tag> : null}
+            {project?.guide_generated_at ? (
+              <Tag color="green">完成时间：{formatDate(project.guide_generated_at)}</Tag>
+            ) : null}
+          </Space>
+          {project?.guide_error_message ? (
+            <Alert
+              type="error"
+              showIcon
+              message="指南学习失败"
+              description={project.guide_error_message}
+            />
+          ) : null}
+          <Tabs
+            items={[
+              {
+                key: "summary",
+                label: "学习总结",
+                children: guideSummaryText ? (
+                  <div
+                    style={{
+                      maxHeight: 560,
+                      overflow: "auto",
+                      paddingRight: 8,
+                      borderRadius: 16,
+                      background: "rgba(15, 23, 42, 0.02)",
+                      padding: 16,
+                    }}
+                  >
+                    <MarkdownContent content={guideSummaryText} />
+                  </div>
+                ) : (
+                  <Text type="secondary">暂无学习总结。</Text>
+                ),
+              },
+              {
+                key: "raw",
+                label: "抽取正文",
+                children: guideExtractedText ? (
+                  <div
+                    style={{
+                      maxHeight: 560,
+                      overflow: "auto",
+                      whiteSpace: "pre-wrap",
+                      borderRadius: 16,
+                      background: "rgba(15, 23, 42, 0.02)",
+                      padding: 16,
+                    }}
+                  >
+                    {guideExtractedText}
+                  </div>
+                ) : (
+                  <Text type="secondary">暂无抽取正文。</Text>
+                ),
+              },
+            ]}
+          />
+        </Space>
       </Modal>
 
       <Modal

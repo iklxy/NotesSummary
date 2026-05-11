@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 
 from api.auth import require_current_user_id
 from DocxToMd import convert_docx_questionnaire
+from ProjectContext import build_project_context
 from Hotword import save_hotword_state
 from QuestionnaireHotword import (
     extract_questionnaire_hotword_candidates,
@@ -688,7 +689,7 @@ async def create_interview(
                 questionnaire_md_text = _read_text_file(_get_data_root() / questionnaire_md_path)
             questionnaire_hotword_result = extract_questionnaire_hotword_candidates(
                 markdown_text=questionnaire_md_text,
-                project_context=str(project_row.get("core_problem") or ""),
+                project_context=build_project_context(project_row),
             )
             questionnaire_hotword_candidates = questionnaire_hotword_result.get("hotword_candidates") or []
             questionnaire_hotword_candidates_path = str(

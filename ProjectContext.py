@@ -17,16 +17,17 @@ def build_project_context(project_row: Dict[str, Any] | None) -> str:
         return ""
 
     name = str(project_row.get("name") or "").strip()
-    keywords = str(project_row.get("keywords") or "").strip()
+    guide_summary_text = str(project_row.get("guide_summary_text") or "").strip()
     core_problem = str(project_row.get("core_problem") or "").strip()
 
     lines: List[str] = ["【项目背景】"]
     if name:
         lines.append(f"项目名称：{name}")
-    if keywords:
-        lines.append(f"项目关键词：{keywords}")
+    if guide_summary_text:
+        lines.append("项目指南学习总结：")
+        lines.append(guide_summary_text)
     if core_problem:
-        lines.append(f"访谈核心描述：{core_problem}")
+        lines.append(f"访谈核心描述（兼容旧项目）：{core_problem}")
 
     if len(lines) == 1:
         return ""

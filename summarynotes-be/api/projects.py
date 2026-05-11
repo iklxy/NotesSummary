@@ -9,11 +9,12 @@ from urllib.parse import quote
 
 import requests
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
 from api.auth import require_current_user_id
 from InterviewLogger import log_project
+from guide_workflow import process_project_guide
 from db import (
     delete_project_graph,
     fetch_interview_by_id,
@@ -104,6 +105,8 @@ def _save_uploaded_project_guide_file(project_id: int, upload_file: UploadFile) 
     original_name = upload_file.filename or ""
     if not original_name:
         raise HTTPException(status_code=400, detail="上传指南缺少文件名")
+    if not original_name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="当前阶段仅支持 PDF 指南上传")
 
     target_dir = _get_project_guide_dir(project_id)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -478,6 +481,7 @@ def _build_ca_export_filename(project_name: str | None, project_id: int) -> str:
 
 @router.post("", response_model=Dict[str, Any])
 def create_project(
+    background_tasks: BackgroundTasks,
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
     keywords: Optional[str] = Form(None),
@@ -491,7 +495,7 @@ def create_project(
         name: 项目名称。
         keywords: 项目关键词，可空。
         core_problem: 项目背景说明，可空。
-        guide_file: 项目指南附件，可空，当前仅预留 word 文档上传。
+        guide_file: 项目指南附件，可空，当前仅支持 PDF。
 
     返回:
         新创建项目的基础信息字典，至少包含:
@@ -508,8 +512,6 @@ def create_project(
     if not clean_name:
         raise HTTPException(status_code=400, detail="项目名称不能为空")
 
-    guide_file_name: str | None = None
-    guide_file_path: str | None = None
     new_id: int | None = None
     try:
         new_id = insert_project(
@@ -517,12 +519,17 @@ def create_project(
             keywords=(keywords.strip() if keywords else None),
             core_problem=(core_problem.strip() if core_problem else None),
             created_by_user_id=current_user_id,
-            guide_file_name=guide_file_name,
-            guide_file_path=guide_file_path,
         )
         if guide_file is not None and guide_file.filename:
             guide_file_name, guide_file_path = _save_uploaded_project_guide_file(new_id, guide_file)
-            update_project_guide(new_id, guide_file_name=guide_file_name, guide_file_path=guide_file_path)
+            update_project_guide(
+                new_id,
+                guide_file_name=guide_file_name,
+                guide_file_path=guide_file_path,
+                file_type="pdf",
+                status="queued",
+            )
+            background_tasks.add_task(process_project_guide, new_id)
     except Exception as e:
         if new_id is not None:
             try:

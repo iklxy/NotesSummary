@@ -86,7 +86,11 @@ export default function Home() {
           guide_file: guideFileList[0]?.originFileObj as File | null | undefined,
         });
         setProjects((prev) => [created, ...prev]);
-        message.success("项目已创建");
+        message.success(
+          guideFileList.length > 0
+            ? "项目已创建，指南正在异步学习中，请稍后在项目详情查看结果"
+            : "项目已创建",
+        );
       }
       setModalVisible(false);
     } catch (e) {
@@ -183,9 +187,9 @@ export default function Home() {
                                 <Title level={5} style={{ marginBottom: 0 }}>
                                   {project.name}
                                 </Title>
-                                {project.keywords ? (
+                                {project.guide_status ? (
                                   <Text type="secondary" style={{ fontSize: 12 }}>
-                                    关键词：{project.keywords}
+                                    指南状态：{project.guide_status}
                                   </Text>
                                 ) : null}
                               </Space>
@@ -271,12 +275,12 @@ export default function Home() {
                 maxCount={1}
                 fileList={guideFileList}
                 onChange={({ fileList }) => setGuideFileList(fileList)}
-                accept=".docx"
+                accept=".pdf"
               >
-                <Button icon={<UploadOutlined />}>选择 docx 指南</Button>
+                <Button icon={<UploadOutlined />}>选择 PDF 指南</Button>
               </Upload>
               <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                指南为可选附件，当前先预留 docx 上传能力，后续可扩展 md 等格式。
+                指南为可选附件，上传后会异步做全文学习总结，并可在项目详情页查看结果。
               </Typography.Text>
             </Form.Item>
           ) : null}

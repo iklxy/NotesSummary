@@ -405,6 +405,12 @@ export interface Project {
   core_problem?: string | null;
   guide_file_name?: string | null;
   guide_file_path?: string | null;
+  guide_file_type?: string | null;
+  guide_extracted_text?: string | null;
+  guide_summary_text?: string | null;
+  guide_status?: string | null;
+  guide_error_message?: string | null;
+  guide_generated_at?: string | null;
   key_bq_json?: KeyBqJson | null;
   questionnaire_count?: number | null;
   key_bq_count?: number | null;
