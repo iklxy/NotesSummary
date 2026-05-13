@@ -262,6 +262,66 @@ class GeminiProvider(BaseLLMProvider):
         temperature: float = 0.2,
     ) -> str:
         """
+        调用 OpenAI chat.completions，支持图片输入。
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for image in images:
+            image_bytes = image.get("data")
+            mime_type = str(image.get("mime_type") or "image/png").strip() or "image/png"
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+                continue
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{base64.b64encode(bytes(image_bytes)).decode('ascii')}",
+                    },
+                }
+            )
+
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            max_completion_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if not getattr(response, "choices", None):
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 30000,
+        temperature: float = 0.2,
+    ) -> str:
+        """
         调用 Gemini generate_content，支持图片输入。
         """
         try:
@@ -507,6 +567,66 @@ class OpenAIProvider(BaseLLMProvider):
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
+            ],
+            max_completion_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if not getattr(response, "choices", None):
+            raise RuntimeError(f"LLM 返回内容为空: {response}")
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for part in content:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(str(part_text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(response)
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_name: str,
+        images: List[Dict[str, Any]],
+        max_tokens: int = 30000,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        调用 OpenAI chat.completions，支持图片输入。
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for image in images:
+            image_bytes = image.get("data")
+            mime_type = str(image.get("mime_type") or "image/png").strip() or "image/png"
+            if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+                continue
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{base64.b64encode(bytes(image_bytes)).decode('ascii')}",
+                    },
+                }
+            )
+
+        response = self._client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
             ],
             max_completion_tokens=max_tokens,
             temperature=temperature,

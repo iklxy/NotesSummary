@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import traceback
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from InterviewLogger import log_project
@@ -161,7 +162,10 @@ def _ocr_page_text(
             temperature=0.0,
         ).strip()
     except Exception as exc:
-        raise RuntimeError(f"ocr page {page_index + 1} failed: {exc}") from exc
+        raise RuntimeError(
+            f"ocr page {page_index + 1} failed:\n"
+            f"{traceback.format_exc()}"
+        ) from exc
 
 
 def _render_page_to_png(page: Any) -> bytes:
@@ -305,9 +309,10 @@ def process_project_guide(project_id: int) -> None:
             f"guide processing done extracted_chars={len(extracted_text)} summary_chars={len(summary_text)} ocr_pages={ocr_pages}",
         )
     except Exception as exc:
+        error_detail = traceback.format_exc()
         update_project_guide(
             project_id,
             status="failed",
-            error_message=str(exc),
+            error_message=error_detail,
         )
-        log_project("GUIDE", project_id, f"guide processing failed error={exc}")
+        log_project("GUIDE", project_id, f"guide processing failed error=\n{error_detail}")
