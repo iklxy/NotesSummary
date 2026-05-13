@@ -543,6 +543,7 @@ class ModelClient:
         key_bq_text: str,
         project_context: Optional[str] = None,
         interview_context: Optional[Any] = None,
+        user_dimensions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         先从单条 key BQ 中抽取后续回答所需的分析维度。
@@ -551,6 +552,7 @@ class ModelClient:
             key_bq_text: 单条 key BQ 的原文文本。
             project_context: 可选项目背景文本。
             interview_context: 可选访谈背景摘要。
+            user_dimensions: 用户已配置的维度列表，可选。
 
         返回:
             包含 `dimensions` 的字典。
@@ -565,6 +567,7 @@ class ModelClient:
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
+            user_dimensions=user_dimensions,
         )
 
     @classmethod

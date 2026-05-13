@@ -71,20 +71,18 @@ def _normalize_key_bq_items(raw_items: Any) -> List[dict[str, Any]]:
     result: List[dict[str, Any]] = []
     if not isinstance(raw_items, list):
         return result
-    for idx, item in enumerate(raw_items, start=1):
+    for item in raw_items:
         if isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            order_value = item.get("order") or idx
             dimensions = _normalize_dimensions(item.get("dimensions"))
         else:
             text = str(item or "").strip()
             if not text:
                 continue
-            order_value = idx
             dimensions = []
-        result.append({"order": int(order_value), "text": text, "dimensions": dimensions})
+        result.append({"order": len(result) + 1, "text": text, "dimensions": dimensions})
     return result
 
 
@@ -113,11 +111,11 @@ def _normalize_key_bq_json(raw_value: Any) -> str:
             payload = {"key_bq_list": _normalize_key_bq_items(parsed)}
         else:
             items = []
-            for idx, line in enumerate(text.splitlines(), start=1):
+            for line in text.splitlines():
                 line_text = line.strip()
                 if not line_text:
                     continue
-                items.append({"order": idx, "text": line_text, "dimensions": []})
+                items.append({"order": len(items) + 1, "text": line_text, "dimensions": []})
             payload = {"key_bq_list": items}
 
     items = payload.get("key_bq_list") if payload else []

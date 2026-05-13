@@ -283,6 +283,31 @@ def _parse_hotwords_list(raw_value: Any) -> list[str]:
     return []
 
 
+def _normalize_dimensions(raw_dimensions: Any) -> list[Dict[str, Any]]:
+    """
+    将维度列表归一化为 `{name, description?}` 结构。
+    """
+    if not isinstance(raw_dimensions, list):
+        return []
+
+    result: list[Dict[str, Any]] = []
+    for item in raw_dimensions:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            normalized: Dict[str, Any] = {"name": name}
+            description = str(item.get("description") or "").strip()
+            if description:
+                normalized["description"] = description
+            result.append(normalized)
+        else:
+            text = str(item or "").strip()
+            if text:
+                result.append({"name": text})
+    return result
+
+
 def _normalize_core_problem_json(raw_value: str) -> str:
     """
     将前端提交的 key BQ 内容统一归一化为 JSON 字符串。
@@ -307,14 +332,16 @@ def _normalize_core_problem_json(raw_value: str) -> str:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and isinstance(parsed.get("key_bq_list"), list):
             items = []
-            for idx, item in enumerate(parsed.get("key_bq_list") or [], start=1):
+            for item in parsed.get("key_bq_list") or []:
                 if isinstance(item, dict):
                     item_text = str(item.get("text") or "").strip()
+                    dimensions = _normalize_dimensions(item.get("dimensions"))
                 else:
                     item_text = str(item).strip()
+                    dimensions = []
                 if not item_text:
                     continue
-                items.append({"order": idx, "text": item_text})
+                items.append({"order": len(items) + 1, "text": item_text, "dimensions": dimensions})
             if not items:
                 raise ValueError("key BQ 列表不能为空")
             payload = {"key_bq_list": items}
@@ -323,11 +350,11 @@ def _normalize_core_problem_json(raw_value: str) -> str:
 
     if payload is None:
         items = []
-        for idx, line in enumerate(text.splitlines(), start=1):
+        for line in text.splitlines():
             line_text = line.strip()
             if not line_text:
                 continue
-            items.append({"order": idx, "text": line_text})
+            items.append({"order": len(items) + 1, "text": line_text, "dimensions": []})
         if not items:
             raise HTTPException(status_code=400, detail="key BQ 不能为空")
         payload = {"key_bq_list": items}
@@ -355,12 +382,22 @@ def _extract_key_bq_items(core_problem_json: str) -> list[Dict[str, Any]]:
         if isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             order = item.get("order") or idx
+            dimensions = _normalize_dimensions(item.get("dimensions"))
         else:
             text = str(item or "").strip()
             order = idx
+            dimensions = []
         if not text:
             continue
-        result.append({"order": int(order), "text": text, "status": "pending"})
+        dimension_json = {"user_dimensions": dimensions} if dimensions else None
+        result.append(
+            {
+                "order": int(order),
+                "text": text,
+                "dimension_json": dimension_json,
+                "status": "pending",
+            }
+        )
     return result
 
 

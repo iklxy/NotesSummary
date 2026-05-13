@@ -62,8 +62,23 @@ interface Props {
   projectId: number;
 }
 
+interface KeyBqDimensionFormValues {
+  name?: string;
+  description?: string;
+}
+
+interface KeyBqDimensionJsonValue {
+  name: string;
+  description?: string;
+}
+
+interface KeyBqItemFormValues {
+  text?: string;
+  dimensions?: KeyBqDimensionFormValues[];
+}
+
 interface KeyBqFormValues {
-  key_bq_text: string;
+  key_bq_list: KeyBqItemFormValues[];
 }
 
 interface InterviewFormValues {
@@ -88,18 +103,87 @@ interface QuestionnaireReviewState {
   candidates: QuestionnaireHotwordCandidate[];
 }
 
-function parseKeyBqJson(value?: KeyBqJson | null): string {
-  const items = value?.key_bq_list ?? [];
-  return items.map((item) => item.text).join("\n");
+function normalizeKeyBqDimensionValues(value?: KeyBqDimensionFormValues | null): KeyBqDimensionJsonValue | null {
+  if (!value) {
+    return null;
+  }
+  const name = String(value.name || "").trim();
+  const description = String(value.description || "").trim();
+  if (!name && !description) {
+    return null;
+  }
+  return {
+    name,
+    description: description || undefined,
+  };
 }
 
-function buildKeyBqJson(rawValue: string): string {
-  const items = rawValue
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((text, index) => ({ order: index + 1, text }));
-  return JSON.stringify({ key_bq_list: items }, null, 2);
+function buildKeyBqFormValues(value?: KeyBqJson | null): KeyBqFormValues {
+  const items = value?.key_bq_list ?? [];
+  if (items.length === 0) {
+    return { key_bq_list: [{ text: "", dimensions: [] }] };
+  }
+  return {
+    key_bq_list: items.map((item) => ({
+      text: item.text ?? "",
+      dimensions: (item.dimensions ?? []).map((dimension) => ({
+        name: dimension.name ?? "",
+        description: dimension.description ?? "",
+      })),
+    })),
+  };
+}
+
+function buildKeyBqJson(values: KeyBqFormValues): KeyBqJson {
+  const key_bq_list = (values.key_bq_list ?? [])
+    .map((item) => {
+      const text = String(item?.text || "").trim();
+      if (!text) {
+        return null;
+      }
+      const dimensions = (item?.dimensions ?? [])
+        .map(normalizeKeyBqDimensionValues)
+        .filter((dimension): dimension is KeyBqDimensionJsonValue => Boolean(dimension?.name));
+      return { text, dimensions };
+    })
+    .filter((item): item is { text: string; dimensions: KeyBqDimensionJsonValue[] } => Boolean(item))
+    .map((item, index) => ({
+      order: index + 1,
+      text: item.text,
+      dimensions: item.dimensions,
+    }));
+
+  if (key_bq_list.length === 0) {
+    throw new Error("请至少填写一条 Key BQ");
+  }
+
+  return { key_bq_list };
+}
+
+function renderKeyBqPreview(value?: KeyBqJson | null): string {
+  const items = value?.key_bq_list ?? [];
+  if (items.length === 0) {
+    return "";
+  }
+  return items
+    .map((item, index) => {
+      const lines = [`${index + 1}. ${item.text}`];
+      const dimensions = item.dimensions ?? [];
+      if (dimensions.length > 0) {
+        dimensions.forEach((dimension) => {
+          const name = String(dimension.name || "").trim();
+          if (!name) {
+            return;
+          }
+          const description = String(dimension.description || "").trim();
+          lines.push(`   - ${name}${description ? `：${description}` : ""}`);
+        });
+      } else {
+        lines.push("   - 二级维度：未填写");
+      }
+      return lines.join("\n");
+    })
+    .join("\n\n");
 }
 
 function parseHotwordCandidates(values: string[] | null | undefined): QuestionnaireHotwordCandidate[] {
@@ -462,9 +546,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
   const openKeyBqEditModal = () => {
     keyBqForm.resetFields();
-    keyBqForm.setFieldsValue({
-      key_bq_text: parseKeyBqJson(projectKeyBq),
-    });
+    keyBqForm.setFieldsValue(buildKeyBqFormValues(projectKeyBq));
     setKeyBqModalOpen(true);
   };
 
@@ -479,9 +561,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
     try {
       setKeyBqSaving(true);
       const values = await keyBqForm.validateFields();
-      const keyBqText = String(values.key_bq_text || "").trim();
       await updateProjectKeyBqCurrent(projectId, {
-        key_bq_json: buildKeyBqJson(keyBqText),
+        key_bq_json: buildKeyBqJson(values as KeyBqFormValues),
       });
       message.success("Key BQ 已保存");
       setKeyBqModalOpen(false);
@@ -856,7 +937,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         minHeight: 120,
                       }}
                     >
-                      {parseKeyBqJson(projectKeyBq) || "点击右上角按钮编辑项目 Key BQ。"}
+                      {renderKeyBqPreview(projectKeyBq) || "点击右上角按钮编辑项目 Key BQ。"}
                     </Paragraph>
                   </Space>
                 </Card>
@@ -1020,20 +1101,109 @@ export default function ProjectDetailClient({ projectId }: Props) {
         width={860}
         destroyOnHidden
       >
-        <Form form={keyBqForm} layout="vertical">
-          <Form.Item
-            label="Key BQ 内容"
-            name="key_bq_text"
-            rules={[{ required: true, message: "请输入 Key BQ 内容" }]}
-          >
-            <Input.TextArea
-              rows={10}
-              placeholder={`每行一个 Key BQ，例如：
-该访谈主要关注哪些伴随诊断靶点？
-国产和进口产品在当前市场中的竞争情况如何？
-未来市场布局和准入障碍有哪些？`}
-            />
-          </Form.Item>
+        <Form form={keyBqForm} layout="vertical" initialValues={buildKeyBqFormValues(projectKeyBq)}>
+          <Form.List name="key_bq_list">
+            {(fields, { add, remove }) => (
+              <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                {fields.map((field, index) => (
+                  <Card
+                    key={field.key}
+                    size="small"
+                    style={{
+                      borderRadius: 16,
+                      background: "rgba(15, 23, 42, 0.02)",
+                    }}
+                  >
+                    <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
+                      <div>
+                        <Text strong>Key BQ #{index + 1}</Text>
+                        <div>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            留空会在保存时自动忽略。
+                          </Text>
+                        </div>
+                      </div>
+                      <Button danger type="text" onClick={() => remove(field.name)}>
+                        删除
+                      </Button>
+                    </Space>
+
+                    <Form.Item
+                      label="BQ 内容"
+                      name={[field.name, "text"]}
+                      style={{ marginTop: 12, marginBottom: 12 }}
+                    >
+                      <Input.TextArea
+                        rows={3}
+                        placeholder="请输入 Key BQ 内容"
+                      />
+                    </Form.Item>
+
+                    <Divider style={{ margin: "12px 0" }}>二级维度（可选）</Divider>
+
+                    <Form.List name={[field.name, "dimensions"]}>
+                      {(dimensionFields, { add: addDimension, remove: removeDimension }) => (
+                        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                          {dimensionFields.map((dimensionField, dimensionIndex) => (
+                            <Card
+                              key={dimensionField.key}
+                              size="small"
+                              style={{ borderRadius: 14, background: "rgba(59, 130, 246, 0.03)" }}
+                            >
+                              <Space
+                                style={{ width: "100%", justifyContent: "space-between" }}
+                                align="start"
+                              >
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                  维度 #{dimensionIndex + 1}
+                                </Text>
+                                <Button danger type="text" onClick={() => removeDimension(dimensionField.name)}>
+                                  删除
+                                </Button>
+                              </Space>
+                              <Row gutter={12}>
+                                <Col span={8}>
+                                  <Form.Item
+                                    label="名称"
+                                    name={[dimensionField.name, "name"]}
+                                    style={{ marginBottom: 0, marginTop: 8 }}
+                                  >
+                                    <Input placeholder="维度名称" />
+                                  </Form.Item>
+                                </Col>
+                                <Col span={16}>
+                                  <Form.Item
+                                    label="描述"
+                                    name={[dimensionField.name, "description"]}
+                                    style={{ marginBottom: 0, marginTop: 8 }}
+                                  >
+                                    <Input placeholder="维度描述" />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                            </Card>
+                          ))}
+
+                          <Button
+                            type="dashed"
+                            icon={<PlusOutlined />}
+                            onClick={() => addDimension({ name: "", description: "" })}
+                            block
+                          >
+                            添加维度
+                          </Button>
+                        </Space>
+                      )}
+                    </Form.List>
+                  </Card>
+                ))}
+
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ text: "", dimensions: [] })} block>
+                  添加 Key BQ
+                </Button>
+              </Space>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 

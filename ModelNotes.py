@@ -1016,6 +1016,7 @@ def generate_kbq_dimensions(
     project_context_block: str,
     interview_context_block: str,
     key_bq_text: str,
+    user_dimensions: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     先从单条 key BQ 中抽取后续回答所需的分析维度。
@@ -1025,33 +1026,70 @@ def generate_kbq_dimensions(
         project_context_block: 已格式化好的项目背景块。
         interview_context_block: 已格式化好的访谈背景块。
         key_bq_text: 单条 key BQ 文本。
+        user_dimensions: 用户已指定的维度列表，可选。
 
     返回:
         包含 `dimensions` 的字典。
     """
-    system_prompt = (
-        "你是一名医学、药学、体外诊断和市场调研领域的分析专家。"
-        "你的任务是把单条 key BQ 抽象成6个适合做纪要的分析维度。"
-        "只输出严格合法的 JSON，不要输出额外说明。"
-    )
-    user_prompt = (
-        f"{project_context_block}"
-        f"{interview_context_block}"
-        "下面是一条 key BQ，请你抽取 3 到 4 个适合后续生成 notes 的分析维度。"
-        "维度应当是可操作的分析框架，而不是空泛标签。\n\n"
-        f"【key BQ】\n{key_bq_text}\n\n"
-        "请输出 JSON，结构参考如下：\n"
-        "{\n"
-        '  "dimensions": [\n'
-        '    {"name": "维度名称", "description": "维度描述"}\n'
-        "  ]\n"
-        "}\n"
-        "要求：\n"
-        "1. 维度数量控制在6个。\n"
-        "2. 维度应抽象、稳定、适合后续检索总结。\n"
-        "3. 不要输出不必要的解释。\n"
-        "4. 维度应该常见且普适，不要生成过于冗余的维度"
-    )
+    normalized_user_dimensions = _normalize_dimension_items(user_dimensions or [])
+    user_dimension_lines: List[str] = []
+    for idx, item in enumerate(normalized_user_dimensions, start=1):
+        name = str(item.get("name") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not name:
+            continue
+        user_dimension_lines.append(f"[{idx}] {name}" + (f"：{description}" if description else ""))
+    user_dimensions_block = "\n".join(user_dimension_lines)
+
+    if normalized_user_dimensions:
+        system_prompt = (
+            "你是一名医学、药学、体外诊断和市场调研领域的分析专家。"
+            "你的任务是基于用户已定义的分析维度，补充少量不重复的维度候选。"
+            "只输出严格合法的 JSON，不要输出额外说明。"
+        )
+        user_prompt = (
+            f"{project_context_block}"
+            f"{interview_context_block}"
+            "下面是一条 key BQ。用户已经提供了必须覆盖的分析维度。"
+            "请在不重复、不改写用户维度的前提下，补充 0 到 3 个额外维度。\n\n"
+            f"【key BQ】\n{key_bq_text}\n\n"
+            f"【用户已定义的维度】\n{user_dimensions_block}\n\n"
+            "请输出 JSON，结构参考如下：\n"
+            "{\n"
+            '  "dimensions": [\n'
+            '    {"name": "补充维度名称", "description": "补充维度描述"}\n'
+            "  ]\n"
+            "}\n"
+            "要求：\n"
+            "1. 只输出需要补充的维度，不要重复用户已定义的维度。\n"
+            "2. 如果用户已定义的维度已经足够，可以返回空数组。\n"
+            "3. 维度应当是可操作的分析框架，而不是空泛标签。\n"
+            "4. 不要输出不必要的解释。"
+        )
+    else:
+        system_prompt = (
+            "你是一名医学、药学、体外诊断和市场调研领域的分析专家。"
+            "你的任务是把单条 key BQ 抽象成适合做纪要的分析维度。"
+            "只输出严格合法的 JSON，不要输出额外说明。"
+        )
+        user_prompt = (
+            f"{project_context_block}"
+            f"{interview_context_block}"
+            "下面是一条 key BQ，请你抽取 3 到 4 个适合后续生成 notes 的分析维度。"
+            "维度应当是可操作的分析框架，而不是空泛标签。\n\n"
+            f"【key BQ】\n{key_bq_text}\n\n"
+            "请输出 JSON，结构参考如下：\n"
+            "{\n"
+            '  "dimensions": [\n'
+            '    {"name": "维度名称", "description": "维度描述"}\n'
+            "  ]\n"
+            "}\n"
+            "要求：\n"
+            "1. 维度数量控制在6个。\n"
+            "2. 维度应抽象、稳定、适合后续检索总结。\n"
+            "3. 不要输出不必要的解释。\n"
+            "4. 维度应该常见且普适，不要生成过于冗余的维度"
+        )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_dimensions_response(generate_fn, content)
 
