@@ -3,7 +3,7 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { Typography } from "antd";
-import { BRAND_BADGE, BRAND_LOGO_SRC, BRAND_NAME } from "../lib/branding";
+import { BRAND_LOGO_SRC, BRAND_MARK_TEXT } from "../lib/branding";
 
 const { Title, Paragraph } = Typography;
 
@@ -49,7 +49,7 @@ export function BrandMark({ centered = false, className, size = "md" }: BrandMar
   return (
     <div
       className={[
-        "inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white shadow-[0_16px_36px_-24px_rgba(15,23,42,0.28)]",
+        "inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/96 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.28)] backdrop-blur-sm",
         centered ? "mx-auto" : "",
         sizeClass.badgeClassName,
         className ?? "",
@@ -62,15 +62,12 @@ export function BrandMark({ centered = false, className, size = "md" }: BrandMar
         alt="BenHealth logo"
         width={2126}
         height={1004}
-        className={`${sizeClass.logoClassName} w-auto object-contain`}
+        className={`${sizeClass.logoClassName} w-auto shrink-0 object-contain`}
         priority
       />
-      <div className="flex flex-col leading-tight">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-          {BRAND_BADGE}
-        </span>
-        <span className={`${sizeClass.titleClassName} font-semibold text-slate-900`}>{BRAND_NAME}</span>
-      </div>
+      <span className={`${sizeClass.titleClassName} whitespace-nowrap font-semibold tracking-[-0.01em] text-slate-900`}>
+        {BRAND_MARK_TEXT}
+      </span>
     </div>
   );
 }
@@ -90,7 +87,7 @@ export default function BrandHero({
   return (
     <div
       className={[
-        "relative isolate z-10 overflow-hidden border-b border-slate-200 bg-gradient-to-r from-white via-slate-50 to-cyan-50 px-6 pb-14 pt-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.08)] md:px-10 md:pb-16 md:pt-10",
+        "relative isolate z-10 overflow-hidden border-b border-slate-200 bg-gradient-to-r from-white via-slate-50 to-cyan-50 px-6 pb-24 pt-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.08)] md:px-10 md:pb-28 md:pt-10",
         className ?? "",
       ]
         .filter(Boolean)
@@ -98,22 +95,24 @@ export default function BrandHero({
     >
       <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-sky-400/10 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-12 left-1/3 h-44 w-44 rounded-full bg-cyan-300/12 blur-3xl" />
-      <div className="relative flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
-        <div className={contentMaxWidthClassName}>
+      <div className="relative flex flex-col gap-8 md:flex-row md:items-start md:justify-between md:gap-10">
+        <div className={`${contentMaxWidthClassName} min-w-0 flex-1`}>
           <BrandMark />
           {backButton ? <div className="mt-4">{backButton}</div> : null}
           <Title level={2} className={`!mb-2 !mt-4 !text-slate-900 ${titleClassName ?? ""}`.trim()}>
             {title}
           </Title>
           {description ? (
-            <Paragraph className={`!mb-0 !max-w-3xl !text-slate-600 ${descriptionClassName ?? ""}`.trim()}>
+            <Paragraph
+              className={`!mb-0 !max-w-4xl !leading-relaxed !text-slate-600 ${descriptionClassName ?? ""}`.trim()}
+            >
               {description}
             </Paragraph>
           ) : null}
           {tags ? <div className="mt-4 flex flex-wrap gap-2">{tags}</div> : null}
         </div>
         {actions || stats ? (
-          <div className="flex flex-col items-start gap-4 md:items-end">
+          <div className="flex shrink-0 flex-col items-start gap-4 md:items-end">
             {stats}
             {actions}
           </div>
@@ -123,4 +122,4 @@ export default function BrandHero({
   );
 }
 
-export { BRAND_BADGE, BRAND_LOGO_SRC, BRAND_NAME };
+export { BRAND_LOGO_SRC, BRAND_MARK_TEXT };

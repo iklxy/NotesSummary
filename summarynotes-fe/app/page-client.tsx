@@ -141,7 +141,7 @@ export default function Home() {
         <div className="p-6 md:p-8">
           <Row gutter={[16, 16]}>
             <Col span={24}>
-              <Card className="summarynotes-project-list-shell">
+              <div className="summarynotes-page-intro-block">
                 <div className="mb-4 flex items-center justify-between">
                   <Title level={4} style={{ marginBottom: 0 }} className="summarynotes-section-title">
                     项目入口
@@ -214,9 +214,9 @@ export default function Home() {
                         </Card>
                       </List.Item>
                     )}
-                  />
+                    />
                 )}
-              </Card>
+              </div>
             </Col>
           </Row>
         </div>
