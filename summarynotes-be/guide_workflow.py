@@ -33,6 +33,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 _CHUNK_MAX_CHARS = 12000
 _OCR_TEXT_THRESHOLD = 30
+_CORE_PROBLEM_MAX_CHARS = 400
 
 
 def _get_data_root() -> Path:
@@ -207,7 +208,7 @@ def _build_core_problem_prompt(project_name: str, keywords: str, summary_text: s
 
 要求：
 1. 只能基于给定总结，不要引入新信息或主观推断。
-2. 用一段中文自然语言输出，长度控制在 80-120 个汉字左右。
+2. 只输出一段中文自然语言，长度严格控制在 400 个汉字。
 3. 重点概括项目要解决的核心问题、适用场景和主要关注点。
 4. 不要输出标题、列表、引号或额外解释，只输出正文。
 5. 生成结果要适合直接在项目详情页展示。
@@ -228,14 +229,17 @@ def _compact_text(text: str) -> str:
     return re.sub(r"\s+", " ", _normalize_text(text)).strip()
 
 
-def _fallback_core_problem(summary_text: str) -> str:
-    compact = _compact_text(summary_text)
+def _normalize_core_problem_text(text: str) -> str:
+    compact = _compact_text(text)
     if not compact:
         return ""
-    if len(compact) <= 120:
-        return compact
-    clipped = compact[:117].rstrip("，,；;。:：、 ")
-    return f"{clipped}..."
+    if len(compact) > _CORE_PROBLEM_MAX_CHARS:
+        compact = compact[:_CORE_PROBLEM_MAX_CHARS].rstrip("，,；;。:：、 ")
+    return compact
+
+
+def _fallback_core_problem(summary_text: str) -> str:
+    return _normalize_core_problem_text(summary_text)
 
 
 def _generate_core_problem_from_summary(summary_text: str, project_name: str, keywords: str) -> str:
@@ -245,13 +249,15 @@ def _generate_core_problem_from_summary(summary_text: str, project_name: str, ke
         keywords=keywords,
         summary_text=summary_text,
     )
-    return provider.generate(
+    return _normalize_core_problem_text(
+        provider.generate(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         model_name=model_name,
         max_tokens=2048,
         temperature=0.2,
-    ).strip()
+        )
+    )
 
 
 def _build_provider() -> tuple[Any, str]:
