@@ -44,13 +44,13 @@ import {
   updateProjectQuestionnaireHotwords,
 } from "../../../lib/projectQuestionnairesApi";
 import { updateProjectKeyBqCurrent } from "../../../lib/projectKeyBqApi";
-import { getInterviewDetailFields } from "../../../lib/interviewDetailFieldsApi";
 import { getProjectDetail } from "../../../lib/projectsApi";
 import type {
   CreatedInterviewResponse,
   InterviewDetailFieldDefinition,
   KeyBqJson,
   ProjectDetail,
+  ProjectRole,
   ProjectQuestionnaire,
   QuestionnaireHotwordCandidate,
 } from "../../../lib/types";
@@ -83,12 +83,13 @@ interface KeyBqFormValues {
 
 interface InterviewFormValues {
   interview_date?: Dayjs | null;
-  object_type: string;
+  role_id?: number | null;
+  questionnaire_id?: number | null;
 }
 
 type InterviewDetailValues = Record<string, string | number | null | undefined>;
 
-const FALLBACK_INTERVIEW_DETAIL_FIELDS: InterviewDetailFieldDefinition[] = [
+const DEFAULT_DOCTOR_ROLE_FIELDS: InterviewDetailFieldDefinition[] = [
   { key: "doctor_level", label: "医生级别", kind: "text" },
   { key: "doctor_title", label: "职称", kind: "text" },
   { key: "city", label: "城市", kind: "text" },
@@ -96,6 +97,109 @@ const FALLBACK_INTERVIEW_DETAIL_FIELDS: InterviewDetailFieldDefinition[] = [
   { key: "department", label: "科室", kind: "text" },
   { key: "hospital_decile", label: "医院Decile", kind: "number" },
 ];
+
+const DEFAULT_PATIENT_ROLE_FIELDS: InterviewDetailFieldDefinition[] = [
+  { key: "patient_disease_type", label: "患者疾病类型", kind: "text" },
+  { key: "region", label: "地区", kind: "text" },
+  { key: "hospital", label: "就诊医院", kind: "text" },
+  { key: "department", label: "就诊科室", kind: "text" },
+];
+
+const DEFAULT_CUSTOM_ROLE_FIELDS: InterviewDetailFieldDefinition[] = [];
+
+const DEFAULT_ROLE_TEMPLATE_MAP: Record<string, InterviewDetailFieldDefinition[]> = {
+  doctor: DEFAULT_DOCTOR_ROLE_FIELDS,
+  patient: DEFAULT_PATIENT_ROLE_FIELDS,
+  custom: DEFAULT_CUSTOM_ROLE_FIELDS,
+};
+
+function cloneFieldDefinitions(fields: InterviewDetailFieldDefinition[]): InterviewDetailFieldDefinition[] {
+  return fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    kind: field.kind,
+  }));
+}
+
+function normalizeRoleType(value?: string | null): "doctor" | "patient" | "custom" | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "doctor" || normalized === "医生") {
+    return "doctor";
+  }
+  if (normalized === "patient" || normalized === "患者") {
+    return "patient";
+  }
+  if (normalized === "custom" || normalized === "自定义" || normalized === "other") {
+    return "custom";
+  }
+  return null;
+}
+
+function getRoleTypeLabel(value?: string | null): string {
+  const normalized = normalizeRoleType(value);
+  if (normalized === "doctor") {
+    return "医生";
+  }
+  if (normalized === "patient") {
+    return "患者";
+  }
+  if (normalized === "custom") {
+    return "自定义角色";
+  }
+  return String(value || "").trim() || "角色";
+}
+
+function getDefaultRoleFields(roleType?: string | null): InterviewDetailFieldDefinition[] {
+  const normalized = normalizeRoleType(roleType);
+  if (!normalized) {
+    return [];
+  }
+  return cloneFieldDefinitions(DEFAULT_ROLE_TEMPLATE_MAP[normalized] ?? []);
+}
+
+function normalizeFieldDefinitions(
+  fields?: Array<Partial<InterviewDetailFieldDefinition>> | null,
+): InterviewDetailFieldDefinition[] {
+  if (!Array.isArray(fields)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: InterviewDetailFieldDefinition[] = [];
+  fields.forEach((field) => {
+    const key = String(field?.key || "").trim();
+    const label = String(field?.label || "").trim();
+    const kind = String(field?.kind || "text").trim() || "text";
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push({
+      key,
+      label: label || key,
+      kind,
+    });
+  });
+  return result;
+}
+
+function buildInterviewFieldOptions(role?: ProjectRole | null): InterviewDetailFieldDefinition[] {
+  if (!role) {
+    return [];
+  }
+  const fields = normalizeFieldDefinitions(role.detail_schema_json);
+  if (fields.length > 0) {
+    return fields;
+  }
+  return getDefaultRoleFields(role.role_type);
+}
+
+function buildRoleTemplateFields(roleType?: string | null): InterviewDetailFieldDefinition[] {
+  const normalized = normalizeRoleType(roleType);
+  if (!normalized) {
+    return [];
+  }
+  return getDefaultRoleFields(normalized);
+}
 
 interface QuestionnaireReviewState {
   questionnaireId: number;
@@ -299,28 +403,6 @@ function getQuestionnaireStatusTag(status?: string | null) {
   return <Tag>{normalized || "未知状态"}</Tag>;
 }
 
-function getObjectTypeLabel(value?: string | null): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "patient" || normalized === "患者") {
-    return "患者";
-  }
-  if (normalized === "doctor" || normalized === "医生") {
-    return "医生";
-  }
-  return "未配置类型";
-}
-
-function normalizeObjectType(value?: string | null): "patient" | "doctor" | null {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "patient" || normalized === "患者") {
-    return "patient";
-  }
-  if (normalized === "doctor" || normalized === "医生") {
-    return "doctor";
-  }
-  return null;
-}
-
 function getInterviewStatusTag(status?: number | null) {
   if (status === 2) {
     return <Tag color="green">已完成</Tag>;
@@ -414,6 +496,12 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [questionnaireSaving, setQuestionnaireSaving] = useState(false);
   const [questionnaireForm] = Form.useForm();
   const [questionnaireFileList, setQuestionnaireFileList] = useState<UploadFile[]>([]);
+  const [questionnaireRoleMode, setQuestionnaireRoleMode] = useState<"existing" | "new">("existing");
+  const [questionnaireRoleType, setQuestionnaireRoleType] = useState<"doctor" | "patient" | "custom">("doctor");
+  const [questionnaireRoleId, setQuestionnaireRoleId] = useState<number | null>(null);
+  const [questionnaireRoleFields, setQuestionnaireRoleFields] = useState<InterviewDetailFieldDefinition[]>(
+    cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+  );
   const [questionnaireReviewState, setQuestionnaireReviewState] =
     useState<QuestionnaireReviewState | null>(null);
   const [questionnaireReviewVisible, setQuestionnaireReviewVisible] = useState(false);
@@ -430,11 +518,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [interviewForm] = Form.useForm<InterviewFormValues>();
   const [interviewDetailModalOpen, setInterviewDetailModalOpen] = useState(false);
   const [interviewDetailForm] = Form.useForm<InterviewDetailValues>();
-  const [interviewDetailFields, setInterviewDetailFields] = useState<InterviewDetailFieldDefinition[]>(
-    FALLBACK_INTERVIEW_DETAIL_FIELDS,
-  );
   const [interviewDetailDraft, setInterviewDetailDraft] = useState<InterviewDetailValues>({});
   const [interviewFileList, setInterviewFileList] = useState<UploadFile[]>([]);
+  const [selectedInterviewRoleId, setSelectedInterviewRoleId] = useState<number | null>(null);
 
   const loadProjectDetail = useCallback(async () => {
     if (!projectId || projectId <= 0) {
@@ -453,6 +539,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
   }, [projectId]);
 
+  const roles = useMemo(() => projectDetail?.roles ?? [], [projectDetail]);
   const questionnaires = useMemo(() => projectDetail?.questionnaires ?? [], [projectDetail]);
   const interviews = useMemo(() => projectDetail?.interviews ?? [], [projectDetail]);
   const project = useMemo(() => projectDetail?.project ?? null, [projectDetail]);
@@ -477,65 +564,156 @@ export default function ProjectDetailClient({ projectId }: Props) {
     };
   }, [guideStatus, loadProjectDetail]);
 
-  useEffect(() => {
-    const loadFields = async () => {
-      try {
-        const resp = await getInterviewDetailFields();
-        if (resp.fields && resp.fields.length > 0) {
-          setInterviewDetailFields(resp.fields);
-        }
-      } catch {
-        setInterviewDetailFields(FALLBACK_INTERVIEW_DETAIL_FIELDS);
-      }
-    };
-    void loadFields();
-  }, []);
+  const roleById = useMemo(() => {
+    const map = new Map<number, ProjectRole>();
+    roles.forEach((role) => {
+      map.set(role.id, role);
+    });
+    return map;
+  }, [roles]);
 
-  const questionnaireByObjectType = useMemo(() => {
-    const map = new Map<string, ProjectQuestionnaire>();
+  const questionnairesByRoleId = useMemo(() => {
+    const map = new Map<number, ProjectQuestionnaire[]>();
     questionnaires.forEach((item) => {
-      const objectType = normalizeObjectType(item.object_type);
-      if (!objectType) {
+      const roleId = item.role_id ?? null;
+      if (!roleId) {
         return;
       }
-      if (!map.has(objectType)) {
-        map.set(objectType, item);
-      }
+      const current = map.get(roleId) ?? [];
+      current.push(item);
+      map.set(roleId, current);
     });
     return map;
   }, [questionnaires]);
 
-  const objectTypeOptions = useMemo(
-    () =>
-      ["patient", "doctor"]
-        .filter((type) => questionnaireByObjectType.has(type))
-        .map((type) => ({
-          value: type,
-          label: `${getObjectTypeLabel(type)} · ${questionnaireByObjectType.get(type)?.name || "DG"}`,
-        })),
-    [questionnaireByObjectType],
-  );
+  const questionnaireById = useMemo(() => {
+    const map = new Map<number, ProjectQuestionnaire>();
+    questionnaires.forEach((item) => {
+      map.set(item.id, item);
+    });
+    return map;
+  }, [questionnaires]);
 
-  const availableObjectTypeOptions = useMemo(
-    () =>
-      ["patient", "doctor"]
-        .filter((type) => !questionnaireByObjectType.has(type))
-        .map((type) => ({
-          value: type,
-          label: getObjectTypeLabel(type),
-        })),
-    [questionnaireByObjectType],
-  );
-
-  const openQuestionnaireModal = () => {
-    if (availableObjectTypeOptions.length === 0) {
-      message.info("患者和医生两个对象类型都已配置，无需继续新增 DG");
-      return;
+  const selectedInterviewRole = useMemo(() => {
+    if (!selectedInterviewRoleId) {
+      return null;
     }
+    return roleById.get(selectedInterviewRoleId) ?? null;
+  }, [roleById, selectedInterviewRoleId]);
+
+  const interviewDetailFields = useMemo(() => {
+    if (!selectedInterviewRole) {
+      return [];
+    }
+    const fields = buildInterviewFieldOptions(selectedInterviewRole);
+    return fields.length > 0 ? fields : getDefaultRoleFields(selectedInterviewRole.role_type);
+  }, [selectedInterviewRole]);
+
+  const interviewQuestionnaires = useMemo(() => {
+    if (!selectedInterviewRoleId) {
+      return [];
+    }
+    return questionnairesByRoleId.get(selectedInterviewRoleId) ?? [];
+  }, [questionnairesByRoleId, selectedInterviewRoleId]);
+
+  const questionnaireRoleOptions = useMemo(
+    () =>
+      roles.map((role) => ({
+        value: role.id,
+        label: `${getRoleTypeLabel(role.role_type)} · ${role.role_name}`,
+      })),
+    [roles],
+  );
+
+  const interviewRoleOptions = useMemo(
+    () =>
+      roles.map((role) => ({
+        value: role.id,
+        label: `${getRoleTypeLabel(role.role_type)} · ${role.role_name}（${questionnairesByRoleId.get(role.id)?.length ?? 0} 份 DG）`,
+      })),
+    [questionnairesByRoleId, roles],
+  );
+
+  const openQuestionnaireModal = (targetRoleId?: number) => {
     questionnaireForm.resetFields();
     setQuestionnaireFileList([]);
-    questionnaireForm.setFieldsValue({ object_type: availableObjectTypeOptions[0].value });
+    const firstRole = targetRoleId ? roleById.get(targetRoleId) ?? roles[0] ?? null : roles[0] ?? null;
+    setQuestionnaireRoleMode("existing");
+    setQuestionnaireRoleId(firstRole?.id ?? null);
+    setQuestionnaireRoleType((normalizeRoleType(firstRole?.role_type) ?? "doctor") as "doctor" | "patient" | "custom");
+    setQuestionnaireRoleFields(
+      firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+    );
+    questionnaireForm.setFieldsValue({
+      role_mode: "existing",
+      role_id: firstRole?.id ?? undefined,
+      role_type: firstRole?.role_type ?? "doctor",
+      role_name: firstRole?.role_name ?? "",
+      object_type: firstRole?.role_type ?? "doctor",
+      role_detail_schema_json: firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+    });
     setQuestionnaireModalOpen(true);
+  };
+
+  const handleQuestionnaireRoleModeChange = (mode: "existing" | "new") => {
+    setQuestionnaireRoleMode(mode);
+    if (mode === "existing") {
+      const firstRole = (questionnaireRoleId ? roleById.get(questionnaireRoleId) : null) ?? roles[0] ?? null;
+      setQuestionnaireRoleId(firstRole?.id ?? null);
+      setQuestionnaireRoleType((normalizeRoleType(firstRole?.role_type) ?? "doctor") as "doctor" | "patient" | "custom");
+      setQuestionnaireRoleFields(
+        firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+      );
+      questionnaireForm.setFieldsValue({
+        role_mode: "existing",
+        role_id: firstRole?.id ?? undefined,
+        role_type: firstRole?.role_type ?? "doctor",
+        role_name: firstRole?.role_name ?? "",
+        object_type: firstRole?.role_type ?? "doctor",
+        role_detail_schema_json: firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+      });
+      return;
+    }
+    const nextFields = buildRoleTemplateFields(questionnaireRoleType);
+    setQuestionnaireRoleFields(nextFields);
+    questionnaireForm.setFieldsValue({
+      role_mode: "new",
+      role_id: undefined,
+      role_type: questionnaireRoleType,
+      role_name: "",
+      object_type: questionnaireRoleType,
+      role_detail_schema_json: nextFields,
+    });
+  };
+
+  const handleQuestionnaireRoleTypeChange = (roleType: "doctor" | "patient" | "custom") => {
+    setQuestionnaireRoleType(roleType);
+    const nextFields = buildRoleTemplateFields(roleType);
+    setQuestionnaireRoleFields(nextFields);
+    questionnaireForm.setFieldsValue({
+      role_type: roleType,
+      object_type: roleType,
+      role_detail_schema_json: nextFields,
+    });
+  };
+
+  const handleQuestionnaireExistingRoleChange = (roleId: number) => {
+    const nextRole = roleById.get(roleId) ?? null;
+    setQuestionnaireRoleId(roleId);
+    if (!nextRole) {
+      return;
+    }
+    const nextType = (normalizeRoleType(nextRole.role_type) ?? "doctor") as "doctor" | "patient" | "custom";
+    setQuestionnaireRoleType(nextType);
+    const nextFields = buildInterviewFieldOptions(nextRole);
+    setQuestionnaireRoleFields(nextFields);
+    questionnaireForm.setFieldsValue({
+      role_id: roleId,
+      role_type: nextType,
+      object_type: nextType,
+      role_name: nextRole.role_name,
+      role_detail_schema_json: nextFields,
+    });
   };
 
   const handleQuestionnaireModalCancel = () => {
@@ -544,6 +722,10 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
     setQuestionnaireModalOpen(false);
     setQuestionnaireFileList([]);
+    setQuestionnaireRoleMode("existing");
+    setQuestionnaireRoleType("doctor");
+    setQuestionnaireRoleId(null);
+    setQuestionnaireRoleFields(cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS));
   };
 
   const openQuestionnaireReview = async (questionnaire: ProjectQuestionnaire) => {
@@ -573,15 +755,36 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setQuestionnaireSaving(false);
         return;
       }
-      const objectType = normalizeObjectType(values.object_type);
+      const roleMode = String(values.role_mode || questionnaireRoleMode || "existing").trim();
+      const objectType = normalizeRoleType(values.object_type || values.role_type);
       if (!objectType) {
-        message.warning("请选择对象类型");
+        message.warning("请选择角色模板类型");
         setQuestionnaireSaving(false);
         return;
       }
       const formData = new FormData();
       formData.append("name", String(values.name || "").trim());
       formData.append("object_type", objectType);
+      if (roleMode === "existing") {
+        const existingRoleId = Number(values.role_id || questionnaireRoleId || 0);
+        if (!existingRoleId) {
+          message.warning("请选择已有角色");
+          setQuestionnaireSaving(false);
+          return;
+        }
+        formData.append("role_id", String(existingRoleId));
+      } else {
+        const roleName = String(values.role_name || "").trim();
+        if (!roleName) {
+          message.warning("请输入角色名称");
+          setQuestionnaireSaving(false);
+          return;
+        }
+        const roleFields = normalizeFieldDefinitions(values.role_detail_schema_json || questionnaireRoleFields);
+        formData.append("role_name", roleName);
+        formData.append("role_type", objectType);
+        formData.append("detail_schema_json", JSON.stringify(roleFields));
+      }
       formData.append("file", file as File);
       const created = await createProjectQuestionnaire(projectId, formData);
       message.success("DG 已上传");
@@ -690,12 +893,47 @@ export default function ProjectDetailClient({ projectId }: Props) {
     if (isGuideLearning(guideStatus)) {
       message.warning("项目指南仍在学习中，建议完成后再创建访谈。");
     }
-    if (objectTypeOptions.length > 0) {
-      interviewForm.setFieldsValue({
-        object_type: objectTypeOptions[0].value,
-      } as Partial<InterviewFormValues>);
-    }
+    const firstRole =
+      roles.find((role) => (questionnairesByRoleId.get(role.id)?.length ?? 0) > 0) ?? roles[0] ?? null;
+    const firstQuestionnaire = firstRole ? questionnairesByRoleId.get(firstRole.id)?.[0] ?? null : null;
+    setSelectedInterviewRoleId(firstRole?.id ?? null);
+    interviewForm.setFieldsValue({
+      role_id: firstRole?.id ?? undefined,
+      questionnaire_id: firstQuestionnaire?.id ?? undefined,
+    } as Partial<InterviewFormValues>);
     setInterviewModalOpen(true);
+  };
+
+  const handleInterviewRoleChange = (roleId: number) => {
+    const nextRole = roleById.get(roleId) ?? null;
+    setSelectedInterviewRoleId(roleId);
+    setInterviewDetailDraft({});
+    interviewDetailForm.resetFields();
+    const roleQuestionnaires = questionnairesByRoleId.get(roleId) ?? [];
+    const nextQuestionnaireId = roleQuestionnaires[0]?.id ?? null;
+    interviewForm.setFieldsValue({
+      role_id: roleId,
+      questionnaire_id: nextQuestionnaireId ?? undefined,
+    });
+    if (!nextRole) {
+      return;
+    }
+    if (nextQuestionnaireId) {
+      setSelectedInterviewRoleId(roleId);
+    }
+  };
+
+  const handleInterviewQuestionnaireChange = (questionnaireId: number) => {
+    const nextQuestionnaire = questionnaireById.get(questionnaireId) ?? null;
+    interviewForm.setFieldsValue({
+      questionnaire_id: questionnaireId,
+    });
+    if (nextQuestionnaire?.role_id) {
+      setSelectedInterviewRoleId(nextQuestionnaire.role_id);
+      interviewForm.setFieldsValue({
+        role_id: nextQuestionnaire.role_id,
+      });
+    }
   };
 
   const openInterviewDetailModal = () => {
@@ -732,6 +970,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
     setInterviewDetailModalOpen(false);
     setInterviewDetailDraft({});
     interviewDetailForm.resetFields();
+    setSelectedInterviewRoleId(null);
   };
 
   const handleInterviewSubmit = async () => {
@@ -744,14 +983,20 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setInterviewSaving(false);
         return;
       }
-      const objectType = normalizeObjectType(values.object_type);
-      if (!objectType) {
-        message.warning("请选择访谈对象类型");
+      const roleId = Number(values.role_id || selectedInterviewRoleId || 0);
+      const questionnaireId = Number(values.questionnaire_id || 0);
+      if (!roleId) {
+        message.warning("请选择角色");
+        setInterviewSaving(false);
+        return;
+      }
+      if (!questionnaireId) {
+        message.warning("请选择对应 DG");
         setInterviewSaving(false);
         return;
       }
       const formData = new FormData();
-      formData.append("object_type", objectType);
+      formData.append("questionnaire_id", String(questionnaireId));
       const detailPayload = normalizeInterviewDetailValues(interviewDetailDraft);
       if (Object.keys(detailPayload).length > 0) {
         formData.append("detail_json", JSON.stringify(detailPayload));
@@ -808,7 +1053,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 {project?.name || `项目 ${projectId}`}
               </Title>
               <Paragraph className="!mb-0 !max-w-3xl !text-slate-300">
-                在这里维护项目 KBQ、访谈对象类型对应的 DG，以及访谈入口。新建访谈时只需要选择对象类型，系统会自动对应 DG 和共享的 KBQ。
+                在这里维护项目 KBQ、角色对应的 DG，以及访谈入口。新建访谈时会先选角色，再选择对应 DG，并自动套用该角色的访谈细节模板。
               </Paragraph>
               <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <Tag color="cyan">问卷 {projectCounts.questionnaire_count ?? 0}</Tag>
@@ -916,77 +1161,118 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
                       <Title level={4} style={{ marginBottom: 4 }} className="summarynotes-section-title">
-                        访谈对象类型 / DG
+                        角色 / DG
                       </Title>
                       <Text type="secondary">
-                        每一行左侧选择访谈对象类型，右侧上传对应的 DG 问卷。创建访谈时只需要选择对象类型，系统会自动匹配对应 DG。
+                        一个角色可以维护多份 DG。角色会同时决定该角色下访谈细节模板，创建访谈时会先选角色，再选对应 DG。
                       </Text>
                     </div>
                     <Button
                       type="primary"
                       icon={<PlusOutlined />}
-                      onClick={openQuestionnaireModal}
-                      disabled={availableObjectTypeOptions.length === 0}
+                      onClick={() => openQuestionnaireModal()}
                     >
                       添加 DG
                     </Button>
                   </div>
-                  {questionnaires.length > 0 ? (
-                    <List
-                      dataSource={questionnaires}
-                      renderItem={(item) => (
-                        <List.Item
-                          className="summarynotes-project-card"
-                          style={{ marginBottom: 12, padding: 16, borderRadius: 16 }}
-                          actions={[
-                            <Button
-                              key="review"
-                              type="link"
-                              onClick={() => void openQuestionnaireReview(item)}
-                            >
-                              {String(item.status || "") === "ready" ? "编辑热词" : "确认热词"}
-                            </Button>,
-                            <Button
-                              key="delete"
-                              type="link"
-                              danger
-                              onClick={() => handleQuestionnaireDelete(item)}
-                              disabled={(item.referenced_interview_count ?? 0) > 0}
-                            >
-                              删除
-                            </Button>,
-                          ]}
-                        >
-                          <Space direction="vertical" size={6} style={{ width: "100%" }}>
-                            <Space wrap>
-                              <Tag color={item.object_type === "doctor" ? "purple" : "cyan"}>
-                                {getObjectTypeLabel(item.object_type)}
-                              </Tag>
-                              <Text strong>{item.name}</Text>
-                              {getQuestionnaireStatusTag(item.status)}
-                              {(item.referenced_interview_count ?? 0) > 0 ? (
-                                <Tag color="green">已被 {item.referenced_interview_count} 个访谈引用</Tag>
-                              ) : null}
-                            </Space>
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              {item.file_name ? `文件：${item.file_name}` : "未记录原始文件名"}
-                              {item.hotwords && item.hotwords.length > 0
-                                ? `，热词 ${item.hotwords.length} 个`
-                                : ""}
-                            </Text>
-                            {item.hotwords && item.hotwords.length > 0 ? (
-                              <Space wrap size={4}>
-                                {item.hotwords.slice(0, 8).map((word) => (
-                                  <Tag key={word}>{word}</Tag>
-                                ))}
+                  {roles.length > 0 ? (
+                    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                      {roles.map((role) => {
+                        const roleQuestionnaires = questionnairesByRoleId.get(role.id) ?? [];
+                        return (
+                          <Card
+                            key={role.id}
+                            size="small"
+                            className="summarynotes-project-card"
+                            style={{ borderRadius: 16, background: "rgba(255,255,255,0.92)" }}
+                            title={
+                              <Space wrap>
+                                <Tag color={role.role_type === "doctor" ? "purple" : role.role_type === "patient" ? "cyan" : "gold"}>
+                                  {getRoleTypeLabel(role.role_type)}
+                                </Tag>
+                                <Text strong>{role.role_name}</Text>
+                                <Tag color="blue">{roleQuestionnaires.length} 份 DG</Tag>
                               </Space>
-                            ) : null}
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
+                            }
+                            extra={
+                              <Space wrap>
+                                <Button type="primary" ghost size="small" onClick={() => openQuestionnaireModal(role.id)}>
+                                  追加 DG
+                                </Button>
+                              </Space>
+                            }
+                          >
+                            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                访谈细节模板：
+                                {role.detail_schema_json.length > 0
+                                  ? role.detail_schema_json.map((field) => field.label).join("、")
+                                  : "暂无模板字段"}
+                              </Text>
+                              {roleQuestionnaires.length > 0 ? (
+                                <List
+                                  dataSource={roleQuestionnaires}
+                                  renderItem={(item) => (
+                                    <List.Item
+                                      className="summarynotes-project-card"
+                                      style={{ marginBottom: 12, padding: 16, borderRadius: 16 }}
+                                      actions={[
+                                        <Button
+                                          key="review"
+                                          type="link"
+                                          onClick={() => void openQuestionnaireReview(item)}
+                                        >
+                                          {String(item.status || "") === "ready" ? "编辑热词" : "确认热词"}
+                                        </Button>,
+                                        <Button
+                                          key="delete"
+                                          type="link"
+                                          danger
+                                          onClick={() => handleQuestionnaireDelete(item)}
+                                          disabled={(item.referenced_interview_count ?? 0) > 0}
+                                        >
+                                          删除
+                                        </Button>,
+                                      ]}
+                                    >
+                                      <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                                        <Space wrap>
+                                          <Tag color={role.role_type === "doctor" ? "purple" : role.role_type === "patient" ? "cyan" : "gold"}>
+                                            {getRoleTypeLabel(role.role_type)}
+                                          </Tag>
+                                          <Text strong>{item.name}</Text>
+                                          {getQuestionnaireStatusTag(item.status)}
+                                          {(item.referenced_interview_count ?? 0) > 0 ? (
+                                            <Tag color="green">已被 {item.referenced_interview_count} 个访谈引用</Tag>
+                                          ) : null}
+                                        </Space>
+                                        <Text type="secondary" style={{ fontSize: 12 }}>
+                                          {item.file_name ? `文件：${item.file_name}` : "未记录原始文件名"}
+                                          {item.hotwords && item.hotwords.length > 0
+                                            ? `，热词 ${item.hotwords.length} 个`
+                                            : ""}
+                                        </Text>
+                                        {item.hotwords && item.hotwords.length > 0 ? (
+                                          <Space wrap size={4}>
+                                            {item.hotwords.slice(0, 8).map((word) => (
+                                              <Tag key={word}>{word}</Tag>
+                                            ))}
+                                          </Space>
+                                        ) : null}
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              ) : (
+                                <Text type="secondary">当前角色还没有 DG。</Text>
+                              )}
+                            </Space>
+                          </Card>
+                        );
+                      })}
+                    </Space>
                   ) : (
-                    <Text type="secondary">当前项目还没有 DG。</Text>
+                    <Text type="secondary">当前项目还没有角色。</Text>
                   )}
                 </Card>
               </Col>
@@ -1036,7 +1322,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         访谈列表
                       </Title>
                       <Text type="secondary">
-                        这里展示该项目下所有访谈。新建访谈时只需要选择对象类型，系统会自动使用对应 DG 和项目 KBQ。
+                        这里展示该项目下所有访谈。新建访谈时先选角色，再选对应 DG，系统会自动带上该角色的细节模板。
                       </Text>
                     </div>
                     <Button
@@ -1075,9 +1361,21 @@ export default function ProjectDetailClient({ projectId }: Props) {
                             <Space wrap>
                               <Text strong>{item.name}</Text>
                               {getInterviewStatusTag(item.status)}
-                              {item.questionnaire_object_type ? (
+                              {item.questionnaire_role_name ? (
+                                <Tag
+                                  color={
+                                    item.questionnaire_role_type === "doctor"
+                                      ? "purple"
+                                      : item.questionnaire_role_type === "patient"
+                                        ? "cyan"
+                                        : "gold"
+                                  }
+                                >
+                                  {item.questionnaire_role_name}
+                                </Tag>
+                              ) : item.questionnaire_object_type ? (
                                 <Tag color={item.questionnaire_object_type === "doctor" ? "purple" : "cyan"}>
-                                  {getObjectTypeLabel(item.questionnaire_object_type)}
+                                  {getRoleTypeLabel(item.questionnaire_object_type)}
                                 </Tag>
                               ) : null}
                               {item.questionnaire_name ? (
@@ -1089,10 +1387,16 @@ export default function ProjectDetailClient({ projectId }: Props) {
                                 {item.interview_date ? `访谈时间：${formatDate(item.interview_date)}` : "暂无访谈时间"}
                               </Text>
                               <Text type="secondary" style={{ fontSize: 12 }}>
-                                {summarizeInterviewDetail(
-                                  interviewDetailFields,
-                                  item as unknown as InterviewDetailValues,
-                                )}
+                                {(() => {
+                                  const interviewRole = item.questionnaire_role_id
+                                    ? roleById.get(item.questionnaire_role_id) ?? null
+                                    : null;
+                                  return summarizeInterviewDetail(
+                                    buildInterviewFieldOptions(interviewRole),
+                                    (item.detail_json as InterviewDetailValues | undefined) ??
+                                      (item as unknown as InterviewDetailValues),
+                                  );
+                                })()}
                               </Text>
                             </Space>
                           </Space>
@@ -1119,21 +1423,151 @@ export default function ProjectDetailClient({ projectId }: Props) {
         closable={!questionnaireSaving}
         maskClosable={!questionnaireSaving}
         destroyOnHidden
+        width={960}
       >
-        <Form form={questionnaireForm} layout="vertical">
+        <Form form={questionnaireForm} layout="vertical" initialValues={{ role_mode: "existing" }}>
           <Form.Item
-            label="对象类型"
-            name="object_type"
-            rules={[{ required: true, message: "请选择对象类型" }]}
+            label="角色模式"
+            name="role_mode"
+            rules={[{ required: true, message: "请选择角色模式" }]}
           >
             <Select
-              placeholder="请选择对象类型"
               options={[
-                { value: "patient", label: "患者" },
-                { value: "doctor", label: "医生" },
+                { value: "existing", label: "已有角色" },
+                { value: "new", label: "新建角色" },
               ]}
+              onChange={(value) => handleQuestionnaireRoleModeChange(value as "existing" | "new")}
             />
           </Form.Item>
+
+          {questionnaireRoleMode === "existing" ? (
+            <>
+              <Form.Item
+                label="选择角色"
+                name="role_id"
+                rules={[{ required: true, message: "请选择角色" }]}
+              >
+                <Select
+                  placeholder="请选择角色"
+                  options={questionnaireRoleOptions}
+                  onChange={(value) => handleQuestionnaireExistingRoleChange(Number(value))}
+                />
+              </Form.Item>
+              {questionnaireRoleId ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="当前角色模板"
+                  description={
+                    <Space direction="vertical" size={4}>
+                      <Text>
+                        {roleById.get(questionnaireRoleId)?.role_name || "未命名角色"} ·{" "}
+                        {getRoleTypeLabel(roleById.get(questionnaireRoleId)?.role_type)}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {questionnaireRoleFields.length > 0
+                          ? questionnaireRoleFields.map((field) => field.label).join("、")
+                          : "暂无访谈字段模板"}
+                      </Text>
+                    </Space>
+                  }
+                  style={{ marginBottom: 16 }}
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <Row gutter={12}>
+                <Col span={12}>
+                  <Form.Item
+                    label="角色类型"
+                    name="role_type"
+                    rules={[{ required: true, message: "请选择角色类型" }]}
+                  >
+                    <Select
+                      options={[
+                        { value: "doctor", label: "医生模板" },
+                        { value: "patient", label: "患者模板" },
+                        { value: "custom", label: "自定义模板" },
+                      ]}
+                      onChange={(value) =>
+                        handleQuestionnaireRoleTypeChange(value as "doctor" | "patient" | "custom")
+                      }
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    label="角色名称"
+                    name="role_name"
+                    rules={[{ required: true, message: "请输入角色名称" }]}
+                  >
+                    <Input placeholder="例如：患者家属、护士、药师" />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Divider style={{ margin: "8px 0 16px" }}>访谈字段模板</Divider>
+              <Form.List name="role_detail_schema_json">
+                {(fields, { add, remove }) => (
+                  <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                    {fields.map((field, index) => (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        style={{
+                          borderRadius: 14,
+                          background: "rgba(59, 130, 246, 0.03)",
+                        }}
+                      >
+                        <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            字段 #{index + 1}
+                          </Text>
+                          <Button danger type="text" onClick={() => remove(field.name)}>
+                            删除
+                          </Button>
+                        </Space>
+                        <Row gutter={12}>
+                          <Col span={8}>
+                            <Form.Item label="key" name={[field.name, "key"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                              <Input placeholder="字段 key，例如 region" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={8}>
+                            <Form.Item label="label" name={[field.name, "label"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                              <Input placeholder="字段名称" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={8}>
+                            <Form.Item label="kind" name={[field.name, "kind"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                              <Select
+                                options={[
+                                  { value: "text", label: "文本" },
+                                  { value: "number", label: "数字" },
+                                ]}
+                              />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+                      </Card>
+                    ))}
+                    <Button
+                      type="dashed"
+                      icon={<PlusOutlined />}
+                      onClick={() => add({ key: "", label: "", kind: "text" })}
+                      block
+                    >
+                      添加字段
+                    </Button>
+                  </Space>
+                )}
+              </Form.List>
+            </>
+          )}
+
+          <Divider style={{ margin: "16px 0" }} />
+
           <Form.Item
             label="DG 名称"
             name="name"
@@ -1375,12 +1809,12 @@ export default function ProjectDetailClient({ projectId }: Props) {
         width={1040}
         destroyOnHidden
       >
-        {questionnaires.length === 0 || objectTypeOptions.length === 0 || getKeyBqCount(projectKeyBq) === 0 ? (
+        {roles.length === 0 || questionnaires.length === 0 || getKeyBqCount(projectKeyBq) === 0 ? (
           <Alert
             type="warning"
             showIcon
-            message="请先准备 DG 和 KBQ"
-            description="新建访谈要求至少有一个已配置对象类型对应的 DG，以及项目 KBQ。"
+            message="请先准备角色、DG 和 KBQ"
+            description="新建访谈要求至少有一个角色及其对应 DG，以及项目 KBQ。"
             style={{ marginBottom: 16 }}
           />
         ) : null}
@@ -1407,19 +1841,35 @@ export default function ProjectDetailClient({ projectId }: Props) {
             </Col>
             <Col span={12}>
               <Form.Item
-                label="访谈对象类型"
-                name="object_type"
-                rules={[{ required: true, message: "请选择访谈对象类型" }]}
+                label="访谈角色"
+                name="role_id"
+                rules={[{ required: true, message: "请选择访谈角色" }]}
               >
                 <Select
-                  options={objectTypeOptions}
-                  placeholder="请选择访谈对象类型"
-                  disabled={objectTypeOptions.length === 0}
+                  options={interviewRoleOptions}
+                  placeholder="请选择访谈角色"
+                  disabled={interviewRoleOptions.length === 0}
+                  onChange={(value) => handleInterviewRoleChange(Number(value))}
+                />
+              </Form.Item>
+              <Form.Item
+                label="对应 DG"
+                name="questionnaire_id"
+                rules={[{ required: true, message: "请选择对应 DG" }]}
+              >
+                <Select
+                  placeholder="请选择对应 DG"
+                  options={interviewQuestionnaires.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  }))}
+                  disabled={interviewQuestionnaires.length === 0}
+                  onChange={(value) => handleInterviewQuestionnaireChange(Number(value))}
                 />
               </Form.Item>
               <div style={{ marginBottom: 16 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  选中对象类型后，系统会自动对应到同类型 DG 和项目 KBQ。
+                  角色会决定访谈细节模板和可选 DG 列表。
                 </Text>
               </div>
               <Form.Item label="音频文件">

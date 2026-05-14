@@ -351,6 +351,7 @@ export interface Interview {
   date?: string | null;
   interview_date?: string | null;
   core_problem?: string | null;
+  detail_json?: Record<string, unknown> | null;
   city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
@@ -364,6 +365,10 @@ export interface Interview {
   questionnaire_name?: string | null;
   questionnaire_status?: string | null;
   questionnaire_object_type?: string | null;
+  questionnaire_role_id?: number | null;
+  questionnaire_role_name?: string | null;
+  questionnaire_role_type?: string | null;
+  questionnaire_role_detail_schema_json?: InterviewDetailFieldDefinition[] | null;
   key_bq_id?: number | null;
   key_bq_name?: string | null;
 }
@@ -396,6 +401,10 @@ export interface CreatedInterviewResponse {
   questionnaire_name?: string | null;
   questionnaire_status?: string | null;
   questionnaire_object_type?: string | null;
+  questionnaire_role_id?: number | null;
+  questionnaire_role_name?: string | null;
+  questionnaire_role_type?: string | null;
+  questionnaire_role_detail_schema_json?: InterviewDetailFieldDefinition[] | null;
   key_bq_id?: number | null;
   key_bq_name?: string | null;
 }
@@ -423,8 +432,12 @@ export interface Project {
 export interface ProjectQuestionnaire {
   id: number;
   project_id: number;
+  role_id?: number | null;
   name: string;
   object_type?: string | null;
+  role_name?: string | null;
+  role_type?: string | null;
+  role_detail_schema_json?: InterviewDetailFieldDefinition[] | null;
   file_name?: string | null;
   docx_path?: string | null;
   md_path?: string | null;
@@ -437,6 +450,16 @@ export interface ProjectQuestionnaire {
   hotword_candidates?: QuestionnaireHotwordCandidate[] | null;
   review_required?: boolean | null;
   success?: boolean | null;
+}
+
+export interface ProjectRole {
+  id: number;
+  project_id: number;
+  role_name: string;
+  role_type: "doctor" | "patient" | "custom" | string;
+  detail_schema_json: InterviewDetailFieldDefinition[];
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface KeyBqDimensionJson {
@@ -478,6 +501,7 @@ export interface ProjectKeyBqSingleton {
 
 export interface ProjectDetail {
   project: Project;
+  roles: ProjectRole[];
   questionnaires: ProjectQuestionnaire[];
   keyBqGroups: ProjectKeyBq[];
   interviews: Interview[];

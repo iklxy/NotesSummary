@@ -15,14 +15,12 @@ interface Props {
 export default function InterviewProcessingClient({ interviewId }: Props) {
   const router = useRouter();
   const [status, setStatus] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(interviewId > 0);
+  const [error, setError] = useState<string | null>(interviewId > 0 ? null : "无效的访谈 ID");
   const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     if (interviewId <= 0) {
-      setError("无效的访谈 ID");
-      setLoading(false);
       return;
     }
 

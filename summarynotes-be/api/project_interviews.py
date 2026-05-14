@@ -9,6 +9,7 @@ import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 
 from api.auth import require_current_user_id
+from api.project_roles import normalize_detail_schema_fields
 from DocxToMd import convert_docx_questionnaire
 from ProjectContext import build_project_context
 from Hotword import save_hotword_state
@@ -651,6 +652,10 @@ async def create_interview(
             questionnaire_backup_path = str(questionnaire_row.get("docx_path") or "").strip() or None
             questionnaire_md_path = str(questionnaire_row.get("md_path") or "").strip() or None
             questionnaire_json_path = str(questionnaire_row.get("json_path") or "").strip() or None
+            questionnaire_detail_fields = normalize_detail_schema_fields(
+                questionnaire_row.get("detail_schema_json"),
+                questionnaire_row.get("role_type") or questionnaire_row.get("object_type"),
+            )
             questionnaire_json_file = _get_data_root() / str(questionnaire_row.get("json_path") or "")
             if not questionnaire_json_file.exists():
                 raise HTTPException(status_code=500, detail="questionnaire json file missing")
@@ -676,7 +681,12 @@ async def create_interview(
                 questionnaire_id=int(questionnaire_row["id"]),
                 key_bq_id=None,
             )
-            final_name = build_interview_display_name(project_name, normalized_detail, interview_id)
+            final_name = build_interview_display_name(
+                project_name,
+                normalized_detail,
+                interview_id,
+                questionnaire_detail_fields,
+            )
             if final_name and final_name != project_name:
                 update_interview_name(interview_id, final_name)
             upsert_interview_detail(interview_id, normalized_detail)
@@ -705,7 +715,12 @@ async def create_interview(
                 doctor_level=str(legacy_doctor_level or "").strip() or None,
                 core_problem=normalized_core_problem,
             )
-            final_name = build_interview_display_name(project_name, normalized_detail, interview_id)
+            final_name = build_interview_display_name(
+                project_name,
+                normalized_detail,
+                interview_id,
+                questionnaire_detail_fields,
+            )
             if final_name and final_name != project_name:
                 update_interview_name(interview_id, final_name)
             upsert_interview_detail(interview_id, normalized_detail)
@@ -782,7 +797,12 @@ async def create_interview(
     return {
         "id": interview_id,
         "project_id": project_id,
-        "name": build_interview_display_name(project_name, normalized_detail, interview_id),
+        "name": build_interview_display_name(
+            project_name,
+            normalized_detail,
+            interview_id,
+            questionnaire_detail_fields if use_project_pool else None,
+        ),
         "core_problem": normalized_core_problem,
         "interview_date": interview_date,
         "hospital_city": str(normalized_detail.get("city") or "").strip(),

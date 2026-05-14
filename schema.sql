@@ -166,6 +166,7 @@ DROP TABLE IF EXISTS `bh_interview_detail`;
 CREATE TABLE `bh_interview_detail` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `interview_id` bigint NOT NULL COMMENT '关联 bh_project_interview.id',
+  `detail_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '通用访谈细节 JSON',
   `doctor_level` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '医生级别',
   `doctor_title` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '职称',
   `city` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '城市',
@@ -177,7 +178,30 @@ CREATE TABLE `bh_interview_detail` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_bh_interview_detail_interview_id` (`interview_id`),
   CONSTRAINT `fk_bh_interview_detail_interview_id`
-    FOREIGN KEY (`interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+    FOREIGN KEY (`interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `bh_interview_detail_chk_1` CHECK (`detail_json` IS NULL OR json_valid(`detail_json`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+-- Table structure for table `bh_project_role`
+--
+
+DROP TABLE IF EXISTS `bh_project_role`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bh_project_role` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `project_id` bigint NOT NULL,
+  `role_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '角色名称',
+  `role_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '角色模板类型：doctor/patient/custom',
+  `detail_schema_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '访谈细节字段模板 JSON',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_bh_project_role_project_name` (`project_id`,`role_name`),
+  KEY `idx_bh_project_role_project_id` (`project_id`),
+  CONSTRAINT `fk_bh_project_role_project` FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `bh_project_role_chk_1` CHECK (`detail_schema_json` IS NULL OR json_valid(`detail_schema_json`))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -191,6 +215,7 @@ DROP TABLE IF EXISTS `bh_project_questionnaire`;
 CREATE TABLE `bh_project_questionnaire` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `project_id` bigint NOT NULL,
+  `role_id` bigint DEFAULT NULL COMMENT '关联 bh_project_role.id',
   `object_type` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '访谈对象类型：patient/doctor',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '问卷名称',
   `file_name` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '上传的原始文件名',
@@ -202,9 +227,10 @@ CREATE TABLE `bh_project_questionnaire` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_bh_project_questionnaire_project_object_type` (`project_id`,`object_type`),
+  KEY `idx_bh_project_questionnaire_role_id` (`role_id`),
   KEY `idx_bh_project_questionnaire_project_id` (`project_id`),
   CONSTRAINT `fk_bh_project_questionnaire_project` FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_bh_project_questionnaire_role` FOREIGN KEY (`role_id`) REFERENCES `bh_project_role` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `bh_project_questionnaire_chk_1` CHECK (`hotwords` IS NULL OR json_valid(`hotwords`))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

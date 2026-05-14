@@ -23,6 +23,8 @@ from db import (
     fetch_project_by_id,
     fetch_project_stats,
     fetch_projects,
+    ensure_project_builtin_roles,
+    fetch_project_roles_by_project,
     fetch_questionnaires_by_project,
     insert_project,
     update_project,
@@ -372,14 +374,55 @@ def _safe_load_json_array(value: Any) -> list[Any]:
     return []
 
 
+def _safe_load_detail_schema(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        candidate = value.get("fields")
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        candidate = payload.get("fields")
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
 def _normalize_questionnaire_row(row: dict) -> dict:
     return {
         **row,
         "id": int(row["id"]),
         "project_id": int(row["project_id"]),
+        "role_id": int(row["role_id"]) if row.get("role_id") is not None else None,
         "object_type": row.get("object_type"),
+        "role_name": row.get("role_name"),
+        "role_type": row.get("role_type"),
+        "role_detail_schema_json": _safe_load_detail_schema(row.get("detail_schema_json")),
         "hotwords": _safe_load_json_array(row.get("hotwords")),
         "referenced_interview_count": int(row.get("referenced_interview_count") or 0),
+    }
+
+
+def _normalize_role_row(row: dict) -> dict:
+    return {
+        **row,
+        "id": int(row["id"]),
+        "project_id": int(row["project_id"]),
+        "role_name": row.get("role_name"),
+        "role_type": row.get("role_type"),
+        "detail_schema_json": _safe_load_detail_schema(row.get("detail_schema_json")),
     }
 
 
@@ -402,8 +445,14 @@ def _normalize_interview_row(row: dict) -> dict:
     normalized = dict(row)
     if normalized.get("questionnaire_id") is not None:
         normalized["questionnaire_id"] = int(normalized["questionnaire_id"])
+    if normalized.get("questionnaire_role_id") is not None:
+        normalized["questionnaire_role_id"] = int(normalized["questionnaire_role_id"])
     if normalized.get("key_bq_id") is not None:
         normalized["key_bq_id"] = int(normalized["key_bq_id"])
+    normalized["detail_json"] = _safe_load_json_text(row.get("detail_json")) or {}
+    normalized["questionnaire_role_detail_schema_json"] = _safe_load_detail_schema(
+        row.get("questionnaire_role_detail_schema_json")
+    )
     return normalized
 
 
@@ -628,11 +677,14 @@ def get_project_detail(
     查询单个项目的基础信息、DG、项目 Key BQ 与访谈列表。
     """
     project = _normalize_project_row(_get_owned_project_or_404(project_id, current_user_id))
+    ensure_project_builtin_roles(project_id, current_user_id)
+    roles = [_normalize_role_row(row) for row in fetch_project_roles_by_project(project_id, current_user_id)]
     questionnaires = [_normalize_questionnaire_row(row) for row in fetch_questionnaires_by_project(project_id, current_user_id)]
     interviews = [_normalize_interview_row(row) for row in fetch_interviews_by_project(project_id, current_user_id)]
     counts = fetch_project_stats(project_id)
     return {
         "project": project,
+        "roles": roles,
         "questionnaires": questionnaires,
         "keyBqGroups": [],
         "interviews": interviews,

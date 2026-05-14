@@ -5,6 +5,7 @@ from typing import Any, Optional
 import dotenv
 import pymysql
 
+from api.project_roles import build_default_role_detail_schema, build_default_role_name, normalize_detail_schema_fields, normalize_role_type
 from interview_detail_fields import build_interview_detail_meta, normalize_interview_detail_payload
 
 
@@ -500,6 +501,20 @@ def _normalize_object_type(value: Any) -> Optional[str]:
     return None
 
 
+def _json_loads_or_none(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
 def upsert_interview_detail(
     interview_id: int,
     detail: Any = None,
@@ -509,11 +524,13 @@ def upsert_interview_detail(
     写入或更新访谈细节记录。
     """
     normalized = normalize_interview_detail_payload(detail, legacy_values)
+    detail_json = json.dumps(normalized, ensure_ascii=False)
     sql = """
         INSERT INTO bh_interview_detail
-            (interview_id, doctor_level, doctor_title, city, hospital, department, hospital_decile)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (interview_id, detail_json, doctor_level, doctor_title, city, hospital, department, hospital_decile)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            detail_json = VALUES(detail_json),
             doctor_level = VALUES(doctor_level),
             doctor_title = VALUES(doctor_title),
             city = VALUES(city),
@@ -528,6 +545,7 @@ def upsert_interview_detail(
                 sql,
                 (
                     interview_id,
+                    detail_json,
                     normalized.get("doctor_level"),
                     normalized.get("doctor_title"),
                     normalized.get("city"),
@@ -572,6 +590,7 @@ def update_interview_name(interview_id: int, name: str) -> int:
 def insert_questionnaire(
     project_id: int,
     name: str,
+    role_id: Optional[int] = None,
     object_type: Optional[str] = None,
     file_name: Optional[str] = None,
     docx_path: Optional[str] = None,
@@ -585,8 +604,8 @@ def insert_questionnaire(
     """
     sql = """
         INSERT INTO bh_project_questionnaire
-            (project_id, name, object_type, file_name, docx_path, md_path, json_path, hotwords, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (project_id, role_id, name, object_type, file_name, docx_path, md_path, json_path, hotwords, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     conn = get_connection()
     try:
@@ -595,6 +614,7 @@ def insert_questionnaire(
                 sql,
                 (
                     project_id,
+                    role_id,
                     name,
                     _normalize_object_type(object_type),
                     file_name,
@@ -618,6 +638,7 @@ def insert_questionnaire(
 def update_questionnaire(
     questionnaire_id: int,
     project_id: int,
+    role_id: Optional[int] = None,
     name: Optional[str] = None,
     object_type: Optional[str] = None,
     file_name: Optional[str] = None,
@@ -633,6 +654,7 @@ def update_questionnaire(
     fields: list[str] = []
     params: list[Any] = []
     for column, value in (
+        ("role_id", role_id),
         ("name", name),
         ("object_type", _normalize_object_type(object_type) if object_type is not None else None),
         ("file_name", file_name),
@@ -665,19 +687,25 @@ def update_questionnaire(
             cursor.execute(
                 """
                 SELECT
-                    id,
-                    project_id,
-                    name,
-                    file_name,
-                    docx_path,
-                    md_path,
-                    json_path,
-                    hotwords,
-                    status,
-                    created_at,
-                    updated_at
-                FROM bh_project_questionnaire
-                WHERE id = %s AND project_id = %s
+                    q.id,
+                    q.project_id,
+                    q.role_id,
+                    q.name,
+                    q.object_type,
+                    q.file_name,
+                    q.docx_path,
+                    q.md_path,
+                    q.json_path,
+                    r.role_name,
+                    r.role_type,
+                    r.detail_schema_json,
+                    q.hotwords,
+                    q.status,
+                    q.created_at,
+                    q.updated_at
+                FROM bh_project_questionnaire q
+                LEFT JOIN bh_project_role r ON r.id = q.role_id
+                WHERE q.id = %s AND q.project_id = %s
                 LIMIT 1
                 """,
                 (questionnaire_id, project_id),
@@ -704,12 +732,16 @@ def fetch_questionnaire_by_id(
         SELECT
                     q.id,
                     q.project_id,
+                    q.role_id,
                     q.name,
                     q.object_type,
                     q.file_name,
                     q.docx_path,
                     q.md_path,
                     q.json_path,
+                    r.role_name,
+                    r.role_type,
+                    r.detail_schema_json,
             q.hotwords,
             q.status,
             q.created_at,
@@ -717,6 +749,7 @@ def fetch_questionnaire_by_id(
             p.created_by_user_id
         FROM bh_project_questionnaire q
         INNER JOIN bh_project p ON p.id = q.project_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         WHERE q.id = %s
           AND (%s IS NULL OR q.project_id = %s)
           AND (%s IS NULL OR p.created_by_user_id = %s)
@@ -752,12 +785,16 @@ def fetch_questionnaires_by_project(
         SELECT
                     q.id,
                     q.project_id,
+                    q.role_id,
                     q.name,
                     q.object_type,
                     q.file_name,
                     q.docx_path,
                     q.md_path,
                     q.json_path,
+                    r.role_name,
+                    r.role_type,
+                    r.detail_schema_json,
             q.hotwords,
             q.status,
             q.created_at,
@@ -770,9 +807,10 @@ def fetch_questionnaires_by_project(
             ), 0) AS referenced_interview_count
         FROM bh_project_questionnaire q
         INNER JOIN bh_project p ON p.id = q.project_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         WHERE q.project_id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
-        ORDER BY q.id DESC
+        ORDER BY COALESCE(r.role_name, q.object_type, q.name), q.id DESC
     """
     conn = get_connection()
     try:
@@ -796,12 +834,16 @@ def fetch_questionnaire_by_project_and_object_type(
         SELECT
             q.id,
             q.project_id,
+            q.role_id,
             q.name,
             q.object_type,
             q.file_name,
             q.docx_path,
             q.md_path,
             q.json_path,
+            r.role_name,
+            r.role_type,
+            r.detail_schema_json,
             q.hotwords,
             q.status,
             q.created_at,
@@ -809,8 +851,9 @@ def fetch_questionnaire_by_project_and_object_type(
             p.created_by_user_id
         FROM bh_project_questionnaire q
         INNER JOIN bh_project p ON p.id = q.project_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         WHERE q.project_id = %s
-          AND q.object_type = %s
+          AND (q.object_type = %s OR r.role_type = %s)
           AND (%s IS NULL OR p.created_by_user_id = %s)
         ORDER BY q.updated_at DESC, q.id DESC
         LIMIT 1
@@ -818,11 +861,221 @@ def fetch_questionnaire_by_project_and_object_type(
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id, _normalize_object_type(object_type), created_by_user_id, created_by_user_id))
+            normalized_type = _normalize_object_type(object_type)
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    normalized_type,
+                    normalized_type,
+                    created_by_user_id,
+                    created_by_user_id,
+                ),
+            )
             row = cursor.fetchone()
     finally:
         conn.close()
     return row
+
+
+def insert_project_role(
+    project_id: int,
+    role_name: str,
+    role_type: str,
+    detail_schema_json: Any,
+) -> int:
+    sql = """
+        INSERT INTO bh_project_role
+            (project_id, role_name, role_type, detail_schema_json)
+        VALUES (%s, %s, %s, %s)
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    project_id,
+                    role_name,
+                    normalize_role_type(role_type) or "custom",
+                    _json_or_none(normalize_detail_schema_fields(detail_schema_json, role_type)),
+                ),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return new_id
+
+
+def fetch_project_role_by_id(
+    role_id: int,
+    project_id: int | None = None,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    sql = """
+        SELECT
+            r.id,
+            r.project_id,
+            r.role_name,
+            r.role_type,
+            r.detail_schema_json,
+            r.created_at,
+            r.updated_at,
+            p.created_by_user_id
+        FROM bh_project_role r
+        INNER JOIN bh_project p ON p.id = r.project_id
+        WHERE r.id = %s
+          AND (%s IS NULL OR r.project_id = %s)
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (role_id, project_id, project_id, created_by_user_id, created_by_user_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_project_role_by_name(
+    project_id: int,
+    role_name: str,
+    created_by_user_id: int | None = None,
+) -> dict | None:
+    sql = """
+        SELECT
+            r.id,
+            r.project_id,
+            r.role_name,
+            r.role_type,
+            r.detail_schema_json,
+            r.created_at,
+            r.updated_at,
+            p.created_by_user_id
+        FROM bh_project_role r
+        INNER JOIN bh_project p ON p.id = r.project_id
+        WHERE r.project_id = %s
+          AND r.role_name = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, role_name, created_by_user_id, created_by_user_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_project_roles_by_project(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> list[dict]:
+    sql = """
+        SELECT
+            r.id,
+            r.project_id,
+            r.role_name,
+            r.role_type,
+            r.detail_schema_json,
+            r.created_at,
+            r.updated_at,
+            p.created_by_user_id
+        FROM bh_project_role r
+        INNER JOIN bh_project p ON p.id = r.project_id
+        WHERE r.project_id = %s
+          AND (%s IS NULL OR p.created_by_user_id = %s)
+        ORDER BY r.id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, created_by_user_id, created_by_user_id))
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def ensure_project_builtin_roles(
+    project_id: int,
+    created_by_user_id: int | None = None,
+) -> list[dict]:
+    existing = fetch_project_roles_by_project(project_id, created_by_user_id)
+    by_type = {
+        normalize_role_type(row.get("role_type")): row
+        for row in existing
+        if normalize_role_type(row.get("role_type")) in {"doctor", "patient"}
+    }
+    created: list[dict] = []
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            for role_type in ("doctor", "patient"):
+                if role_type in by_type:
+                    continue
+                role_name = build_default_role_name(role_type)
+                detail_schema_json = _json_or_none(build_default_role_detail_schema(role_type))
+                cursor.execute(
+                    """
+                        INSERT INTO bh_project_role (project_id, role_name, role_type, detail_schema_json)
+                        VALUES (%s, %s, %s, %s)
+                    """,
+                    (project_id, role_name, role_type, detail_schema_json),
+                )
+                created.append(
+                    {
+                        "id": cursor.lastrowid,
+                        "project_id": project_id,
+                        "role_name": role_name,
+                        "role_type": role_type,
+                        "detail_schema_json": detail_schema_json,
+                    }
+                )
+            cursor.execute(
+                """
+                    SELECT
+                        r.id,
+                        r.project_id,
+                        r.role_name,
+                        r.role_type,
+                        r.detail_schema_json,
+                        r.created_at,
+                        r.updated_at
+                    FROM bh_project_role r
+                    WHERE r.project_id = %s
+                    ORDER BY r.id ASC
+                """,
+                (project_id,),
+            )
+            rows = cursor.fetchall()
+            role_map = {normalize_role_type(row.get("role_type")): int(row["id"]) for row in rows if normalize_role_type(row.get("role_type"))}
+            for role_type, role_id in role_map.items():
+                cursor.execute(
+                    """
+                        UPDATE bh_project_questionnaire
+                        SET role_id = %s
+                        WHERE project_id = %s
+                          AND role_id IS NULL
+                          AND object_type = %s
+                    """,
+                    (role_id, project_id, role_type),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return fetch_project_roles_by_project(project_id, created_by_user_id)
 
 
 def delete_questionnaire(
@@ -1253,6 +1506,7 @@ def fetch_interview_detail_by_interview_id(interview_id: int) -> dict | None:
         SELECT
             id,
             interview_id,
+            detail_json,
             doctor_level,
             doctor_title,
             city,
@@ -1881,6 +2135,7 @@ def fetch_interview_by_id(
             i.name,
             i.interview_date,
             i.file_name,
+            d.detail_json,
             COALESCE(d.city, i.hospital_city) AS city,
             COALESCE(d.city, i.hospital_city) AS hospital_city,
             COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
@@ -1893,6 +2148,10 @@ def fetch_interview_by_id(
             q.name AS questionnaire_name,
             q.status AS questionnaire_status,
             q.object_type AS questionnaire_object_type,
+            q.role_id AS questionnaire_role_id,
+            r.role_name AS questionnaire_role_name,
+            r.role_type AS questionnaire_role_type,
+            r.detail_schema_json AS questionnaire_role_detail_schema_json,
             i.key_bq_id,
             k.name AS key_bq_name,
             i.note_content,
@@ -1902,6 +2161,7 @@ def fetch_interview_by_id(
         INNER JOIN bh_project p ON p.id = i.parse_project_id
         LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
@@ -2421,6 +2681,7 @@ def fetch_interviews_by_project(
             i.name,
             i.interview_date,
             i.file_name,
+            d.detail_json,
             COALESCE(d.city, i.hospital_city) AS city,
             COALESCE(d.city, i.hospital_city) AS hospital_city,
             COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
@@ -2433,6 +2694,10 @@ def fetch_interviews_by_project(
             q.name AS questionnaire_name,
             q.status AS questionnaire_status,
             q.object_type AS questionnaire_object_type,
+            q.role_id AS questionnaire_role_id,
+            r.role_name AS questionnaire_role_name,
+            r.role_type AS questionnaire_role_type,
+            r.detail_schema_json AS questionnaire_role_detail_schema_json,
             i.key_bq_id,
             k.name AS key_bq_name,
             i.status
@@ -2440,6 +2705,7 @@ def fetch_interviews_by_project(
         INNER JOIN bh_project p ON p.id = i.parse_project_id
         LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
           AND (%s IS NULL OR p.created_by_user_id = %s)
@@ -2484,6 +2750,7 @@ def fetch_completed_interviews_for_project(
             i.name,
             i.interview_date,
             i.file_name,
+            d.detail_json,
             COALESCE(d.city, i.hospital_city) AS city,
             COALESCE(d.city, i.hospital_city) AS hospital_city,
             COALESCE(d.hospital_decile, i.hospital_decile) AS hospital_decile,
@@ -2496,12 +2763,17 @@ def fetch_completed_interviews_for_project(
             q.name AS questionnaire_name,
             q.status AS questionnaire_status,
             q.object_type AS questionnaire_object_type,
+            q.role_id AS questionnaire_role_id,
+            r.role_name AS questionnaire_role_name,
+            r.role_type AS questionnaire_role_type,
+            r.detail_schema_json AS questionnaire_role_detail_schema_json,
             i.key_bq_id,
             k.name AS key_bq_name,
             i.status
         FROM bh_project_interview i
         LEFT JOIN bh_interview_detail d ON d.interview_id = i.id
         LEFT JOIN bh_project_questionnaire q ON q.id = i.questionnaire_id
+        LEFT JOIN bh_project_role r ON r.id = q.role_id
         LEFT JOIN bh_project_key_bq k ON k.id = i.key_bq_id
         WHERE i.parse_project_id = %s
           AND i.status = 2

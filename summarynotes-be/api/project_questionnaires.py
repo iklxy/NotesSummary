@@ -14,14 +14,19 @@ from ProjectContext import build_project_context
 from db import (
     count_questionnaire_usage,
     delete_questionnaire,
+    ensure_project_builtin_roles,
     fetch_project_by_id,
+    fetch_project_role_by_id,
+    fetch_project_role_by_name,
     fetch_questionnaire_by_id,
     fetch_questionnaires_by_project,
     insert_questionnaire,
+    insert_project_role,
     update_questionnaire,
 )
 from DocxToMd import convert_docx_questionnaire
 from QuestionnaireHotword import extract_questionnaire_hotword_candidates
+from api.project_roles import build_default_role_name, normalize_detail_schema_fields, normalize_role_type
 
 
 router = APIRouter(prefix="/api/projects", tags=["project_questionnaires"])
@@ -40,6 +45,10 @@ def _normalize_object_type(raw_value: Any) -> Optional[str]:
     if text in {"doctor", "医生"}:
         return "doctor"
     return None
+
+
+def _parse_detail_schema_json(raw_value: Any, role_type: Optional[str] = None) -> list[dict[str, Any]]:
+    return normalize_detail_schema_fields(raw_value, role_type)
 
 
 def _get_data_root() -> Path:
@@ -165,11 +174,18 @@ def _to_response_row(row: dict | None) -> dict | None:
     if not row:
         return None
     hotwords = _parse_hotwords(row.get("hotwords"))
+    role_detail_schema = row.get("detail_schema_json")
+    role_type = row.get("role_type") or row.get("object_type")
+    parsed_role_detail_schema = _parse_detail_schema_json(role_detail_schema, role_type)
     return {
         "id": int(row["id"]),
         "project_id": int(row["project_id"]),
+        "role_id": int(row["role_id"]) if row.get("role_id") is not None else None,
         "name": row.get("name"),
         "object_type": row.get("object_type"),
+        "role_name": row.get("role_name") or build_default_role_name(role_type),
+        "role_type": normalize_role_type(role_type),
+        "role_detail_schema_json": parsed_role_detail_schema,
         "file_name": row.get("file_name"),
         "docx_path": row.get("docx_path"),
         "md_path": row.get("md_path"),
@@ -187,22 +203,45 @@ async def create_questionnaire(
     project_id: int,
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
+    role_id: Optional[int] = Form(None),
+    role_name: Optional[str] = Form(None),
+    role_type: Optional[str] = Form(None),
+    detail_schema_json: Optional[str] = Form(None),
     object_type: str = Form(...),
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
     project_row = _get_owned_project_or_404(project_id, current_user_id)
+    ensure_project_builtin_roles(project_id, current_user_id)
     clean_name = name.strip() or Path(file.filename or "questionnaire").stem
     clean_object_type = _normalize_object_type(object_type)
-    if clean_object_type is None:
-        raise HTTPException(status_code=400, detail="object type is required")
-    existing_rows = fetch_questionnaires_by_project(project_id, current_user_id)
-    if any(_normalize_object_type(row.get("object_type")) == clean_object_type for row in existing_rows):
-        raise HTTPException(status_code=409, detail="object type already exists")
+    clean_role_type = normalize_role_type(role_type or clean_object_type)
+    if clean_role_type is None:
+        raise HTTPException(status_code=400, detail="role type is required")
+
+    role_row: dict | None = None
+    if role_id is not None:
+        role_row = fetch_project_role_by_id(int(role_id), project_id, current_user_id)
+        if not role_row:
+            raise HTTPException(status_code=404, detail="role not found")
+    else:
+        clean_role_name = (role_name or build_default_role_name(clean_role_type)).strip() or build_default_role_name(clean_role_type)
+        role_row = fetch_project_role_by_name(project_id, clean_role_name, current_user_id)
+        if not role_row:
+            role_row_id = insert_project_role(
+                project_id=project_id,
+                role_name=clean_role_name,
+                role_type=clean_role_type,
+                detail_schema_json=_parse_detail_schema_json(detail_schema_json, clean_role_type),
+            )
+            role_row = fetch_project_role_by_id(role_row_id, project_id, current_user_id)
+        if not role_row:
+            raise HTTPException(status_code=500, detail="role creation failed")
 
     questionnaire_id = insert_questionnaire(
         project_id=project_id,
         name=clean_name,
-        object_type=clean_object_type,
+        role_id=int(role_row["id"]) if role_row else None,
+        object_type=clean_role_type,
         file_name=file.filename or None,
         status="hotword_review_pending",
     )

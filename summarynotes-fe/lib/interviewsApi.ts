@@ -198,6 +198,7 @@ export interface ProjectInterviewDTO {
   name: string;
   core_problem?: string | null;
   interview_date?: string | null;
+  detail_json?: Record<string, unknown> | null;
   city?: string | null;
   hospital_city?: string | null;
   hospital_decile?: number | null;
@@ -208,6 +209,10 @@ export interface ProjectInterviewDTO {
   status?: number | null;
   file_name?: string | null;
   questionnaire_object_type?: string | null;
+  questionnaire_role_id?: number | null;
+  questionnaire_role_name?: string | null;
+  questionnaire_role_type?: string | null;
+  questionnaire_role_detail_schema_json?: Array<Record<string, unknown>> | null;
 }
 
 export interface InterviewSummaryItem {
