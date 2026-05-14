@@ -226,6 +226,54 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
     返回:
         可直接写入 `bh_project_interview_key_bq` 的 key BQ 明细列表。
     """
+    def _normalize_dimensions(raw_dimensions: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_dimensions, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for item in raw_dimensions:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                dimension: Dict[str, Any] = {"name": name}
+                description = str(item.get("description") or "").strip()
+                if description:
+                    dimension["description"] = description
+                normalized.append(dimension)
+            else:
+                text = str(item or "").strip()
+                if text:
+                    normalized.append({"name": text})
+        return normalized
+
+    def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, List[Dict[str, Any]]]:
+        if not isinstance(raw_value, dict):
+            return {"user_demension": [], "llm_demension": [], "demension": []}
+
+        user_demension = _normalize_dimensions(
+            raw_value.get("user_demension")
+            if raw_value.get("user_demension") is not None
+            else raw_value.get("user_dimensions")
+        )
+        llm_demension = _normalize_dimensions(
+            raw_value.get("llm_demension")
+            if raw_value.get("llm_demension") is not None
+            else raw_value.get("llm_dimensions")
+            if raw_value.get("llm_dimensions") is not None
+            else raw_value.get("supplemental_dimensions")
+        )
+        demension = _normalize_dimensions(
+            raw_value.get("demension") if raw_value.get("demension") is not None else raw_value.get("dimensions")
+        )
+        if not demension:
+            demension = list(user_demension) + [item for item in llm_demension if item not in user_demension]
+
+        return {
+            "user_demension": user_demension,
+            "llm_demension": llm_demension,
+            "demension": demension,
+        }
+
     if core_problem is None:
         return []
     obj: Any = core_problem
@@ -242,12 +290,22 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
         if isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             order = item.get("order") or idx
+            dimension_bundle = _normalize_dimension_bundle(item)
         else:
             text = str(item or "").strip()
             order = idx
+            dimension_bundle = {"user_demension": [], "llm_demension": [], "demension": []}
         if not text:
             continue
-        result.append({"order": int(order), "text": text, "status": "pending"})
+        dimension_json = dimension_bundle if any(dimension_bundle.values()) else None
+        result.append(
+            {
+                "order": int(order),
+                "text": text,
+                "dimension_json": dimension_json,
+                "status": "pending",
+            }
+        )
     return result
 
 

@@ -118,6 +118,64 @@ function normalizeKeyBqDimensionValues(value?: KeyBqDimensionFormValues | null):
   };
 }
 
+function pickFirstNonEmptyDimensionList(
+  item?: KeyBqJson["key_bq_list"][number] | null,
+): KeyBqDimensionJsonValue[] {
+  if (!item) {
+    return [];
+  }
+  const candidates = [
+    item.user_demension,
+    item.demension,
+    item.dimensions,
+    item.user_dimensions,
+    item.llm_demension,
+    item.llm_dimensions,
+    item.supplemental_dimensions,
+  ];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate) || candidate.length === 0) {
+      continue;
+    }
+    return candidate
+      .map((dimension) => ({
+        name: String(dimension?.name || "").trim(),
+        description: String(dimension?.description || "").trim(),
+      }))
+      .filter((dimension) => Boolean(dimension.name));
+  }
+  return [];
+}
+
+function normalizeKeyBqJsonDimensions(item?: KeyBqJson["key_bq_list"][number] | null): KeyBqDimensionJsonValue[] {
+  return pickFirstNonEmptyDimensionList(item);
+}
+
+function mergeKeyBqDimensions(
+  userDimensions: KeyBqDimensionJsonValue[],
+  llmDimensions: KeyBqDimensionJsonValue[],
+): KeyBqDimensionJsonValue[] {
+  const merged: KeyBqDimensionJsonValue[] = [];
+  const seen = new Set<string>();
+  [...userDimensions, ...llmDimensions].forEach((dimension) => {
+    const name = String(dimension?.name || "").trim();
+    if (!name) {
+      return;
+    }
+    const description = String(dimension?.description || "").trim();
+    const key = `${name.toLowerCase()}::${description.toLowerCase()}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push({
+      name,
+      description: description || undefined,
+    });
+  });
+  return merged;
+}
+
 function buildKeyBqFormValues(value?: KeyBqJson | null): KeyBqFormValues {
   const items = value?.key_bq_list ?? [];
   if (items.length === 0) {
@@ -126,7 +184,7 @@ function buildKeyBqFormValues(value?: KeyBqJson | null): KeyBqFormValues {
   return {
     key_bq_list: items.map((item) => ({
       text: item.text ?? "",
-      dimensions: (item.dimensions ?? []).map((dimension) => ({
+      dimensions: normalizeKeyBqJsonDimensions(item).map((dimension) => ({
         name: dimension.name ?? "",
         description: dimension.description ?? "",
       })),
@@ -135,8 +193,15 @@ function buildKeyBqFormValues(value?: KeyBqJson | null): KeyBqFormValues {
 }
 
 function buildKeyBqJson(values: KeyBqFormValues): KeyBqJson {
+  type KeyBqJsonItem = {
+    text: string;
+    user_demension: KeyBqDimensionJsonValue[];
+    llm_demension: KeyBqDimensionJsonValue[];
+    demension: KeyBqDimensionJsonValue[];
+  };
+
   const key_bq_list = (values.key_bq_list ?? [])
-    .map((item) => {
+    .map<KeyBqJsonItem | null>((item) => {
       const text = String(item?.text || "").trim();
       if (!text) {
         return null;
@@ -144,13 +209,15 @@ function buildKeyBqJson(values: KeyBqFormValues): KeyBqJson {
       const dimensions = (item?.dimensions ?? [])
         .map(normalizeKeyBqDimensionValues)
         .filter((dimension): dimension is KeyBqDimensionJsonValue => Boolean(dimension?.name));
-      return { text, dimensions };
+      return { text, user_demension: dimensions, llm_demension: [], demension: dimensions };
     })
-    .filter((item): item is { text: string; dimensions: KeyBqDimensionJsonValue[] } => Boolean(item))
+    .filter((item): item is KeyBqJsonItem => Boolean(item))
     .map((item, index) => ({
       order: index + 1,
       text: item.text,
-      dimensions: item.dimensions,
+      user_demension: item.user_demension,
+      llm_demension: item.llm_demension,
+      demension: item.demension,
     }));
 
   if (key_bq_list.length === 0) {
@@ -168,9 +235,27 @@ function renderKeyBqPreview(value?: KeyBqJson | null): string {
   return items
     .map((item, index) => {
       const lines = [`${index + 1}. ${item.text}`];
-      const dimensions = item.dimensions ?? [];
-      if (dimensions.length > 0) {
-        dimensions.forEach((dimension) => {
+      const userDimensions = Array.isArray(item.user_demension) ? item.user_demension : [];
+      const llmDimensions = Array.isArray(item.llm_demension) ? item.llm_demension : [];
+      const mergedDimensions =
+        item.demension && item.demension.length > 0
+          ? item.demension
+          : item.dimensions && item.dimensions.length > 0
+            ? item.dimensions
+            : userDimensions.length > 0 && llmDimensions.length > 0
+              ? mergeKeyBqDimensions(
+                  userDimensions.map((dimension) => ({
+                    name: String(dimension?.name || "").trim(),
+                    description: String(dimension?.description || "").trim(),
+                  })),
+                  llmDimensions.map((dimension) => ({
+                    name: String(dimension?.name || "").trim(),
+                    description: String(dimension?.description || "").trim(),
+                  })),
+                )
+              : pickFirstNonEmptyDimensionList(item);
+      if (mergedDimensions.length > 0) {
+        mergedDimensions.forEach((dimension) => {
           const name = String(dimension.name || "").trim();
           if (!name) {
             return;

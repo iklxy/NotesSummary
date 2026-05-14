@@ -1103,18 +1103,18 @@ def generate_kbq_notes(
     project_context_block: str,
     interview_context_block: str,
     key_bq_text: str,
-    dimensions: List[Dict[str, Any]],
+    demension: List[Dict[str, Any]],
     segments: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    基于 key BQ、分析维度与检索片段生成 KBQ Notes。
+    基于 key BQ、合并后的 demension 与检索片段生成 KBQ Notes。
 
     参数:
         generate_fn: 实际执行 LLM 调用的函数。
         project_context_block: 已格式化好的项目背景块。
         interview_context_block: 已格式化好的访谈背景块。
         key_bq_text: 单条 key BQ 文本。
-        dimensions: 第一步抽取得到的维度列表。
+        demension: 已合并完成的维度列表。
         segments: RAG 检索得到的相关片段。
 
     返回:
@@ -1129,29 +1129,34 @@ def generate_kbq_notes(
         context_lines.append(f"[{idx}] summary_id={sid} speaker={speaker} score={score:.4f}\n{text}")
     context_block = "\n\n".join(context_lines) if context_lines else "（当前没有检索到相关片段）"
 
-    dimension_lines: List[str] = []
-    for idx, item in enumerate(dimensions, start=1):
+    normalized_demension = _normalize_dimension_items(demension or [])
+
+    demension_lines: List[str] = []
+    for idx, item in enumerate(normalized_demension, start=1):
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()
         description = str(item.get("description") or "").strip()
         if not name:
             continue
-        dimension_lines.append(f"[{idx}] {name}" + (f"：{description}" if description else ""))
-    dimensions_block = "\n".join(dimension_lines) if dimension_lines else "（未抽取到维度）"
+        demension_lines.append(f"[{idx}] {name}" + (f"：{description}" if description else ""))
+    demension_block = "\n".join(demension_lines) if demension_lines else "（未抽取到维度）"
 
     system_prompt = (
         "你是一名医学、药学、体外诊断和市场调研领域的访谈纪要专家。"
-        "你的任务是根据 key BQ、维度和相关访谈片段生成 KBQ Notes。"
+        "你的任务是根据 key BQ、demension 和相关访谈片段生成 KBQ Notes。"
         "只输出严格合法的 JSON，不要输出额外说明。"
     )
     user_prompt = (
         f"{project_context_block}"
         f"{interview_context_block}"
-        "请基于以下 key BQ、已抽取的分析维度，以及相关访谈片段生成 KBQ Notes。\n\n"
-        f"【key BQ】\n{key_bq_text}\n\n"
-        f"【维度】\n{dimensions_block}\n\n"
+        "请基于以下 Key BQ、该 Key BQ 的全部 demension，以及相关访谈片段生成 KBQ Notes。\n\n"
+        f"【Key BQ】\n{key_bq_text}\n\n"
+        f"【demension】\n{demension_block}\n\n"
         f"【相关访谈片段】\n{context_block}\n\n"
+        "重要说明：demension 已经包含用户自定义维度和模型补充维度，"
+        "它们都属于同一个 Key BQ 的子维度，不要把任何维度当成新的 Key BQ，"
+        "也不要把维度写成一级问题。\n\n"
         "请输出 JSON，结构参考如下：\n"
         "{\n"
         '  "key_bq": "原始 key BQ",\n'
@@ -1164,7 +1169,8 @@ def generate_kbq_notes(
         "2. 不要输出分析过程和证据。\n"
         "3. 只输出 JSON。\n"
         "4. 维度总结要简洁、准确、书面化，适合直接写入研究笔记。\n"
-        "5. 若提供的key BQ下存在子问题，必须基于原文完整回答所有子问题，确保覆盖子问题核心信息。\n"
+        "5. 若提供的 key BQ 下存在子问题，必须基于原文完整回答所有子问题，确保覆盖子问题核心信息。\n"
+        "6. 如果某一个维度在访谈片段中信息不足以支撑总结、或得到的内容是【未提及】，则不要展示该维度。\n"
     )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_notes_response(generate_fn, content)

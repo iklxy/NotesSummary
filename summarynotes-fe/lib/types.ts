@@ -438,14 +438,22 @@ export interface ProjectQuestionnaire {
   success?: boolean | null;
 }
 
+export interface KeyBqDimensionJson {
+  name: string;
+  description?: string | null;
+}
+
 export interface KeyBqJson {
   key_bq_list: Array<{
     order: number;
     text: string;
-    dimensions?: Array<{
-      name: string;
-      description?: string | null;
-    }>;
+    user_demension?: KeyBqDimensionJson[];
+    llm_demension?: KeyBqDimensionJson[];
+    demension?: KeyBqDimensionJson[];
+    dimensions?: KeyBqDimensionJson[];
+    user_dimensions?: KeyBqDimensionJson[];
+    llm_dimensions?: KeyBqDimensionJson[];
+    supplemental_dimensions?: KeyBqDimensionJson[];
   }>;
 }
 

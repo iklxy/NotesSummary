@@ -308,6 +308,35 @@ def _normalize_dimensions(raw_dimensions: Any) -> list[Dict[str, Any]]:
     return result
 
 
+def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, list[Dict[str, Any]]]:
+    if not isinstance(raw_value, dict):
+        return {"user_demension": [], "llm_demension": [], "demension": []}
+
+    user_demension = _normalize_dimensions(
+        raw_value.get("user_demension")
+        if raw_value.get("user_demension") is not None
+        else raw_value.get("user_dimensions")
+    )
+    llm_demension = _normalize_dimensions(
+        raw_value.get("llm_demension")
+        if raw_value.get("llm_demension") is not None
+        else raw_value.get("llm_dimensions")
+        if raw_value.get("llm_dimensions") is not None
+        else raw_value.get("supplemental_dimensions")
+    )
+    demension = _normalize_dimensions(
+        raw_value.get("demension") if raw_value.get("demension") is not None else raw_value.get("dimensions")
+    )
+    if not demension:
+        demension = list(user_demension) + [item for item in llm_demension if item not in user_demension]
+
+    return {
+        "user_demension": user_demension,
+        "llm_demension": llm_demension,
+        "demension": demension,
+    }
+
+
 def _normalize_core_problem_json(raw_value: str) -> str:
     """
     将前端提交的 key BQ 内容统一归一化为 JSON 字符串。
@@ -335,13 +364,13 @@ def _normalize_core_problem_json(raw_value: str) -> str:
             for item in parsed.get("key_bq_list") or []:
                 if isinstance(item, dict):
                     item_text = str(item.get("text") or "").strip()
-                    dimensions = _normalize_dimensions(item.get("dimensions"))
+                    dimension_bundle = _normalize_dimension_bundle(item)
                 else:
                     item_text = str(item).strip()
-                    dimensions = []
+                    dimension_bundle = {"user_demension": [], "llm_demension": [], "demension": []}
                 if not item_text:
                     continue
-                items.append({"order": len(items) + 1, "text": item_text, "dimensions": dimensions})
+                items.append({"order": len(items) + 1, "text": item_text, **dimension_bundle})
             if not items:
                 raise ValueError("key BQ 列表不能为空")
             payload = {"key_bq_list": items}
@@ -354,7 +383,15 @@ def _normalize_core_problem_json(raw_value: str) -> str:
             line_text = line.strip()
             if not line_text:
                 continue
-            items.append({"order": len(items) + 1, "text": line_text, "dimensions": []})
+            items.append(
+                {
+                    "order": len(items) + 1,
+                    "text": line_text,
+                    "user_demension": [],
+                    "llm_demension": [],
+                    "demension": [],
+                }
+            )
         if not items:
             raise HTTPException(status_code=400, detail="key BQ 不能为空")
         payload = {"key_bq_list": items}
@@ -382,14 +419,14 @@ def _extract_key_bq_items(core_problem_json: str) -> list[Dict[str, Any]]:
         if isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             order = item.get("order") or idx
-            dimensions = _normalize_dimensions(item.get("dimensions"))
+            dimension_bundle = _normalize_dimension_bundle(item)
         else:
             text = str(item or "").strip()
             order = idx
-            dimensions = []
+            dimension_bundle = {"user_demension": [], "llm_demension": [], "demension": []}
         if not text:
             continue
-        dimension_json = {"user_dimensions": dimensions} if dimensions else None
+        dimension_json = dimension_bundle if any(dimension_bundle.values()) else None
         result.append(
             {
                 "order": int(order),

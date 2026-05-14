@@ -76,13 +76,41 @@ def _normalize_key_bq_items(raw_items: Any) -> List[dict[str, Any]]:
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            dimensions = _normalize_dimensions(item.get("dimensions"))
+            user_demension = _normalize_dimensions(
+                item.get("user_demension")
+                if item.get("user_demension") is not None
+                else item.get("user_dimensions")
+            )
+            llm_demension = _normalize_dimensions(
+                item.get("llm_demension")
+                if item.get("llm_demension") is not None
+                else item.get("llm_dimensions")
+                if item.get("llm_dimensions") is not None
+                else item.get("supplemental_dimensions")
+            )
+            demension = _normalize_dimensions(
+                item.get("demension")
+                if item.get("demension") is not None
+                else item.get("dimensions")
+            )
+            if not demension:
+                demension = list(user_demension) + [entry for entry in llm_demension if entry not in user_demension]
         else:
             text = str(item or "").strip()
             if not text:
                 continue
-            dimensions = []
-        result.append({"order": len(result) + 1, "text": text, "dimensions": dimensions})
+            user_demension = []
+            llm_demension = []
+            demension = []
+        result.append(
+            {
+                "order": len(result) + 1,
+                "text": text,
+                "user_demension": user_demension,
+                "llm_demension": llm_demension,
+                "demension": demension,
+            }
+        )
     return result
 
 
@@ -115,7 +143,15 @@ def _normalize_key_bq_json(raw_value: Any) -> str:
                 line_text = line.strip()
                 if not line_text:
                     continue
-                items.append({"order": len(items) + 1, "text": line_text, "dimensions": []})
+                items.append(
+                    {
+                        "order": len(items) + 1,
+                        "text": line_text,
+                        "user_demension": [],
+                        "llm_demension": [],
+                        "demension": [],
+                    }
+                )
             payload = {"key_bq_list": items}
 
     items = payload.get("key_bq_list") if payload else []

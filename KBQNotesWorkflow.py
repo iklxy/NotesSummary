@@ -99,43 +99,55 @@ def _normalize_kbq_dimensions(raw_dimensions: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def _parse_kbq_dimension_payload(raw_value: Any) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _parse_kbq_dimension_payload(
+    raw_value: Any,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    从数据库字段中解析出用户维度和旧版维度。
+    从数据库字段中解析出用户维度、模型补充维度和合并后的维度。
 
     返回:
-        (user_dimensions, legacy_dimensions)
+        (user_demension, llm_demension, demension)
     """
     if raw_value is None:
-        return [], []
+        return [], [], []
 
     parsed: Any = raw_value
     if isinstance(raw_value, str):
         text = raw_value.strip()
         if not text:
-            return [], []
+            return [], [], []
         try:
             parsed = json.loads(text)
         except Exception:
-            return [], []
+            return [], [], []
 
     if isinstance(parsed, list):
-        return [], _normalize_kbq_dimensions(parsed)
+        legacy_demension = _normalize_kbq_dimensions(parsed)
+        return [], [], legacy_demension
 
     if isinstance(parsed, dict):
-        user_dimensions = parsed.get("user_dimensions")
-        if isinstance(user_dimensions, list) and user_dimensions:
-            return _normalize_kbq_dimensions(user_dimensions), []
+        user_raw = parsed.get("user_demension")
+        if user_raw is None:
+            user_raw = parsed.get("user_dimensions")
+        llm_raw = parsed.get("llm_demension")
+        if llm_raw is None:
+            llm_raw = parsed.get("llm_dimensions")
+        if llm_raw is None:
+            llm_raw = parsed.get("supplemental_dimensions")
+        demension_raw = parsed.get("demension")
+        if demension_raw is None:
+            demension_raw = parsed.get("dimensions")
 
-        dimensions = parsed.get("dimensions")
-        if isinstance(dimensions, list):
-            return [], _normalize_kbq_dimensions(dimensions)
+        user_demension = _normalize_kbq_dimensions(user_raw or [])
+        llm_demension = _normalize_kbq_dimensions(llm_raw or [])
+        demension = _normalize_kbq_dimensions(demension_raw or [])
 
-        llm_dimensions = parsed.get("llm_dimensions")
-        if isinstance(llm_dimensions, list):
-            return [], _normalize_kbq_dimensions(llm_dimensions)
+        if not demension and (user_demension or llm_demension):
+            demension = _merge_kbq_dimensions(user_demension, llm_demension)
 
-    return [], []
+        return user_demension, llm_demension, demension
+
+    return [], [], []
 
 
 def _merge_kbq_dimensions(
@@ -474,43 +486,52 @@ def generate_kbq_notes_step(
         if not key_bq_text:
             continue
 
-        user_dimensions, legacy_dimensions = _parse_kbq_dimension_payload(row.get("dimension_json"))
-        dimensions_result: Dict[str, Any] = {"dimensions": []}
-        dimensions: List[Dict[str, Any]] = []
+        user_demension, llm_demension, demension = _parse_kbq_dimension_payload(row.get("dimension_json"))
+        generated_llm_demension: List[Dict[str, Any]] = []
+        demension_result: Dict[str, Any] = {"user_demension": [], "llm_demension": [], "demension": []}
+        merged_demension: List[Dict[str, Any]] = []
 
         log_interview("KBQ", interview_id, f"start generating KBQ Notes for key BQ {kbq_id}")
         try:
-            if user_dimensions:
+            if user_demension:
                 if model_client is not None:
                     generated_dimensions_result = model_client.generate_kbq_dimensions(
                         key_bq_text=key_bq_text,
                         project_context=project_context,
                         interview_context=interview_context,
-                        user_dimensions=user_dimensions,
+                        user_dimensions=user_demension,
                     )
-                    supplemental_dimensions = generated_dimensions_result.get("dimensions") or []
-                    dimensions = _merge_kbq_dimensions(user_dimensions, supplemental_dimensions)
-                    dimensions_result = {
-                        "user_dimensions": user_dimensions,
-                        "llm_dimensions": supplemental_dimensions,
-                        "dimensions": dimensions,
+                    generated_llm_demension = generated_dimensions_result.get("dimensions") or []
+                    llm_demension = _merge_kbq_dimensions(llm_demension, generated_llm_demension)
+                    merged_demension = _merge_kbq_dimensions(user_demension, llm_demension)
+                    demension_result = {
+                        "user_demension": user_demension,
+                        "llm_demension": llm_demension,
+                        "demension": merged_demension,
                     }
                     if "llm_raw_output" in generated_dimensions_result:
-                        dimensions_result["llm_raw_output"] = generated_dimensions_result["llm_raw_output"]
+                        demension_result["llm_raw_output"] = generated_dimensions_result["llm_raw_output"]
                 else:
-                    dimensions = list(user_dimensions)
-                    dimensions_result = {
-                        "user_dimensions": user_dimensions,
-                        "llm_dimensions": [],
-                        "dimensions": dimensions,
+                    merged_demension = list(user_demension)
+                    demension_result = {
+                        "user_demension": user_demension,
+                        "llm_demension": llm_demension,
+                        "demension": merged_demension,
                         "llm_raw_output": model_client_error or "model client not available",
                     }
-            elif legacy_dimensions:
-                dimensions = list(legacy_dimensions)
-                dimensions_result = {
-                    "user_dimensions": [],
-                    "llm_dimensions": [],
-                    "dimensions": dimensions,
+            elif llm_demension:
+                merged_demension = list(llm_demension)
+                demension_result = {
+                    "user_demension": [],
+                    "llm_demension": llm_demension,
+                    "demension": merged_demension,
+                }
+            elif demension:
+                merged_demension = list(demension)
+                demension_result = {
+                    "user_demension": [],
+                    "llm_demension": [],
+                    "demension": merged_demension,
                 }
             elif model_client is not None:
                 generated_dimensions_result = model_client.generate_kbq_dimensions(
@@ -518,17 +539,26 @@ def generate_kbq_notes_step(
                     project_context=project_context,
                     interview_context=interview_context,
                 )
-                dimensions = generated_dimensions_result.get("dimensions") or []
-                dimensions_result = dict(generated_dimensions_result)
-                dimensions_result["dimensions"] = dimensions
+                generated_llm_demension = generated_dimensions_result.get("dimensions") or []
+                llm_demension = _merge_kbq_dimensions(llm_demension, generated_llm_demension)
+                merged_demension = _merge_kbq_dimensions(user_demension, llm_demension)
+                demension_result = {
+                    "user_demension": user_demension,
+                    "llm_demension": llm_demension,
+                    "demension": merged_demension,
+                }
+                if "llm_raw_output" in generated_dimensions_result:
+                    demension_result["llm_raw_output"] = generated_dimensions_result["llm_raw_output"]
             else:
-                dimensions = []
-                dimensions_result = {
-                    "dimensions": [],
+                merged_demension = []
+                demension_result = {
+                    "user_demension": [],
+                    "llm_demension": [],
+                    "demension": [],
                     "llm_raw_output": model_client_error or "model client not available",
                 }
 
-            query_text = _build_kbq_query_text(key_bq_text, dimensions)
+            query_text = _build_kbq_query_text(key_bq_text, merged_demension)
             segments = _retrieve_segments_from_summary(minutes_segments, query_text, top_k=top_k)
             log_interview("KBQ", interview_id, f"key BQ {kbq_id} retrieved {len(segments)} local segments")
 
@@ -542,7 +572,7 @@ def generate_kbq_notes_step(
             else:
                 notes = model_client.generate_kbq_notes(
                     key_bq_text=key_bq_text,
-                    dimensions=dimensions,
+                    demension=merged_demension,
                     segments=segments,
                     project_context=project_context,
                     interview_context=interview_context,
@@ -555,7 +585,7 @@ def generate_kbq_notes_step(
                     "kbq_id": kbq_id,
                     "kbq_order": kbq_order,
                     "kbq_text": key_bq_text,
-                    "dimensions": dimensions_result if "dimensions_result" in locals() else {},
+                    "demension": demension_result if "demension_result" in locals() else {},
                     "segments": [],
                     "notes": {
                         "error": f"generate kbq notes failed: {exc}",
@@ -572,7 +602,7 @@ def generate_kbq_notes_step(
                 "kbq_id": kbq_id,
                 "kbq_order": kbq_order,
                 "kbq_text": key_bq_text,
-                "dimensions": dimensions_result,
+                "demension": demension_result,
                 "segments": segments,
                 "notes": notes,
             }
@@ -610,7 +640,7 @@ def write_kbq_notes_results_step(kbq_block: Dict[str, Any]) -> Dict[str, Any]:
         interview_id = item.get("project_interview_id")
         kbq_order = item.get("kbq_order")
         kbq_text = item.get("kbq_text")
-        dimensions = item.get("dimensions") or {}
+        demension_bundle = item.get("demension") or {}
         notes = item.get("notes") or {}
 
         if not isinstance(notes, dict):
@@ -620,14 +650,14 @@ def write_kbq_notes_results_step(kbq_block: Dict[str, Any]) -> Dict[str, Any]:
             errors.append(f"kbq_order={kbq_order}: missing ids/text for insert")
             continue
 
-        compact_dimensions = dimensions if isinstance(dimensions, dict) else {"dimensions": dimensions}
-        if isinstance(compact_dimensions, dict):
-            compact_dimensions = dict(compact_dimensions)
-            compact_dimensions.pop("llm_raw_output", None)
+        compact_demension = demension_bundle if isinstance(demension_bundle, dict) else {"demension": demension_bundle}
+        if isinstance(compact_demension, dict):
+            compact_demension = dict(compact_demension)
+            compact_demension.pop("llm_raw_output", None)
         compact_notes = dict(notes)
         compact_notes.pop("llm_raw_output", None)
 
-        dimension_json = json.dumps(compact_dimensions, ensure_ascii=False)
+        dimension_json = json.dumps(compact_demension, ensure_ascii=False)
         note_json = json.dumps(compact_notes, ensure_ascii=False)
         status = _get_kbq_status(notes) if isinstance(notes, dict) else "failed"
 

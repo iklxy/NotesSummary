@@ -181,14 +181,14 @@ def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
                 FROM bh_project_key_bq k
                 WHERE k.project_id = p.id
                   AND k.name = %s
-            ), 0) AS key_bq_count,
-            (
+            ), CASE WHEN p.key_bq_json IS NULL THEN 0 ELSE 1 END) AS key_bq_count,
+            COALESCE((
                 SELECT k.key_bq_json
                 FROM bh_project_key_bq k
                 WHERE k.project_id = p.id
                   AND k.name = %s
                 LIMIT 1
-            ) AS key_bq_json,
+            ), p.key_bq_json) AS key_bq_json,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_interview i
@@ -255,14 +255,14 @@ def fetch_project_by_id(
                 FROM bh_project_key_bq k
                 WHERE k.project_id = p.id
                   AND k.name = %s
-            ), 0) AS key_bq_count,
-            (
+            ), CASE WHEN p.key_bq_json IS NULL THEN 0 ELSE 1 END) AS key_bq_count,
+            COALESCE((
                 SELECT k.key_bq_json
                 FROM bh_project_key_bq k
                 WHERE k.project_id = p.id
                   AND k.name = %s
                 LIMIT 1
-            ) AS key_bq_json,
+            ), p.key_bq_json) AS key_bq_json,
             COALESCE((
                 SELECT COUNT(1)
                 FROM bh_project_interview i
@@ -920,10 +920,16 @@ def upsert_project_key_bq(
         ON DUPLICATE KEY UPDATE
             key_bq_json = VALUES(key_bq_json)
     """
+    project_sql = """
+        UPDATE bh_project
+        SET key_bq_json = %s
+        WHERE id = %s
+    """
+    normalized_json = _json_or_none(key_bq_json)
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (project_id, PROJECT_KEY_BQ_CURRENT_NAME, _json_or_none(key_bq_json)))
+            cursor.execute(sql, (project_id, PROJECT_KEY_BQ_CURRENT_NAME, normalized_json))
             affected = cursor.rowcount
         conn.commit()
     except Exception:
@@ -931,6 +937,20 @@ def upsert_project_key_bq(
         raise
     finally:
         conn.close()
+
+    try:
+        mirror_conn = get_connection()
+        try:
+            with mirror_conn.cursor() as cursor:
+                cursor.execute(project_sql, (normalized_json, project_id))
+            mirror_conn.commit()
+        except Exception:
+            mirror_conn.rollback()
+        finally:
+            mirror_conn.close()
+    except Exception:
+        pass
+
     return affected
 
 

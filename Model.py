@@ -574,13 +574,13 @@ class ModelClient:
     def generate_kbq_notes(
         cls,
         key_bq_text: str,
-        dimensions: List[Dict[str, Any]],
+        demension: List[Dict[str, Any]],
         segments: List[Dict[str, Any]],
         project_context: Optional[str] = None,
         interview_context: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
-        根据 key BQ、抽取维度与检索片段生成 KBQ Notes。
+        根据 key BQ、合并后的 demension 与检索片段生成 KBQ Notes。
 
         参数:
             key_bq_text: 单条 key BQ 的原文文本。
@@ -602,7 +602,7 @@ class ModelClient:
             project_context_block=cls._build_project_context_block(project_context),
             interview_context_block=cls._build_interview_context_block(interview_context),
             key_bq_text=key_bq_text,
-            dimensions=dimensions,
+            demension=demension,
             segments=segments,
         )
 
