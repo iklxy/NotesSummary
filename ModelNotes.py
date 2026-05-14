@@ -1044,14 +1044,14 @@ def generate_kbq_dimensions(
     if normalized_user_dimensions:
         system_prompt = (
             "你是一名医学、药学、体外诊断和市场调研领域的分析专家。"
-            "你的任务是基于用户已定义的分析维度，补充少量不重复的维度候选。"
+            "你的任务是基于访谈原文以及用户已定义的分析维度，补充少量不重复的维度候选。"
             "只输出严格合法的 JSON，不要输出额外说明。"
         )
         user_prompt = (
             f"{project_context_block}"
             f"{interview_context_block}"
             "下面是一条 key BQ。用户已经提供了必须覆盖的分析维度。"
-            "请在不重复、不改写用户维度的前提下，补充 0 到 3 个额外维度。\n\n"
+            "请在不重复、不改写用户维度的前提下，补充 2 到 4 个额外维度。\n\n"
             f"【key BQ】\n{key_bq_text}\n\n"
             f"【用户已定义的维度】\n{user_dimensions_block}\n\n"
             "请输出 JSON，结构参考如下：\n"
@@ -1064,7 +1064,11 @@ def generate_kbq_dimensions(
             "1. 只输出需要补充的维度，不要重复用户已定义的维度。\n"
             "2. 如果用户已定义的维度已经足够，可以返回空数组。\n"
             "3. 维度应当是可操作的分析框架，而不是空泛标签。\n"
-            "4. 不要输出不必要的解释。"
+            "4. 不要输出不必要的解释。\n"
+            "5. 维度必须严格来自原文实际讨论内容，不编造、不新增、不展示原文未涉及维度。\n"
+            "6. 维度数量按原文实际情况灵活确定。\n"
+            "维度要求：\n"
+            "1. 抽象稳定、可检索、可操作、适配纪要总结。\n"
         )
     else:
         system_prompt = (
@@ -1160,6 +1164,7 @@ def generate_kbq_notes(
         "2. 不要输出分析过程和证据。\n"
         "3. 只输出 JSON。\n"
         "4. 维度总结要简洁、准确、书面化，适合直接写入研究笔记。\n"
+        "5. 若提供的key BQ下存在子问题，必须基于原文完整回答所有子问题，确保覆盖子问题核心信息。\n"
     )
     content = generate_fn(system_prompt, user_prompt)
     return parse_kbq_notes_response(generate_fn, content)
