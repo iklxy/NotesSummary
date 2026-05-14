@@ -221,7 +221,7 @@ function buildKeyBqJson(values: KeyBqFormValues): KeyBqJson {
     }));
 
   if (key_bq_list.length === 0) {
-    throw new Error("请至少填写一条 Key BQ");
+    throw new Error("请至少填写一条 KBQ");
   }
 
   return { key_bq_list };
@@ -649,11 +649,11 @@ export default function ProjectDetailClient({ projectId }: Props) {
       await updateProjectKeyBqCurrent(projectId, {
         key_bq_json: buildKeyBqJson(values as KeyBqFormValues),
       });
-      message.success("Key BQ 已保存");
+      message.success("KBQ 已保存");
       setKeyBqModalOpen(false);
       await loadProjectDetail();
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "保存 Key BQ 失败");
+      message.error(e instanceof Error ? e.message : "保存 KBQ 失败");
     } finally {
       setKeyBqSaving(false);
     }
@@ -808,11 +808,11 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 {project?.name || `项目 ${projectId}`}
               </Title>
               <Paragraph className="!mb-0 !max-w-3xl !text-slate-300">
-                在这里维护项目 Key BQ、访谈对象类型对应的 DG，以及访谈入口。新建访谈时只需要选择对象类型，系统会自动对应 DG 和共享的 Key BQ。
+                在这里维护项目 KBQ、访谈对象类型对应的 DG，以及访谈入口。新建访谈时只需要选择对象类型，系统会自动对应 DG 和共享的 KBQ。
               </Paragraph>
               <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <Tag color="cyan">问卷 {projectCounts.questionnaire_count ?? 0}</Tag>
-                <Tag color="geekblue">Key BQ {projectCounts.key_bq_count ?? 0}</Tag>
+                <Tag color="geekblue">KBQ {projectCounts.key_bq_count ?? 0}</Tag>
                 <Tag color="green">访谈 {projectCounts.interview_count ?? 0}</Tag>
               </div>
             </div>
@@ -996,21 +996,21 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
                       <Title level={4} style={{ marginBottom: 4 }} className="summarynotes-section-title">
-                        项目 Key BQ
+                        项目 KBQ
                       </Title>
                       <Text type="secondary">
-                        这里维护一个项目级 Key BQ，所有访谈共用同一份内容。后续可以直接修改并再次保存。
+                        这里维护一个项目级 KBQ，所有访谈共用同一份内容。后续可以直接修改并再次保存。
                       </Text>
                     </div>
                     <Button type="primary" icon={<EditOutlined />} onClick={openKeyBqEditModal}>
-                      编辑 Key BQ
+                      编辑 KBQ
                     </Button>
                   </div>
                   <Space direction="vertical" size={10} style={{ width: "100%" }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       {getKeyBqCount(projectKeyBq) > 0
-                        ? `当前共有 ${getKeyBqCount(projectKeyBq)} 条 Key BQ。`
-                        : "当前还没有填写 Key BQ。"}
+                        ? `当前共有 ${getKeyBqCount(projectKeyBq)} 条 KBQ。`
+                        : "当前还没有填写 KBQ。"}
                     </Text>
                     <Paragraph
                       style={{
@@ -1022,7 +1022,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         minHeight: 120,
                       }}
                     >
-                      {renderKeyBqPreview(projectKeyBq) || "点击右上角按钮编辑项目 Key BQ。"}
+                      {renderKeyBqPreview(projectKeyBq) || "点击右上角按钮编辑项目 KBQ。"}
                     </Paragraph>
                   </Space>
                 </Card>
@@ -1036,7 +1036,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         访谈列表
                       </Title>
                       <Text type="secondary">
-                        这里展示该项目下所有访谈。新建访谈时只需要选择对象类型，系统会自动使用对应 DG 和项目 Key BQ。
+                        这里展示该项目下所有访谈。新建访谈时只需要选择对象类型，系统会自动使用对应 DG 和项目 KBQ。
                       </Text>
                     </div>
                     <Button
@@ -1176,7 +1176,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
       <Modal
         open={keyBqModalOpen}
-        title="编辑 Key BQ"
+        title="编辑 KBQ"
         onOk={() => void handleKeyBqSubmit()}
         onCancel={handleKeyBqCancel}
         confirmLoading={keyBqSaving}
@@ -1201,7 +1201,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   >
                     <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
                       <div>
-                        <Text strong>Key BQ #{index + 1}</Text>
+                        <Text strong>KBQ #{index + 1}</Text>
                         <div>
                           <Text type="secondary" style={{ fontSize: 12 }}>
                             留空会在保存时自动忽略。
@@ -1214,13 +1214,13 @@ export default function ProjectDetailClient({ projectId }: Props) {
                     </Space>
 
                     <Form.Item
-                      label="BQ 内容"
+                      label="KBQ 内容"
                       name={[field.name, "text"]}
                       style={{ marginTop: 12, marginBottom: 12 }}
                     >
                       <Input.TextArea
                         rows={3}
-                        placeholder="请输入 Key BQ 内容"
+                        placeholder="请输入 KBQ 内容"
                       />
                     </Form.Item>
 
@@ -1284,7 +1284,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 ))}
 
                 <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ text: "", dimensions: [] })} block>
-                  添加 Key BQ
+                  添加 KBQ
                 </Button>
               </Space>
             )}
@@ -1379,8 +1379,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
           <Alert
             type="warning"
             showIcon
-            message="请先准备 DG 和 Key BQ"
-            description="新建访谈要求至少有一个已配置对象类型对应的 DG，以及项目 Key BQ。"
+            message="请先准备 DG 和 KBQ"
+            description="新建访谈要求至少有一个已配置对象类型对应的 DG，以及项目 KBQ。"
             style={{ marginBottom: 16 }}
           />
         ) : null}
@@ -1419,7 +1419,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
               </Form.Item>
               <div style={{ marginBottom: 16 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  选中对象类型后，系统会自动对应到同类型 DG 和项目 Key BQ。
+                  选中对象类型后，系统会自动对应到同类型 DG 和项目 KBQ。
                 </Text>
               </div>
               <Form.Item label="音频文件">

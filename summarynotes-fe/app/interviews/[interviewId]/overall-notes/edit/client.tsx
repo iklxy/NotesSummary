@@ -513,12 +513,11 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                 全文 Notes 编辑 #{interviewId > 0 ? interviewId : "无效"}
               </Title>
               <Paragraph className="summarynotes-hero-description">
-                A / B / C 三个区块都可以单独修改。这里采用表单式编辑，不需要直接接触 JSON。
+                A / B 两个区块都可以单独修改。这里采用表单式编辑，不需要直接接触 JSON。
               </Paragraph>
               <div className="summarynotes-hero-tags">
-                <Tag color="cyan">A 访谈总览</Tag>
-                <Tag color="geekblue">B KBQ Notes</Tag>
-                <Tag color="green">C 智能纪要</Tag>
+                <Tag color="geekblue">A KBQ Notes</Tag>
+                <Tag color="green">B 智能纪要</Tag>
               </div>
             </div>
             <Space wrap className="summarynotes-hero-actions">
@@ -559,50 +558,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
             />
           ) : data ? (
             <Space direction="vertical" size="large" style={{ width: "100%" }}>
-              <Card className="summarynotes-notes-section-card" title="A. 访谈总览 Summary Notes">
-                <Row gutter={[20, 20]}>
-                  <Col xs={24} lg={14}>
-                    <div className="summarynotes-notes-preview-panel">
-                      {summaryPreview ? (
-                        <MarkdownContent content={summaryPreview} />
-                      ) : (
-                        <Text type="secondary">暂无整体 summary notes。</Text>
-                      )}
-                    </div>
-                  </Col>
-                  <Col xs={24} lg={10}>
-                    <div className="summarynotes-notes-editor-panel">
-                      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                        <div>
-                          <Text className="summarynotes-panel-label">编辑 A 区块</Text>
-                          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                            直接像写文档一样编辑整体 summary notes。
-                          </Paragraph>
-                        </div>
-                        <TextArea
-                          value={summaryDraft}
-                          onChange={(event) => setSummaryDraft(event.target.value)}
-                          rows={16}
-                          placeholder="请输入整体 summary notes"
-                          className="summarynotes-json-editor"
-                        />
-                        <div className="summarynotes-editor-actions">
-                          <Button
-                            type="primary"
-                            icon={<SaveOutlined />}
-                            onClick={() => void handleSaveSummary()}
-                            loading={savingSummary}
-                          >
-                            保存 A 区块
-                          </Button>
-                        </div>
-                      </Space>
-                    </div>
-                  </Col>
-                </Row>
-              </Card>
-
-              <Card className="summarynotes-notes-section-card" title="B. KBQ Notes">
+              <Card className="summarynotes-notes-section-card" title="A. KBQ Notes">
                 <Row gutter={[20, 20]}>
                   <Col xs={24} lg={14}>
                     <div className="summarynotes-notes-preview-panel">
@@ -687,9 +643,9 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                     <div className="summarynotes-notes-editor-panel">
                       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                         <div>
-                          <Text className="summarynotes-panel-label">编辑 B 区块</Text>
+                          <Text className="summarynotes-panel-label">编辑 A 区块</Text>
                           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                            先选择要修改的 Key BQ，再逐条编辑维度摘要、分析和证据。
+                            先选择要修改的 KBQ，再逐条编辑维度摘要、分析和证据。
                           </Paragraph>
                         </div>
 
@@ -700,16 +656,16 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                             value: item.id,
                             label: `${item.bq_order}. ${item.bq_text}`,
                           }))}
-                          placeholder="请选择要编辑的 Key BQ"
+                          placeholder="请选择要编辑的 KBQ"
                           disabled={kbqItems.length === 0}
                         />
 
                         {selectedKbqItem ? (
                           <>
                             <div className="summarynotes-edit-form-block">
-                              <Text className="summarynotes-panel-label" style={{ marginBottom: 6 }}>
-                                整体说明
-                              </Text>
+                                <Text className="summarynotes-panel-label" style={{ marginBottom: 6 }}>
+                                  整体说明
+                                </Text>
                               <TextArea
                                 value={selectedKbqDraftValue.summary}
                                 onChange={(event) => {
@@ -720,7 +676,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                                   }));
                                 }}
                                 rows={4}
-                                placeholder="可选：填写这条 Key BQ 的整体说明"
+                                placeholder="可选：填写这条 KBQ 的整体说明"
                               />
                             </div>
 
@@ -797,7 +753,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                                 onClick={() => void handleSaveKbq()}
                                 loading={savingKbq}
                               >
-                                保存 B 区块
+                                保存 A 区块
                               </Button>
                             </div>
                           </>
@@ -810,7 +766,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                 </Row>
               </Card>
 
-              <Card className="summarynotes-notes-section-card" title="C. 智能纪要">
+              <Card className="summarynotes-notes-section-card" title="B. 智能纪要">
                 <Row gutter={[20, 20]}>
                   <Col xs={24} lg={14}>
                     <div className="summarynotes-notes-preview-panel">
@@ -825,7 +781,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                     <div className="summarynotes-notes-editor-panel">
                       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                         <div>
-                          <Text className="summarynotes-panel-label">编辑 C 区块</Text>
+                          <Text className="summarynotes-panel-label">编辑 B 区块</Text>
                           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                             直接编辑整篇智能纪要长文本，保存后会覆盖当前内容。
                           </Paragraph>
@@ -852,7 +808,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                             onClick={() => void handleSaveMinutes()}
                             loading={savingMinutes}
                           >
-                            保存 C 区块
+                            保存 B 区块
                           </Button>
                         </div>
                       </Space>

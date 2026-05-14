@@ -438,11 +438,7 @@ def _build_overall_notes_document_xml(
     if subtitle_lines:
         paragraphs.append(_w_blank_paragraph())
 
-    paragraphs.append(_paragraph_from_text("A. 访谈总览 Summary Notes", bold=True, size=28))
-    _append_markdown_text(paragraphs, note_content, base_size=22)
-    paragraphs.append(_w_blank_paragraph())
-
-    paragraphs.append(_paragraph_from_text("B. KBQ Notes", bold=True, size=28))
+    paragraphs.append(_paragraph_from_text("A. KBQ Notes", bold=True, size=28))
     if kbq_items:
         for item in kbq_items:
             bq_order = item.get("bq_order")
@@ -484,7 +480,7 @@ def _build_overall_notes_document_xml(
         paragraphs.append(_paragraph_from_text("暂无 KBQ Notes。", size=22))
         paragraphs.append(_w_blank_paragraph())
 
-    paragraphs.append(_paragraph_from_text("C. 智能纪要", bold=True, size=28))
+    paragraphs.append(_paragraph_from_text("B. 智能纪要", bold=True, size=28))
     _append_markdown_text(paragraphs, minutes_text, base_size=22)
 
     body = "".join(paragraphs)

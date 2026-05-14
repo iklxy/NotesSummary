@@ -178,12 +178,11 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 全文 Notes #{interviewId > 0 ? interviewId : "无效"}
               </Title>
               <Paragraph className="summarynotes-hero-description">
-                这里展示 A / B / C 三段全文 Notes，可直接跳转到编辑页进行修改。
+                这里展示 A / B 两段全文 Notes，可直接跳转到编辑页进行修改。
               </Paragraph>
               <div className="summarynotes-hero-tags">
-                <Tag color="cyan">A 访谈总览</Tag>
-                <Tag color="geekblue">B KBQ Notes</Tag>
-                <Tag color="green">C 智能纪要</Tag>
+                <Tag color="geekblue">A KBQ Notes</Tag>
+                <Tag color="green">B 智能纪要</Tag>
               </div>
             </div>
             <Space wrap className="summarynotes-hero-actions">
@@ -223,15 +222,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
             <Alert type="error" message={error} />
           ) : (
             <Space direction="vertical" size="large" style={{ width: "100%" }}>
-              <Card className="summarynotes-notes-section-card" title="A. 访谈总览 Summary Notes">
-                {data?.note_content ? (
-                  <MarkdownContent content={data.note_content} />
-                ) : (
-                  <Text type="secondary">暂无整体 summary notes。</Text>
-                )}
-              </Card>
-
-              <Card className="summarynotes-notes-section-card" title="B. KBQ Notes">
+              <Card className="summarynotes-notes-section-card" title="A. KBQ Notes">
                 {data?.kbq_notes?.items?.length ? (
                   <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                     {data.kbq_notes.items.map((item) => {
@@ -283,7 +274,7 @@ export default function OverallNotesClient({ interviewId }: Props) {
                 )}
               </Card>
 
-              <Card className="summarynotes-notes-section-card" title="C. 智能纪要">
+              <Card className="summarynotes-notes-section-card" title="B. 智能纪要">
                 <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                   {minutesText ? (
                     <MarkdownContent content={minutesText} />
