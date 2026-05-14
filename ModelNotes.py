@@ -1054,14 +1054,8 @@ def generate_kbq_dimensions(
             "请在不重复、不改写用户维度的前提下，补充 2 到 4 个额外维度。\n\n"
             f"【key BQ】\n{key_bq_text}\n\n"
             f"【用户已定义的维度】\n{user_dimensions_block}\n\n"
-            "请输出 JSON，结构参考如下：\n"
-            "{\n"
-            '  "dimensions": [\n'
-            '    {"name": "补充维度名称", "description": "补充维度描述"}\n'
-            "  ]\n"
-            "}\n"
             "要求：\n"
-            "1. 只输出需要补充的维度，不要重复用户已定义的维度。\n"
+            "1. 维度\n"
             "2. 如果用户已定义的维度已经足够，可以返回空数组。\n"
             "3. 维度应当是可操作的分析框架，而不是空泛标签。\n"
             "4. 不要输出不必要的解释。\n"
@@ -1069,6 +1063,12 @@ def generate_kbq_dimensions(
             "6. 维度数量按原文实际情况灵活确定。\n"
             "维度要求：\n"
             "1. 抽象稳定、可检索、可操作、适配纪要总结。\n"
+            "请输出 JSON，结构参考如下：\n"
+            "{\n"
+            '  "dimensions": [\n'
+            '    {"name": "补充维度名称", "description": "补充维度描述"}\n'
+            "  ]\n"
+            "}\n"
         )
     else:
         system_prompt = (

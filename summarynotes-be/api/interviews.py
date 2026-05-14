@@ -1914,9 +1914,13 @@ def get_interview_summary(
             ]
         }
     """
-    _get_owned_interview_or_404(interview_id, current_user_id)
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
     rows: List[Dict[str, Any]] = fetch_interview_summary(project_interview_id=interview_id)
-    return {"interview_id": interview_id, "items": rows}
+    return {
+        "interview_id": interview_id,
+        "project_id": interview.get("parse_project_id"),
+        "items": rows,
+    }
 
 
 @router.get("/{interview_id}/trans/export-word")

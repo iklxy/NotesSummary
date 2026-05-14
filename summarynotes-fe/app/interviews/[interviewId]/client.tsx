@@ -26,6 +26,7 @@ import {
   Slider,
 } from "antd";
 import {
+  ArrowLeftOutlined,
   AudioMutedOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -215,6 +216,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [summary, setSummary] = useState<InterviewSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const projectId = summary?.project_id ?? null;
   const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
   const [draftSummaryText, setDraftSummaryText] = useState("");
   const [savingSummaryId, setSavingSummaryId] = useState<number | null>(null);
@@ -1119,6 +1121,17 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     <Layout className="min-h-screen">
       <Header className="flex items-center justify-between bg-slate-900 shadow px-6">
         <Space>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={() => {
+              if (projectId && projectId > 0) {
+                router.push(`/projects/${projectId}`);
+              }
+            }}
+            disabled={!projectId || projectId <= 0}
+          >
+            返回项目详情
+          </Button>
           <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
             访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
           </Title>

@@ -160,6 +160,7 @@ export interface InterviewSummaryItem {
 
 export interface InterviewSummaryResponse {
   interview_id: number;
+  project_id?: number | null;
   items: InterviewSummaryItem[];
 }
 
