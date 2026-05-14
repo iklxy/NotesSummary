@@ -13,6 +13,7 @@ __pycache__/
 /documents/
 /runtime/
 /audio/
+/data/
 
 # 访谈备份目录，里面包含音频和问卷备份文件，体积较大
 /data/project_*/
