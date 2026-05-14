@@ -623,6 +623,15 @@ export default function ProjectDetailClient({ projectId }: Props) {
     return map;
   }, [questionnaires]);
 
+  const interviewQuestionnaireOptions = useMemo(
+    () =>
+      questionnaires.map((item) => ({
+        value: item.id,
+        label: item.name,
+      })),
+    [questionnaires],
+  );
+
   const selectedInterviewRole = useMemo(() => {
     if (!selectedInterviewRoleId) {
       return null;
@@ -638,29 +647,13 @@ export default function ProjectDetailClient({ projectId }: Props) {
     return fields.length > 0 ? fields : getDefaultRoleFields(selectedInterviewRole.role_type);
   }, [selectedInterviewRole]);
 
-  const interviewQuestionnaires = useMemo(() => {
-    if (!selectedInterviewRoleId) {
-      return [];
-    }
-    return questionnairesByRoleId.get(selectedInterviewRoleId) ?? [];
-  }, [questionnairesByRoleId, selectedInterviewRoleId]);
-
   const questionnaireRoleOptions = useMemo(
     () =>
       roles.map((role) => ({
         value: role.id,
-        label: `${getRoleTypeLabel(role.role_type)} · ${role.role_name}`,
+        label: role.role_name,
       })),
     [roles],
-  );
-
-  const interviewRoleOptions = useMemo(
-    () =>
-      roles.map((role) => ({
-        value: role.id,
-        label: `${getRoleTypeLabel(role.role_type)} · ${role.role_name}（${questionnairesByRoleId.get(role.id)?.length ?? 0} 份 DG）`,
-      })),
-    [questionnairesByRoleId, roles],
   );
 
   const openQuestionnaireModal = (targetRoleId?: number) => {
@@ -927,34 +920,12 @@ export default function ProjectDetailClient({ projectId }: Props) {
     if (isGuideLearning(guideStatus)) {
       message.warning("项目指南仍在学习中，建议完成后再创建访谈。");
     }
-    const firstRole =
-      roles.find((role) => (questionnairesByRoleId.get(role.id)?.length ?? 0) > 0) ?? roles[0] ?? null;
-    const firstQuestionnaire = firstRole ? questionnairesByRoleId.get(firstRole.id)?.[0] ?? null : null;
-    setSelectedInterviewRoleId(firstRole?.id ?? null);
+    const firstQuestionnaire = questionnaires[0] ?? null;
+    setSelectedInterviewRoleId(firstQuestionnaire?.role_id ?? null);
     interviewForm.setFieldsValue({
-      role_id: firstRole?.id ?? undefined,
       questionnaire_id: firstQuestionnaire?.id ?? undefined,
     } as Partial<InterviewFormValues>);
     setInterviewModalOpen(true);
-  };
-
-  const handleInterviewRoleChange = (roleId: number) => {
-    const nextRole = roleById.get(roleId) ?? null;
-    setSelectedInterviewRoleId(roleId);
-    setInterviewDetailDraft({});
-    interviewDetailForm.resetFields();
-    const roleQuestionnaires = questionnairesByRoleId.get(roleId) ?? [];
-    const nextQuestionnaireId = roleQuestionnaires[0]?.id ?? null;
-    interviewForm.setFieldsValue({
-      role_id: roleId,
-      questionnaire_id: nextQuestionnaireId ?? undefined,
-    });
-    if (!nextRole) {
-      return;
-    }
-    if (nextQuestionnaireId) {
-      setSelectedInterviewRoleId(roleId);
-    }
   };
 
   const handleInterviewQuestionnaireChange = (questionnaireId: number) => {
@@ -1017,15 +988,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setInterviewSaving(false);
         return;
       }
-      const roleId = Number(values.role_id || selectedInterviewRoleId || 0);
       const questionnaireId = Number(values.questionnaire_id || 0);
-      if (!roleId) {
-        message.warning("请选择角色");
-        setInterviewSaving(false);
-        return;
-      }
       if (!questionnaireId) {
-        message.warning("请选择对应 DG");
+        message.warning("请选择 DG 问卷");
         setInterviewSaving(false);
         return;
       }
@@ -1422,6 +1387,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
         title="添加 DG"
         onOk={() => void handleQuestionnaireSubmit()}
         onCancel={handleQuestionnaireModalCancel}
+        okText="确定"
+        cancelText="取消"
         confirmLoading={questionnaireSaving}
         cancelButtonProps={{ disabled: questionnaireSaving }}
         closable={!questionnaireSaving}
@@ -1452,7 +1419,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 rules={[{ required: true, message: "请选择角色" }]}
               >
                 <Select
-                  placeholder="请选择角色"
+                  placeholder="请选择已创建角色"
                   options={questionnaireRoleOptions}
                   onChange={(value) => handleQuestionnaireExistingRoleChange(Number(value))}
                 />
@@ -1484,7 +1451,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
               <Row gutter={12}>
                 <Col span={12}>
                   <Form.Item
-                    label="角色类型"
+                    label="角色模板类型"
                     name="role_type"
                     rules={[{ required: true, message: "请选择角色类型" }]}
                   >
@@ -1534,17 +1501,17 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         </Space>
                         <Row gutter={12}>
                           <Col span={8}>
-                            <Form.Item label="key" name={[field.name, "key"]} style={{ marginBottom: 0, marginTop: 8 }}>
-                              <Input placeholder="字段 key，例如 region" />
+                            <Form.Item label="字段标识" name={[field.name, "key"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                              <Input placeholder="例如 region" />
                             </Form.Item>
                           </Col>
                           <Col span={8}>
-                            <Form.Item label="label" name={[field.name, "label"]} style={{ marginBottom: 0, marginTop: 8 }}>
-                              <Input placeholder="字段名称" />
+                            <Form.Item label="字段名称" name={[field.name, "label"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                              <Input placeholder="例如 地区" />
                             </Form.Item>
                           </Col>
                           <Col span={8}>
-                            <Form.Item label="kind" name={[field.name, "kind"]} style={{ marginBottom: 0, marginTop: 8 }}>
+                            <Form.Item label="字段类型" name={[field.name, "kind"]} style={{ marginBottom: 0, marginTop: 8 }}>
                               <Select
                                 options={[
                                   { value: "text", label: "文本" },
@@ -1861,6 +1828,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
         title="新建访谈"
         onOk={() => void handleInterviewSubmit()}
         onCancel={handleInterviewCancel}
+        okText="确定"
+        cancelText="取消"
         confirmLoading={interviewSaving}
         cancelButtonProps={{ disabled: interviewSaving }}
         closable={!interviewSaving}
@@ -1900,35 +1869,20 @@ export default function ProjectDetailClient({ projectId }: Props) {
             </Col>
             <Col span={12}>
               <Form.Item
-                label="访谈角色"
-                name="role_id"
-                rules={[{ required: true, message: "请选择访谈角色" }]}
-              >
-                <Select
-                  options={interviewRoleOptions}
-                  placeholder="请选择访谈角色"
-                  disabled={interviewRoleOptions.length === 0}
-                  onChange={(value) => handleInterviewRoleChange(Number(value))}
-                />
-              </Form.Item>
-              <Form.Item
-                label="对应 DG"
+                label="DG 问卷"
                 name="questionnaire_id"
-                rules={[{ required: true, message: "请选择对应 DG" }]}
+                rules={[{ required: true, message: "请选择 DG 问卷" }]}
               >
                 <Select
-                  placeholder="请选择对应 DG"
-                  options={interviewQuestionnaires.map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                  }))}
-                  disabled={interviewQuestionnaires.length === 0}
+                  placeholder="请选择 DG 问卷"
+                  options={interviewQuestionnaireOptions}
+                  disabled={interviewQuestionnaireOptions.length === 0}
                   onChange={(value) => handleInterviewQuestionnaireChange(Number(value))}
                 />
               </Form.Item>
               <div style={{ marginBottom: 16 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  角色会决定访谈细节模板和可选 DG 列表。
+                  请选择具体 DG 问卷，系统会根据问卷自动带出对应的访谈细节模板。
                 </Text>
               </div>
               <Form.Item label="音频文件">
@@ -1955,6 +1909,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
         title="访谈细节"
         onOk={() => void handleInterviewDetailSubmit()}
         onCancel={handleInterviewDetailCancel}
+        okText="确定"
+        cancelText="取消"
         closable={!interviewSaving}
         maskClosable={!interviewSaving}
         destroyOnHidden
