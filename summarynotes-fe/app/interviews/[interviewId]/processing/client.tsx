@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Layout, Spin, Typography, message } from "antd";
+import BrandHero from "../../../../components/BrandHero";
 import { getInterviewStatus } from "../../../../lib/interviewsApi";
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 interface Props {
@@ -85,14 +86,14 @@ export default function InterviewProcessingClient({ interviewId }: Props) {
           : "正在等待转录";
 
   return (
-    <Layout className="min-h-screen bg-slate-950">
-      <Header className="flex items-center bg-slate-900 shadow px-6">
-        <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
-          SummaryNotes
-        </Title>
-      </Header>
+    <Layout className="min-h-screen bg-slate-50">
+      <BrandHero
+        title="正在等待转录"
+        description={statusText}
+        contentMaxWidthClassName="max-w-3xl"
+      />
       <Content className="flex items-center justify-center p-6">
-        <Card style={{ width: "100%", maxWidth: 640 }}>
+        <Card style={{ width: "100%", maxWidth: 640, borderRadius: 24, boxShadow: "0 18px 44px -28px rgba(15, 23, 42, 0.18)" }}>
           <div className="text-center">
             {loading && !error ? <Spin size="large" /> : null}
             <Title level={3} style={{ marginTop: 24 }}>

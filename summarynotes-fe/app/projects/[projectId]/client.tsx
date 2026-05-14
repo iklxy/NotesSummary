@@ -34,6 +34,7 @@ import {
   ReloadOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
+import BrandHero from "../../../components/BrandHero";
 import MarkdownContent from "../../../components/MarkdownContent";
 import QuestionnaireHotwordReviewModal from "../../../components/QuestionnaireHotwordReviewModal";
 import { createInterview } from "../../../lib/interviewsApi";
@@ -55,7 +56,7 @@ import type {
   QuestionnaireHotwordCandidate,
 } from "../../../lib/types";
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 interface Props {
@@ -1026,53 +1027,33 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
   return (
     <Layout className="min-h-screen">
-      <Header
-        style={{
-          height: "auto",
-          padding: 0,
-          background: "transparent",
-        }}
-      >
-        <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-6 py-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.55)] md:px-10 md:py-10">
-          <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-sky-400/15 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-12 left-1/3 h-44 w-44 rounded-full bg-cyan-300/10 blur-3xl" />
-          <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-            <div className="max-w-4xl">
-              <Button
-                icon={<ArrowLeftOutlined />}
-                onClick={() => router.push("/")}
-                ghost
-                style={{ marginBottom: 14 }}
-              >
-                返回项目列表
-              </Button>
-              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-semibold tracking-[0.24em] text-slate-200">
-                SUMMARYNOTES
-              </div>
-              <Title level={2} className="!mb-2 !mt-4 !text-white">
-                {project?.name || `项目 ${projectId}`}
-              </Title>
-              <Paragraph className="!mb-0 !max-w-3xl !text-slate-300">
-                在这里维护项目 KBQ、角色对应的 DG，以及访谈入口。新建访谈时会先选角色，再选择对应 DG，并自动套用该角色的访谈细节模板。
-              </Paragraph>
-              <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
-                <Tag color="cyan">问卷 {projectCounts.questionnaire_count ?? 0}</Tag>
-                <Tag color="geekblue">KBQ {projectCounts.key_bq_count ?? 0}</Tag>
-                <Tag color="green">访谈 {projectCounts.interview_count ?? 0}</Tag>
-              </div>
-            </div>
-            <Space wrap>
-              <Button icon={<ReloadOutlined />} onClick={() => void loadProjectDetail()}>
-                刷新
-              </Button>
-              <Button onClick={() => router.push(`/projects/${projectId}/ca`)}>CA</Button>
-            </Space>
+      <BrandHero
+        className="mb-20 lg:mb-24"
+        title={project?.name || `项目 ${projectId}`}
+        description="在这里维护项目 KBQ、角色对应的 DG，以及访谈入口。新建访谈时会先选角色，再选择对应 DG，并自动套用该角色的访谈细节模板。"
+        backButton={
+          <Button icon={<ArrowLeftOutlined />} onClick={() => router.push("/")} className="summarynotes-hero-back">
+            返回项目列表
+          </Button>
+        }
+        stats={
+          <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <Tag color="cyan">问卷 {projectCounts.questionnaire_count ?? 0}</Tag>
+            <Tag color="geekblue">KBQ {projectCounts.key_bq_count ?? 0}</Tag>
+            <Tag color="green">访谈 {projectCounts.interview_count ?? 0}</Tag>
           </div>
-        </div>
-      </Header>
-
-      <Content className="bg-slate-50">
-        <div className="p-6 md:p-8">
+        }
+        actions={
+          <Space wrap>
+            <Button icon={<ReloadOutlined />} onClick={() => void loadProjectDetail()}>
+              刷新
+            </Button>
+            <Button onClick={() => router.push(`/projects/${projectId}/ca`)}>CA</Button>
+          </Space>
+        }
+      />
+      <Content className="relative z-0 bg-slate-50 pt-20 lg:pt-24">
+        <div className="relative z-0 p-6 pt-0 md:p-8 md:pt-0">
           {loading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: "72px 0" }}>
               <Spin size="large" />
@@ -1092,7 +1073,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
           ) : project ? (
             <Row gutter={[16, 16]}>
               <Col span={24}>
-                <Card className="summarynotes-project-list-shell">
+                <Card className="summarynotes-project-list-shell summarynotes-project-overview-shell mt-2 lg:mt-4">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
                     <div>
                       <Title level={4} style={{ marginBottom: 8 }} className="summarynotes-section-title">

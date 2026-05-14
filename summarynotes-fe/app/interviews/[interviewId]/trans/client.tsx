@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Button, Card, Layout, Space, Spin, Tag, Typography, message } from "antd";
 import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import BrandHero from "../../../../components/BrandHero";
 import { exportInterviewTransWord, getInterviewSummary } from "../../../../lib/interviewsApi";
 import type { InterviewSummaryResponse } from "../../../../lib/interviewsApi";
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 interface Props {
@@ -100,25 +101,27 @@ export default function TransClient({ interviewId }: Props) {
 
   return (
     <Layout className="min-h-screen bg-slate-50">
-      <Header className="flex items-center justify-between bg-slate-900 px-6 shadow">
-        <Space>
+      <BrandHero
+        className="mb-14 lg:mb-16"
+        title={`全文 trans #${interviewId > 0 ? interviewId : "无效"}`}
+        description="这里展示全文转写内容，并支持导出 Word。"
+        backButton={
           <Button icon={<ArrowLeftOutlined />} onClick={() => router.push(`/interviews/${interviewId}`)}>
             返回访谈
           </Button>
-          <Title level={3} className="mb-0" style={{ color: "#fff" }}>
-            全文 trans #{interviewId > 0 ? interviewId : "无效"}
-          </Title>
-        </Space>
-        <Space>
-          <Button icon={<DownloadOutlined />} onClick={handleExportWord} loading={exporting}>
-            导出 Word
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)} loading={loading}>
-            刷新
-          </Button>
-        </Space>
-      </Header>
-      <Content>
+        }
+        actions={
+          <Space>
+            <Button icon={<DownloadOutlined />} onClick={handleExportWord} loading={exporting}>
+              导出 Word
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)} loading={loading}>
+              刷新
+            </Button>
+          </Space>
+        }
+      />
+      <Content className="pt-10 lg:pt-12">
         <div style={{ maxWidth: 1680, margin: "0 auto", padding: "24px" }}>
           {loading ? (
             <div className="flex items-center justify-center py-16">

@@ -34,6 +34,7 @@ import {
   StepBackwardOutlined,
   StepForwardOutlined,
 } from "@ant-design/icons";
+import BrandHero from "../../../components/BrandHero";
 import MarkdownContent from "../../../components/MarkdownContent";
 import {
   createInterviewQuestions,
@@ -62,7 +63,7 @@ import type {
   QuestionItem,
 } from "../../../lib/types";
 
-const { Header, Content } = Layout;
+const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 interface Props {
@@ -1119,8 +1120,10 @@ export default function InterviewDetailClient({ interviewId }: Props) {
 
   return (
     <Layout className="min-h-screen">
-      <Header className="flex items-center justify-between bg-slate-900 shadow px-6">
-        <Space>
+      <BrandHero
+        title={`访谈详情 #${interviewIdNum > 0 ? interviewIdNum : "无效"}`}
+        description="这里集中管理录音、QS、Notes、few-shot 样本和访谈辅助信息。"
+        backButton={
           <Button
             icon={<ArrowLeftOutlined />}
             onClick={() => {
@@ -1132,19 +1135,18 @@ export default function InterviewDetailClient({ interviewId }: Props) {
           >
             返回项目详情
           </Button>
-          <Title level={3} className="mb-0" style={{ color: "#ffffff" }}>
-            访谈详情 #{interviewIdNum > 0 ? interviewIdNum : "无效"}
-          </Title>
-        </Space>
-        <Space>
-          <Button onClick={() => router.push(`/interviews/${interviewIdNum}/overall-notes`)}>
-            整体 Notes
-          </Button>
-          <Button onClick={() => router.push(`/interviews/${interviewIdNum}/trans`)}>
-            全文 trans
-          </Button>
-        </Space>
-      </Header>
+        }
+        actions={
+          <Space>
+            <Button onClick={() => router.push(`/interviews/${interviewIdNum}/overall-notes`)}>
+              整体 Notes
+            </Button>
+            <Button onClick={() => router.push(`/interviews/${interviewIdNum}/trans`)}>
+              全文 trans
+            </Button>
+          </Space>
+        }
+      />
       <Content className="bg-slate-50">
         <div
           style={{

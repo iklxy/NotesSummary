@@ -1,13 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #171717;
-  --surface: rgba(255, 255, 255, 0.86);
-  --surface-strong: rgba(255, 255, 255, 0.96);
-  --surface-border: rgba(148, 163, 184, 0.24);
-  --shadow-soft: 0 24px 60px -32px rgba(15, 23, 42, 0.24);
-  --shadow-strong: 0 34px 80px -36px rgba(15, 23, 42, 0.34);
+  --background: #f5f7fb;
+  --foreground: #0f172a;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-strong: rgba(255, 255, 255, 0.98);
+  --surface-border: rgba(148, 163, 184, 0.2);
+  --shadow-soft: 0 24px 60px -34px rgba(15, 23, 42, 0.22);
+  --shadow-strong: 0 34px 80px -36px rgba(15, 23, 42, 0.32);
+  --layer-base: 0;
+  --layer-raised: 1;
+  --layer-sticky: 10;
+  --layer-overlay: 1000;
 }
 
 @theme inline {
@@ -18,10 +22,11 @@
 html,
 body {
   min-height: 100%;
+  color-scheme: light;
   background:
-    radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 30%),
-    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.08), transparent 28%),
-    linear-gradient(180deg, #f8fafc 0%, #eef4fb 100%);
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.08), transparent 28%),
+    linear-gradient(180deg, #f5f7fb 0%, #edf2f7 100%);
   color: var(--foreground);
   font-family: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
   margin: 0;
@@ -42,15 +47,21 @@ body {
 }
 
 .summarynotes-project-list-shell {
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  position: relative;
+  z-index: var(--layer-raised);
+  border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 24px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.98)),
-    radial-gradient(circle at top left, rgba(56, 189, 248, 0.08), transparent 32%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98)),
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.06), transparent 32%);
   box-shadow:
     var(--shadow-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
+}
+
+.summarynotes-project-overview-shell {
+  z-index: var(--layer-base);
 }
 
 .summarynotes-project-list-shell .ant-card-body {
@@ -78,7 +89,9 @@ body {
 }
 
 .summarynotes-project-card {
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  position: relative;
+  z-index: var(--layer-base);
+  border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 20px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
@@ -93,10 +106,11 @@ body {
 
 .summarynotes-project-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(56, 189, 248, 0.45);
+  z-index: var(--layer-raised);
+  border-color: rgba(15, 118, 110, 0.34);
   box-shadow:
-    0 22px 44px -24px rgba(15, 23, 42, 0.24),
-    0 0 0 1px rgba(56, 189, 248, 0.08);
+    0 22px 44px -24px rgba(15, 23, 42, 0.22),
+    0 0 0 1px rgba(15, 118, 110, 0.08);
 }
 
 .summarynotes-project-card .ant-card-body {
@@ -110,9 +124,9 @@ body {
 .summarynotes-notes-page {
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(56, 189, 248, 0.1), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.08), transparent 24%),
-    linear-gradient(180deg, #f8fafc 0%, #eef4fb 100%);
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.06), transparent 24%),
+    linear-gradient(180deg, #f5f7fb 0%, #edf2f7 100%);
 }
 
 .summarynotes-hero {
@@ -139,6 +153,7 @@ body {
 
 .summarynotes-hero-layout {
   position: relative;
+  isolation: isolate;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -154,6 +169,7 @@ body {
 .summarynotes-hero-layout::before {
   content: "";
   position: absolute;
+  z-index: 0;
   inset: -20% -10% auto auto;
   width: 220px;
   height: 220px;
@@ -166,6 +182,7 @@ body {
 .summarynotes-hero-layout::after {
   content: "";
   position: absolute;
+  z-index: 0;
   inset: auto auto -24% 18%;
   width: 260px;
   height: 260px;
@@ -178,12 +195,12 @@ body {
 .summarynotes-hero-copy,
 .summarynotes-hero-actions {
   position: relative;
-  z-index: 1;
+  z-index: var(--layer-raised);
 }
 
 .summarynotes-hero-inner {
   position: relative;
-  z-index: 1;
+  z-index: var(--layer-raised);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -197,7 +214,10 @@ body {
 
 .summarynotes-hero-back {
   margin-bottom: 14px;
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  border-color: rgba(148, 163, 184, 0.45) !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+  color: #0f172a !important;
+  box-shadow: 0 10px 24px -16px rgba(15, 23, 42, 0.26);
 }
 
 .summarynotes-hero-title {
@@ -233,11 +253,13 @@ body {
 }
 
 .summarynotes-notes-section-card {
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  position: relative;
+  z-index: var(--layer-raised);
+  border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 24px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.98)),
-    radial-gradient(circle at top left, rgba(56, 189, 248, 0.05), transparent 32%);
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.05), transparent 32%);
   box-shadow: var(--shadow-soft);
   overflow: hidden;
 }
@@ -262,12 +284,15 @@ body {
 
 .summarynotes-notes-preview-panel {
   padding: 18px 18px 6px;
+  position: relative;
+  z-index: var(--layer-base);
 }
 
 .summarynotes-notes-editor-panel {
   padding: 18px;
   position: sticky;
   top: 24px;
+  z-index: var(--layer-sticky);
 }
 
 .summarynotes-edit-form-block {
@@ -307,7 +332,9 @@ body {
 }
 
 .summarynotes-edit-preview-card {
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  position: relative;
+  z-index: var(--layer-raised);
+  border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
@@ -321,6 +348,8 @@ body {
 }
 
 .summarynotes-interview-panel {
+  position: relative;
+  z-index: var(--layer-raised);
   margin-top: 12px;
   padding: 14px 16px;
   border-radius: 16px;
@@ -329,6 +358,8 @@ body {
 }
 
 .summarynotes-interview-item {
+  position: relative;
+  z-index: var(--layer-base);
   padding: 10px 12px !important;
   margin: 10px 0 !important;
   border-radius: 14px;
@@ -342,6 +373,7 @@ body {
 
 .summarynotes-interview-item:hover {
   transform: translateY(-1px);
+  z-index: var(--layer-raised);
   border-color: rgba(148, 163, 184, 0.35);
   box-shadow: 0 12px 24px -18px rgba(15, 23, 42, 0.2);
 }

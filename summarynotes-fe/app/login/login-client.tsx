@@ -4,10 +4,11 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LockOutlined, LoginOutlined, UserOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Layout, Typography, message } from "antd";
+import { BrandMark } from "../../components/BrandHero";
 import { login } from "../../lib/authApi";
 
 const { Content } = Layout;
-const { Title, Text, Paragraph } = Typography;
+const { Title, Paragraph } = Typography;
 
 interface LoginFormValues {
   username: string;
@@ -87,19 +88,7 @@ export default function LoginClient() {
           bodyStyle={{ padding: 28 }}
         >
           <div style={{ marginBottom: 24 }}>
-            <Text
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 12,
-                letterSpacing: "0.14em",
-                color: "#0ea5e9",
-                fontWeight: 700,
-              }}
-            >
-              SUMMARYNOTES
-            </Text>
+            <BrandMark size="lg" centered />
             <Title level={2} style={{ marginTop: 8, marginBottom: 8 }}>
               内部访谈工作台
             </Title>

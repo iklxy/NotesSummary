@@ -20,6 +20,7 @@ import {
 } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
 import { UploadOutlined } from "@ant-design/icons";
+import BrandHero from "../components/BrandHero";
 import { Project } from "../lib/types";
 import { createProject, deleteProject, getProjects, updateProject } from "../lib/projectsApi";
 
@@ -126,31 +127,18 @@ export default function Home() {
 
   return (
     <Layout className="min-h-screen">
-      <Content className="bg-slate-50">
-        <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-6 py-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.55)] md:px-10 md:py-10">
-          <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-sky-400/15 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-12 left-1/3 h-44 w-44 rounded-full bg-cyan-300/10 blur-3xl" />
-          <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-            <div className="max-w-3xl">
-              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-semibold tracking-[0.24em] text-slate-200">
-                SUMMARYNOTES
-              </div>
-              <Title level={2} className="!mb-2 !mt-4 !text-white">
-                项目列表
-              </Title>
-              <Paragraph className="!mb-0 !max-w-2xl !text-slate-300">
-                点击任意项目进入项目详情页，在详情页中管理 DG、项目 Key BQ、访谈创建和 CA。
-              </Paragraph>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-right backdrop-blur-sm">
-                <div className="text-xs text-slate-300">当前项目</div>
-                <div className="mt-1 text-3xl font-semibold text-white">{projects.length}</div>
-              </div>
-            </div>
+      <BrandHero
+        className="mb-14 lg:mb-16"
+        title="项目列表"
+        description="点击任意项目进入项目详情页，在详情页中管理 DG、项目 Key BQ、访谈创建和 CA。"
+        stats={
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right shadow-[0_12px_28px_-20px_rgba(15,23,42,0.22)]">
+            <div className="text-xs text-slate-500">当前项目</div>
+            <div className="mt-1 text-3xl font-semibold text-slate-900">{projects.length}</div>
           </div>
-        </div>
-
+        }
+      />
+      <Content className="bg-slate-50 pt-10 lg:pt-12">
         <div className="p-6 md:p-8">
           <Row gutter={[16, 16]}>
             <Col span={24}>
