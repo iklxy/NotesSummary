@@ -1617,7 +1617,7 @@ def refresh_interview_kbq_notes(
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
     """
-    重新从访谈 core_problem 回填 key BQ，并触发 KBQ Notes 重建。
+    重新从访谈所属项目当前 KBQ 回填 key BQ，并触发 KBQ Notes 重建。
 
     返回:
         内部引擎服务返回的刷新结果。

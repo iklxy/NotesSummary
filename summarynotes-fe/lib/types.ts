@@ -66,6 +66,7 @@ export interface RefreshKbqNotesResponse {
   inserted?: number | null;
   warnings?: string[] | null;
   refreshed_from_core_problem?: boolean | null;
+  refreshed_from_project_key_bq?: boolean | null;
   message?: string | null;
 }
 

@@ -5,8 +5,17 @@ import json
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
+from pathlib import Path
+import sys
 
 from fastapi import Body, FastAPI, HTTPException
+
+# `Api.py` 是根目录下的 engine 入口，但数据库模块实际放在 `summarynotes-be/` 目录。
+# 启动引擎时把该目录加入 `sys.path`，避免 `from db import ...` 找不到模块。
+ROOT_DIR = Path(__file__).resolve().parent
+BE_DIR = ROOT_DIR / "summarynotes-be"
+if str(BE_DIR) not in sys.path:
+    sys.path.insert(0, str(BE_DIR))
 
 from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
@@ -16,6 +25,7 @@ from MinutesWorkflow import generate_minutes_for_interview
 from NotesWorkflow import fetch_questions_step, run_notes_generation_for_interview
 from RagIndex import index_interview_summary
 from Workflow import run_workflow
+from db import fetch_project_by_id
 
 
 app = FastAPI()
@@ -488,7 +498,7 @@ def api_generate_ca_table(
 @app.post("/internal/interviews/{interview_id}/refresh-kbq-notes")
 def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
     """
-    重新从访谈的 core_problem 回填 key BQ，并立即重建 KBQ Notes。
+    重新从访谈所属项目当前 KBQ 回填 key BQ，并立即重建 KBQ Notes。
 
     参数:
         interview_id: 访谈主键 ID，对应 `bh_project_interview.id`。
@@ -499,9 +509,14 @@ def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
     log_interview("KBQ", interview_id, "internal refresh-kbq-notes start")
     interview = _load_interview_or_404(interview_id)
     project_id = int(interview.get("parse_project_id") or 0)
-    key_bq_items = _extract_key_bq_items(interview.get("core_problem"))
+    project = fetch_project_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    project_key_bq_json = project.get("key_bq_json")
+    key_bq_items = _extract_key_bq_items(project_key_bq_json)
     if not key_bq_items:
-        raise HTTPException(status_code=400, detail="no key BQ found in interview core_problem")
+        raise HTTPException(status_code=400, detail="no key BQ found in current project key bq")
 
     try:
         written = DbAccess.replace_key_bq_rows_for_interview(
@@ -522,7 +537,8 @@ def api_refresh_kbq_notes(interview_id: int) -> Dict[str, Any]:
     if not isinstance(kbq_result, dict):
         kbq_result = {"success": False, "message": "invalid kbq result"}
     kbq_result["key_bq_inserted"] = written
-    kbq_result["refreshed_from_core_problem"] = True
+    kbq_result["refreshed_from_core_problem"] = False
+    kbq_result["refreshed_from_project_key_bq"] = True
     if kbq_result.get("success"):
         log_interview(
             "KBQ",
