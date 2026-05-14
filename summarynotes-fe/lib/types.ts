@@ -417,6 +417,7 @@ export interface Project {
   guide_file_name?: string | null;
   guide_file_path?: string | null;
   guide_file_type?: string | null;
+  guide_files_json?: ProjectGuideFile[] | null;
   guide_extracted_text?: string | null;
   guide_summary_text?: string | null;
   guide_status?: string | null;
@@ -427,6 +428,18 @@ export interface Project {
   key_bq_count?: number | null;
   interview_count?: number | null;
   interviews?: Interview[];
+}
+
+export interface ProjectGuideFile {
+  index?: number | null;
+  original_name?: string | null;
+  stored_path?: string | null;
+  file_type?: string | null;
+  status?: string | null;
+  error_message?: string | null;
+  extracted_text?: string | null;
+  summary_text?: string | null;
+  generated_at?: string | null;
 }
 
 export interface ProjectQuestionnaire {

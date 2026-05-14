@@ -52,6 +52,7 @@ CREATE TABLE `bh_project_guide` (
   `guide_file_name` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '项目指南原始文件名',
   `guide_file_path` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '项目指南文件路径',
   `file_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pdf' COMMENT '文件类型：pdf 等',
+  `guide_files_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '项目指南文件明细 JSON',
   `extracted_text` longtext COLLATE utf8mb4_unicode_ci COMMENT 'PDF 抽取 / OCR 后的全文文本',
   `summary_text` longtext COLLATE utf8mb4_unicode_ci COMMENT '模型生成的项目指南学习总结',
   `status` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued' COMMENT 'queued/extracting/summarizing/done/failed',
@@ -66,7 +67,7 @@ CREATE TABLE `bh_project_guide` (
     FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `bh_project_guide_chk_1`
-    CHECK (`file_type` <> '' AND `status` <> '')
+    CHECK (`file_type` <> '' AND `status` <> '' AND (`guide_files_json` IS NULL OR json_valid(`guide_files_json`)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

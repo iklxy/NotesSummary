@@ -84,7 +84,9 @@ export default function Home() {
       } else {
         const created = await createProject({
           name: values.name as string,
-          guide_file: guideFileList[0]?.originFileObj as File | null | undefined,
+          guide_files: guideFileList
+            .map((item) => item.originFileObj as File | null | undefined)
+            .filter((file): file is File => Boolean(file)),
         });
         setProjects((prev) => [created, ...prev]);
         message.success(
@@ -244,15 +246,15 @@ export default function Home() {
             <Form.Item label="上传指南">
               <Upload
                 beforeUpload={() => false}
-                maxCount={1}
+                multiple
                 fileList={guideFileList}
                 onChange={({ fileList }) => setGuideFileList(fileList)}
-                accept=".pdf"
+                accept=".pdf,.docx,.md"
               >
-                <Button icon={<UploadOutlined />}>选择 PDF 指南</Button>
+                <Button icon={<UploadOutlined />}>选择指南文件</Button>
               </Upload>
               <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                上传后会异步做全文学习总结，并自动生成项目背景说明。
+                支持一次上传多个 pdf、docx 或 md 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
               </Typography.Text>
             </Form.Item>
           ) : null}

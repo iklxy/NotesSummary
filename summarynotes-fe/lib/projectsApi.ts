@@ -10,7 +10,7 @@ import type {
 
 interface CreateProjectPayload {
   name: string;
-  guide_file?: File | null;
+  guide_files?: File[] | null;
 }
 
 interface UpdateProjectPayload {
@@ -20,8 +20,10 @@ interface UpdateProjectPayload {
 export async function createProject(payload: CreateProjectPayload): Promise<Project> {
   const formData = new FormData();
   formData.append("name", payload.name);
-  if (payload.guide_file) {
-    formData.append("guide_file", payload.guide_file);
+  if (payload.guide_files) {
+    payload.guide_files.forEach((file) => {
+      formData.append("guide_file", file);
+    });
   }
   const baseUrl = getBaseUrl().replace(/\/$/, "");
   const resp = await fetch(`${baseUrl}/api/projects`, {

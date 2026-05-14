@@ -10,9 +10,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+import json
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -43,6 +47,73 @@ def _resolve_guide_path(raw_path: str | None) -> Optional[Path]:
     if not path.is_absolute():
         path = _get_data_root() / path
     return path
+
+
+def _load_guide_files_manifest(raw_value: Any, manifest_path: Path | None = None) -> List[Dict[str, Any]]:
+    if isinstance(raw_value, list):
+        files = [item for item in raw_value if isinstance(item, dict)]
+        if files:
+            return files
+    if isinstance(raw_value, dict):
+        candidate = raw_value.get("files")
+        if isinstance(candidate, list):
+            files = [item for item in candidate if isinstance(item, dict)]
+            if files:
+                return files
+    if manifest_path and manifest_path.exists() and manifest_path.is_file():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            candidate = payload.get("files")
+            if isinstance(candidate, list):
+                return [item for item in candidate if isinstance(item, dict)]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _normalize_guide_file_item(item: Dict[str, Any], fallback_index: int) -> Dict[str, Any]:
+    index = int(item.get("index") or fallback_index)
+    original_name = str(item.get("original_name") or item.get("guide_file_name") or f"guide_{index}").strip()
+    stored_path = str(item.get("stored_path") or item.get("guide_file_path") or "").strip()
+    file_type = str(item.get("file_type") or "").strip().lower()
+    if not file_type and original_name:
+        file_type = Path(original_name).suffix.lower().lstrip(".")
+    if file_type not in {"pdf", "docx", "md"}:
+        file_type = "unknown"
+    return {
+        "index": index,
+        "original_name": original_name,
+        "stored_path": stored_path,
+        "file_type": file_type,
+        "status": str(item.get("status") or "queued"),
+        "error_message": item.get("error_message"),
+        "extracted_text": item.get("extracted_text"),
+        "summary_text": item.get("summary_text"),
+        "generated_at": item.get("generated_at"),
+    }
+
+
+def _normalize_guide_files(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        normalized.append(_normalize_guide_file_item(item, index))
+    normalized.sort(key=lambda row: (row.get("index") or 0, row.get("original_name") or ""))
+    return normalized
+
+
+def _build_guide_display_name(file_names: List[str]) -> str:
+    if not file_names:
+        return "项目指南"
+    if len(file_names) == 1:
+        return file_names[0]
+    return f"{len(file_names)} 个指南文件"
+
+
+def _compact_text_for_summary(text: str) -> str:
+    return _normalize_text(text)
 
 
 def _normalize_text(text: str) -> str:
@@ -230,6 +301,52 @@ def _render_page_to_png(page: Any) -> bytes:
     return pixmap.tobytes("png")
 
 
+def _extract_docx_text(docx_path: Path) -> str:
+    if not zipfile.is_zipfile(docx_path):
+        raise RuntimeError("docx file is not a valid zip archive")
+
+    namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paragraphs: List[str] = []
+    with zipfile.ZipFile(docx_path) as docx_zip:
+        try:
+            document_xml = docx_zip.read("word/document.xml")
+        except KeyError as exc:
+            raise RuntimeError("docx missing word/document.xml") from exc
+    root = ET.fromstring(document_xml)
+    for paragraph in root.iter(f"{namespace}p"):
+        parts: List[str] = []
+        for node in paragraph.iter():
+            if node.tag == f"{namespace}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{namespace}tab":
+                parts.append("\t")
+            elif node.tag in {f"{namespace}br", f"{namespace}cr"}:
+                parts.append("\n")
+        text = _normalize_text("".join(parts))
+        if text:
+            paragraphs.append(text)
+    return "\n\n".join(paragraphs).strip()
+
+
+def _extract_markdown_text(md_path: Path) -> str:
+    try:
+        return _normalize_text(md_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"read markdown failed: {exc}") from exc
+
+
+def _extract_guide_text_by_type(file_path: Path, file_type: str) -> tuple[str, Dict[str, Any]]:
+    normalized_type = str(file_type or "").strip().lower()
+    if normalized_type == "pdf":
+        extracted_text, ocr_pages = _extract_pdf_text(file_path)
+        return extracted_text, {"ocr_pages": ocr_pages}
+    if normalized_type == "docx":
+        return _extract_docx_text(file_path), {}
+    if normalized_type == "md":
+        return _extract_markdown_text(file_path), {}
+    raise RuntimeError(f"unsupported guide file type: {file_type}")
+
+
 def _extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
     if fitz is None:
         raise RuntimeError("pymupdf 未安装，无法解析 PDF 指南")
@@ -317,7 +434,7 @@ def _build_final_summary(extracted_text: str) -> str:
 
 def process_project_guide(project_id: int) -> None:
     """
-    处理单个项目的 PDF 指南：抽取、OCR、总结并回写数据库。
+    处理项目的多份指南文件：抽取、并行解析、汇总并回写数据库。
     """
     log_project("GUIDE", project_id, "guide processing start")
     guide_row = fetch_project_guide_by_project_id(project_id)
@@ -325,35 +442,140 @@ def process_project_guide(project_id: int) -> None:
         log_project("GUIDE", project_id, "guide processing skipped: guide row not found")
         return
 
-    guide_path = _resolve_guide_path(guide_row.get("guide_file_path"))
-    if guide_path is None or not guide_path.exists():
-        update_project_guide(
-            project_id,
-            status="failed",
-            error_message="guide file not found",
-        )
-        log_project("GUIDE", project_id, "guide processing failed: guide file not found")
+    guide_manifest_path = _resolve_guide_path(guide_row.get("guide_file_path"))
+    guide_files = _load_guide_files_manifest(guide_row.get("guide_files_json"), guide_manifest_path)
+    guide_files = _normalize_guide_files(guide_files)
+    if not guide_files:
+        fallback_name = str(guide_row.get("guide_file_name") or "").strip()
+        fallback_path = _resolve_guide_path(guide_row.get("guide_file_path"))
+        if fallback_name and fallback_path and fallback_path.exists():
+            guide_files = [
+                _normalize_guide_file_item(
+                    {
+                        "index": 1,
+                        "original_name": fallback_name,
+                        "stored_path": str(fallback_path.relative_to(_get_data_root())),
+                        "file_type": str(guide_row.get("file_type") or "pdf").strip().lower() or "pdf",
+                        "status": "queued",
+                    },
+                    1,
+                )
+            ]
+
+    if not guide_files:
+        update_project_guide(project_id, status="failed", error_message="no guide files found")
+        log_project("GUIDE", project_id, "guide processing failed: no guide files found")
         return
 
-    try:
-        update_project_guide(project_id, status="extracting", error_message=None)
-        extracted_text, ocr_pages = _extract_pdf_text(guide_path)
-        if not extracted_text.strip():
-            raise RuntimeError("no text extracted from guide pdf")
+    manifest_path = guide_manifest_path
+    if manifest_path is None:
+        manifest_path = _get_data_root() / f"project_{project_id}" / "guide" / "manifest.json"
 
+    def _persist_manifest(
+        *,
+        status: str,
+        extracted_text: str | None = None,
+        summary_text: str | None = None,
+        error_message: str | None = None,
+        generated_at: str | None = None,
+    ) -> None:
+        display_names = [item.get("original_name") or f"guide_{idx}" for idx, item in enumerate(guide_files, start=1)]
+        guide_file_name = _build_guide_display_name([str(name) for name in display_names])
+        file_type = "mixed" if len(guide_files) > 1 else str(guide_files[0].get("file_type") or "pdf")
+        manifest_payload = {
+            "project_id": project_id,
+            "file_count": len(guide_files),
+            "files": guide_files,
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        if manifest_path is not None:
+            try:
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as exc:
+                log_project("GUIDE", project_id, f"write guide manifest failed error={exc}")
         update_project_guide(
             project_id,
+            guide_file_name=guide_file_name,
+            guide_file_path=str(manifest_path.relative_to(_get_data_root())) if manifest_path else None,
+            file_type=file_type,
+            guide_files_json=guide_files,
             extracted_text=extracted_text,
-            status="summarizing",
-            error_message=None,
+            summary_text=summary_text,
+            status=status,
+            error_message=error_message,
+            generated_at=generated_at,
         )
-        summary_text = _build_final_summary(extracted_text)
-        if not summary_text.strip():
-            raise RuntimeError("guide summary generation returned empty text")
 
+    try:
+        _persist_manifest(status="extracting", error_message=None)
         project_row = fetch_project_by_id(project_id)
         project_name = str(project_row.get("name") or "").strip() if project_row else ""
         project_keywords = str(project_row.get("keywords") or "").strip() if project_row else ""
+
+        results_by_index: dict[int, Dict[str, Any]] = {}
+        max_workers = min(4, len(guide_files)) or 1
+
+        def _process_single_file(item: Dict[str, Any]) -> Dict[str, Any]:
+            file_path = _resolve_guide_path(item.get("stored_path"))
+            if file_path is None or not file_path.exists():
+                raise RuntimeError("guide file not found")
+            file_type = str(item.get("file_type") or "").strip().lower()
+            extracted_text, meta = _extract_guide_text_by_type(file_path, file_type)
+            normalized_text = _compact_text_for_summary(extracted_text)
+            if not normalized_text:
+                raise RuntimeError("no text extracted from guide file")
+            return {
+                **item,
+                "status": "done",
+                "error_message": None,
+                "extracted_text": normalized_text,
+                "summary_text": None,
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "extract_meta": meta,
+            }
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(_process_single_file, item): item.get("index") or idx for idx, item in enumerate(guide_files, start=1)}
+            for future in as_completed(future_map):
+                index = int(future_map[future])
+                try:
+                    processed_item = future.result()
+                except Exception as exc:
+                    source_item = next((item for item in guide_files if int(item.get("index") or 0) == index), None)
+                    processed_item = {
+                        **(source_item or {}),
+                        "index": index,
+                        "status": "failed",
+                        "error_message": str(exc),
+                        "extracted_text": "",
+                        "summary_text": None,
+                        "generated_at": None,
+                    }
+                for pos, item in enumerate(guide_files):
+                    if int(item.get("index") or 0) == index:
+                        guide_files[pos] = processed_item
+                        break
+                _persist_manifest(status="extracting", error_message=None)
+
+        success_items = [item for item in guide_files if str(item.get("status") or "").lower() == "done"]
+        failed_items = [item for item in guide_files if str(item.get("status") or "").lower() == "failed"]
+        if not success_items:
+            raise RuntimeError("no guide file extracted successfully")
+
+        combined_extracted_text = "\n\n".join(
+            f"【文件 {item.get('index') or idx}：{item.get('original_name') or ''}】\n{str(item.get('extracted_text') or '').strip()}"
+            for idx, item in enumerate(success_items, start=1)
+            if str(item.get("extracted_text") or "").strip()
+        ).strip()
+        if not combined_extracted_text:
+            raise RuntimeError("combined guide extracted text is empty")
+
+        _persist_manifest(status="summarizing", extracted_text=combined_extracted_text, error_message=None)
+        summary_text = _build_final_summary(combined_extracted_text)
+        if not summary_text.strip():
+            raise RuntimeError("guide summary generation returned empty text")
+
         try:
             core_problem_text = _generate_core_problem_from_summary(
                 summary_text=summary_text,
@@ -371,14 +593,21 @@ def process_project_guide(project_id: int) -> None:
             core_problem_text = _fallback_core_problem(summary_text)
 
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        update_project_guide(
-            project_id,
-            extracted_text=extracted_text,
-            summary_text=summary_text,
+        error_message = None
+        if failed_items:
+            error_message = "部分指南解析失败：" + "；".join(
+                f"{str(item.get('original_name') or '')}:{str(item.get('error_message') or 'unknown error')}"
+                for item in failed_items
+            )
+
+        _persist_manifest(
             status="done",
-            error_message=None,
+            extracted_text=combined_extracted_text,
+            summary_text=summary_text,
+            error_message=error_message,
             generated_at=generated_at,
         )
+
         if core_problem_text.strip():
             try:
                 update_project(project_id=project_id, core_problem=core_problem_text.strip())
@@ -392,16 +621,21 @@ def process_project_guide(project_id: int) -> None:
             "GUIDE",
             project_id,
             "guide processing done "
-            f"extracted_chars={len(extracted_text)} "
+            f"file_count={len(guide_files)} "
+            f"success_count={len(success_items)} "
+            f"failed_count={len(failed_items)} "
+            f"extracted_chars={len(combined_extracted_text)} "
             f"summary_chars={len(summary_text)} "
-            f"core_problem_chars={len(core_problem_text)} "
-            f"ocr_pages={ocr_pages}",
+            f"core_problem_chars={len(core_problem_text)}",
         )
-    except Exception as exc:
+    except Exception:
         error_detail = traceback.format_exc()
-        update_project_guide(
-            project_id,
-            status="failed",
-            error_message=error_detail,
-        )
+        try:
+            _persist_manifest(status="failed", error_message=error_detail)
+        except Exception:
+            update_project_guide(
+                project_id,
+                status="failed",
+                error_message=error_detail,
+            )
         log_project("GUIDE", project_id, f"guide processing failed error=\n{error_detail}")

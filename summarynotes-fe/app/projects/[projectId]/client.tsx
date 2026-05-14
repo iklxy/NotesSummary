@@ -441,6 +441,26 @@ function getGuideStatusTag(status?: string | null) {
   return <Tag>{status}</Tag>;
 }
 
+function getGuideFileStatusTag(status?: string | null) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized || normalized === "queued" || normalized === "uploaded") {
+    return <Tag color="orange">待处理</Tag>;
+  }
+  if (normalized === "extracting") {
+    return <Tag color="blue">正在抽取</Tag>;
+  }
+  if (normalized === "summarizing") {
+    return <Tag color="gold">正在总结</Tag>;
+  }
+  if (normalized === "done") {
+    return <Tag color="green">已完成</Tag>;
+  }
+  if (normalized === "failed") {
+    return <Tag color="red">失败</Tag>;
+  }
+  return <Tag>{status || "未知"}</Tag>;
+}
+
 function isGuideLearning(status?: string | null): boolean {
   const normalized = String(status || "").trim().toLowerCase();
   return ["queued", "uploaded", "extracting", "summarizing"].includes(normalized);
@@ -555,6 +575,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const guideStatus = useMemo(() => project?.guide_status ?? null, [project]);
   const guideSummaryText = useMemo(() => project?.guide_summary_text ?? "", [project]);
   const guideExtractedText = useMemo(() => project?.guide_extracted_text ?? "", [project]);
+  const guideFiles = useMemo(() => project?.guide_files_json ?? [], [project]);
 
   useEffect(() => {
     void loadProjectDetail();
@@ -1721,6 +1742,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
           <Space wrap>
             {getGuideStatusTag(guideStatus)}
             {project?.guide_file_name ? <Tag color="blue">文件：{project.guide_file_name}</Tag> : null}
+            {guideFiles.length > 0 ? <Tag color="cyan">指南文件：{guideFiles.length} 份</Tag> : null}
             {project?.guide_generated_at ? (
               <Tag color="green">完成时间：{formatDate(project.guide_generated_at)}</Tag>
             ) : null}
@@ -1773,6 +1795,60 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   </div>
                 ) : (
                   <Text type="secondary">暂无抽取正文。</Text>
+                ),
+              },
+              {
+                key: "files",
+                label: "文件明细",
+                children: guideFiles.length > 0 ? (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    {guideFiles.map((file, index) => {
+                      const title = file.original_name || `指南文件 ${index + 1}`;
+                      const fileType = String(file.file_type || "unknown").toUpperCase();
+                      const displayText = String(file.summary_text || file.extracted_text || "").trim();
+                      return (
+                        <Card
+                          key={`${file.index ?? index}-${title}`}
+                          size="small"
+                          title={
+                            <Space wrap>
+                              <Text strong>{title}</Text>
+                              {getGuideFileStatusTag(file.status)}
+                              <Tag color="blue">{fileType}</Tag>
+                            </Space>
+                          }
+                        >
+                          {file.error_message ? (
+                            <Alert
+                              type="error"
+                              showIcon
+                              message="文件处理失败"
+                              description={file.error_message}
+                              style={{ marginBottom: 12 }}
+                            />
+                          ) : null}
+                          {displayText ? (
+                            <div
+                              style={{
+                                maxHeight: 360,
+                                overflow: "auto",
+                                whiteSpace: "pre-wrap",
+                                borderRadius: 16,
+                                background: "rgba(15, 23, 42, 0.02)",
+                                padding: 16,
+                              }}
+                            >
+                              {displayText}
+                            </div>
+                          ) : (
+                            <Text type="secondary">暂无文件抽取内容。</Text>
+                          )}
+                        </Card>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Text type="secondary">暂无指南文件明细。</Text>
                 ),
               },
             ]}

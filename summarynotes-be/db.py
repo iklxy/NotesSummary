@@ -167,6 +167,7 @@ def fetch_projects(created_by_user_id: int | None = None) -> list[dict]:
             g.guide_file_name,
             g.guide_file_path,
             g.file_type AS guide_file_type,
+            g.guide_files_json AS guide_files_json,
             g.extracted_text AS guide_extracted_text,
             g.summary_text AS guide_summary_text,
             g.status AS guide_status,
@@ -241,6 +242,7 @@ def fetch_project_by_id(
             g.guide_file_name,
             g.guide_file_path,
             g.file_type AS guide_file_type,
+            g.guide_files_json AS guide_files_json,
             g.extracted_text AS guide_extracted_text,
             g.summary_text AS guide_summary_text,
             g.status AS guide_status,
@@ -386,6 +388,7 @@ def update_project_guide(
     guide_file_name: Optional[str] = None,
     guide_file_path: Optional[str] = None,
     file_type: Optional[str] = None,
+    guide_files_json: Any = None,
     extracted_text: Any = None,
     summary_text: Any = None,
     status: Optional[str] = None,
@@ -397,12 +400,13 @@ def update_project_guide(
     """
     sql = """
         INSERT INTO bh_project_guide
-            (project_id, guide_file_name, guide_file_path, file_type, extracted_text, summary_text, status, error_message, generated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (project_id, guide_file_name, guide_file_path, file_type, guide_files_json, extracted_text, summary_text, status, error_message, generated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             guide_file_name = VALUES(guide_file_name),
             guide_file_path = VALUES(guide_file_path),
             file_type = VALUES(file_type),
+            guide_files_json = VALUES(guide_files_json),
             extracted_text = VALUES(extracted_text),
             summary_text = VALUES(summary_text),
             status = VALUES(status),
@@ -426,6 +430,7 @@ def update_project_guide(
                     _text_or_none(guide_file_name),
                     _text_or_none(guide_file_path),
                     _text_or_none(file_type) or "pdf",
+                    _json_or_none(guide_files_json),
                     _text_or_none(extracted_text),
                     _text_or_none(summary_text),
                     _text_or_none(status) or "queued",
@@ -454,6 +459,7 @@ def fetch_project_guide_by_project_id(project_id: int) -> dict | None:
             guide_file_name,
             guide_file_path,
             file_type,
+            guide_files_json,
             extracted_text,
             summary_text,
             status,

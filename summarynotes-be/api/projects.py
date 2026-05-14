@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 import json
 import os
 import re
@@ -112,30 +113,67 @@ def _get_project_guide_dir(project_id: int) -> Path:
     return _get_data_root() / f"project_{project_id}" / "guide"
 
 
-def _save_uploaded_project_guide_file(project_id: int, upload_file: UploadFile) -> tuple[str, str]:
+def _save_uploaded_project_guide_files(
+    project_id: int,
+    upload_files: list[UploadFile],
+) -> tuple[str, str, list[dict[str, Any]]]:
     """
     保存项目指南附件到项目目录。
     """
-    original_name = upload_file.filename or ""
-    if not original_name:
-        raise HTTPException(status_code=400, detail="上传指南缺少文件名")
-    if not original_name.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="当前阶段仅支持 PDF 指南上传")
-
     target_dir = _get_project_guide_dir(project_id)
     target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / original_name
+    manifest_items: list[dict[str, Any]] = []
+    stored_names: list[str] = []
+
+    for index, upload_file in enumerate(upload_files, start=1):
+        original_name = Path(upload_file.filename or "").name.strip()
+        if not original_name:
+            raise HTTPException(status_code=400, detail="上传指南缺少文件名")
+        file_type = _detect_guide_file_type(original_name)
+        base_name = _normalize_guide_file_name(Path(original_name).stem)
+        suffix = Path(original_name).suffix.lower()
+        target_name = f"{index:02d}_{base_name}{suffix}"
+        target_path = target_dir / target_name
+        try:
+            with target_path.open("wb") as f:
+                while True:
+                    chunk = upload_file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"save project guide failed: {e}")
+
+        stored_names.append(original_name)
+        manifest_items.append(
+            {
+                "index": index,
+                "original_name": original_name,
+                "stored_name": target_name,
+                "stored_path": str(target_path.relative_to(_get_data_root())),
+                "file_type": file_type,
+                "status": "queued",
+                "error_message": None,
+                "extracted_text": None,
+                "summary_text": None,
+                "generated_at": None,
+            }
+        )
+
+    manifest_path = target_dir / "manifest.json"
+    manifest_payload = {
+        "project_id": project_id,
+        "file_count": len(manifest_items),
+        "files": manifest_items,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
     try:
-        with target_path.open("wb") as f:
-            while True:
-                chunk = upload_file.file.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
+        manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"save project guide failed: {e}")
-    relative_path = str(target_path.relative_to(_get_data_root()))
-    return original_name, relative_path
+        raise HTTPException(status_code=500, detail=f"save project guide manifest failed: {e}")
+
+    display_name = _build_guide_display_name(stored_names)
+    return display_name, str(manifest_path.relative_to(_get_data_root())), manifest_items
 
 
 def _get_internal_base() -> str:
@@ -370,6 +408,32 @@ def _safe_load_json_array(value: Any) -> list[Any]:
     return []
 
 
+def _safe_load_guide_files(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        candidate = value.get("files")
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        candidate = payload.get("files")
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
 def _safe_load_detail_schema(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -394,6 +458,35 @@ def _safe_load_detail_schema(value: Any) -> list[dict[str, Any]]:
         if isinstance(candidate, list):
             return [item for item in candidate if isinstance(item, dict)]
     return []
+
+
+def _normalize_guide_file_name(file_name: str) -> str:
+    cleaned_name = Path(str(file_name or "")).name.strip()
+    if not cleaned_name:
+        return "guide"
+    safe_chars: list[str] = []
+    for ch in cleaned_name:
+        if ch.isalnum() or ch in {"-", "_", " ", "(", ")", "[", "]", "【", "】", "、", ".", ","}:
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    cleaned = "".join(safe_chars).strip().replace(" ", "_")
+    return cleaned or "guide"
+
+
+def _detect_guide_file_type(file_name: str) -> str:
+    suffix = Path(str(file_name or "")).suffix.lower().lstrip(".")
+    if suffix in {"pdf", "docx", "md"}:
+        return suffix
+    raise HTTPException(status_code=400, detail="当前仅支持 pdf / docx / md 格式指南")
+
+
+def _build_guide_display_name(file_names: list[str]) -> str:
+    if not file_names:
+        return "项目指南"
+    if len(file_names) == 1:
+        return file_names[0]
+    return f"{len(file_names)} 个指南文件"
 
 
 def _normalize_questionnaire_row(row: dict) -> dict:
@@ -431,6 +524,7 @@ def _normalize_project_row(row: dict) -> dict:
     normalized["key_bq_json"] = _safe_load_json_text(row.get("key_bq_json")) or {
         "key_bq_list": _safe_load_json_array(row.get("key_bq_json"))
     }
+    normalized["guide_files_json"] = _safe_load_guide_files(row.get("guide_files_json"))
     normalized["questionnaire_count"] = int(normalized.get("questionnaire_count") or 0)
     normalized["key_bq_count"] = int(normalized.get("key_bq_count") or 0)
     normalized["interview_count"] = int(normalized.get("interview_count") or 0)
@@ -546,7 +640,7 @@ def create_project(
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
     keywords: Optional[str] = Form(None),
-    guide_file: Optional[UploadFile] = File(None),
+    guide_file: Optional[list[UploadFile]] = File(None),
 ) -> Dict[str, Any]:
     """
     创建新项目，对应在 bh_project 表中插入一条记录。
@@ -554,7 +648,7 @@ def create_project(
     参数:
         name: 项目名称。
         keywords: 项目关键词，可空。
-        guide_file: 项目指南附件，可空，当前仅支持 PDF。
+        guide_file: 项目指南附件，可空，支持多文件上传，格式为 pdf/docx/md。
 
     返回:
         新创建项目的基础信息字典，至少包含:
@@ -578,13 +672,15 @@ def create_project(
             core_problem=None,
             created_by_user_id=current_user_id,
         )
-        if guide_file is not None and guide_file.filename:
-            guide_file_name, guide_file_path = _save_uploaded_project_guide_file(new_id, guide_file)
+        guide_files = [file for file in (guide_file or []) if file is not None and file.filename]
+        if guide_files:
+            guide_file_name, guide_file_path, guide_files_json = _save_uploaded_project_guide_files(new_id, guide_files)
             update_project_guide(
                 new_id,
                 guide_file_name=guide_file_name,
                 guide_file_path=guide_file_path,
-                file_type="pdf",
+                file_type="mixed" if len(guide_files) > 1 else _detect_guide_file_type(guide_files[0].filename or ""),
+                guide_files_json=guide_files_json,
                 status="queued",
             )
             background_tasks.add_task(process_project_guide, new_id)
