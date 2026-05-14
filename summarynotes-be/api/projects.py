@@ -42,12 +42,10 @@ class ProjectCreate(BaseModel):
     字段:
         name:             项目名称，必填。
         keywords:         项目关键词，可空。
-        core_problem:   访谈核心描述，可空。
     """
 
     name: str
     keywords: Optional[str] = None
-    core_problem: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -57,12 +55,10 @@ class ProjectUpdate(BaseModel):
     字段:
         name:             项目名称，可选。
         keywords:         项目关键词，可选。
-        core_problem:     访谈核心描述，可选。
     """
 
     name: Optional[str] = None
     keywords: Optional[str] = None
-    core_problem: Optional[str] = None
 
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -550,7 +546,6 @@ def create_project(
     current_user_id: int = Depends(require_current_user_id),
     name: str = Form(...),
     keywords: Optional[str] = Form(None),
-    core_problem: Optional[str] = Form(None),
     guide_file: Optional[UploadFile] = File(None),
 ) -> Dict[str, Any]:
     """
@@ -559,7 +554,6 @@ def create_project(
     参数:
         name: 项目名称。
         keywords: 项目关键词，可空。
-        core_problem: 项目背景说明，可空。
         guide_file: 项目指南附件，可空，当前仅支持 PDF。
 
     返回:
@@ -567,7 +561,6 @@ def create_project(
             - id
             - name
             - keywords
-            - core_problem
 
     异常:
         HTTPException(400): name 为空或非法。
@@ -582,7 +575,7 @@ def create_project(
         new_id = insert_project(
             name=clean_name,
             keywords=(keywords.strip() if keywords else None),
-            core_problem=(core_problem.strip() if core_problem else None),
+            core_problem=None,
             created_by_user_id=current_user_id,
         )
         if guide_file is not None and guide_file.filename:
@@ -621,12 +614,9 @@ def update_project_detail(
     _get_owned_project_or_404(project_id, current_user_id)
     clean_name = payload.name.strip() if isinstance(payload.name, str) else None
     clean_keywords = payload.keywords.strip() if isinstance(payload.keywords, str) else None
-    clean_core_problem = payload.core_problem.strip() if isinstance(payload.core_problem, str) else None
 
     if clean_name is not None and not clean_name:
         raise HTTPException(status_code=400, detail="项目名称不能为空")
-    if clean_core_problem == "":
-        clean_core_problem = None
     if clean_keywords == "":
         clean_keywords = None
 
@@ -635,7 +625,6 @@ def update_project_detail(
             project_id=project_id,
             name=clean_name,
             keywords=clean_keywords,
-            core_problem=clean_core_problem,
             created_by_user_id=current_user_id,
         )
     except Exception as e:

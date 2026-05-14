@@ -25,7 +25,7 @@ import { Project } from "../lib/types";
 import { createProject, deleteProject, getProjects, updateProject } from "../lib/projectsApi";
 
 const { Content } = Layout;
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 export default function Home() {
   const router = useRouter();
@@ -58,7 +58,6 @@ export default function Home() {
     setEditingProject(project);
     form.setFieldsValue({
       name: project.name,
-      core_description: project.core_problem ?? "",
     });
     setGuideFileList([]);
     setModalVisible(true);
@@ -70,7 +69,6 @@ export default function Home() {
       if (editingProject) {
         const updated = await updateProject(editingProject.id, {
           name: values.name as string,
-          core_problem: String(values.core_description ?? ""),
         });
         setProjects((prev) =>
           prev.map((item) =>
@@ -86,7 +84,6 @@ export default function Home() {
       } else {
         const created = await createProject({
           name: values.name as string,
-          core_problem: (values.core_description as string) || undefined,
           guide_file: guideFileList[0]?.originFileObj as File | null | undefined,
         });
         setProjects((prev) => [created, ...prev]);
@@ -243,14 +240,6 @@ export default function Home() {
           >
             <Input placeholder="请输入项目名称" />
           </Form.Item>
-          <Form.Item label="访谈核心描述" name="core_description">
-            <Input.TextArea
-              rows={5}
-              placeholder={`请填写：
-研究目标：这次访谈主要想了解什么？想知道什么？
-访谈背景：这次访谈属于哪类业务？例如肺癌相关业务、糖尿病相关业务、患者教育、院内用药流程等。`}
-            />
-          </Form.Item>
           {!editingProject ? (
             <Form.Item label="上传指南">
               <Upload
@@ -263,7 +252,7 @@ export default function Home() {
                 <Button icon={<UploadOutlined />}>选择 PDF 指南</Button>
               </Upload>
               <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                指南为可选附件，上传后会异步做全文学习总结，并可在项目详情页查看结果。
+                上传后会异步做全文学习总结，并自动生成项目背景说明。
               </Typography.Text>
             </Form.Item>
           ) : null}

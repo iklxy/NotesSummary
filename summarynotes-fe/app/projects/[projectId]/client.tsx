@@ -1071,9 +1071,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
               }
             />
           ) : project ? (
-            <Row gutter={[16, 16]}>
-              <Col span={24}>
-                <Card className="summarynotes-project-list-shell summarynotes-project-overview-shell mt-2 lg:mt-4">
+            <div className="space-y-6 lg:space-y-8">
+              <Card className="summarynotes-project-list-shell summarynotes-project-overview-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
                     <div>
                       <Title level={4} style={{ marginBottom: 8 }} className="summarynotes-section-title">
@@ -1089,10 +1088,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
                     {project.core_problem || "暂无旧项目背景说明。"}
                   </Paragraph>
-                </Card>
-              </Col>
+              </Card>
 
-              <Col span={24}>
                 <Card className="summarynotes-project-list-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
@@ -1135,9 +1132,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                     ) : null}
                   </Space>
                 </Card>
-              </Col>
 
-              <Col span={24}>
                 <Card className="summarynotes-project-list-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
@@ -1256,9 +1251,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                     <Text type="secondary">当前项目还没有角色。</Text>
                   )}
                 </Card>
-              </Col>
 
-              <Col span={24}>
                 <Card className="summarynotes-project-list-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
@@ -1293,9 +1286,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                     </Paragraph>
                   </Space>
                 </Card>
-              </Col>
 
-              <Col span={24}>
                 <Card className="summarynotes-project-list-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
                     <div>
@@ -1388,8 +1379,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                     <Text type="secondary">当前项目还没有访谈。</Text>
                   )}
                 </Card>
-              </Col>
-            </Row>
+            </div>
           ) : null}
         </div>
       </Content>

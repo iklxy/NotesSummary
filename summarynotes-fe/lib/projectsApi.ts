@@ -10,25 +10,16 @@ import type {
 
 interface CreateProjectPayload {
   name: string;
-  keywords?: string;
-  core_problem?: string;
   guide_file?: File | null;
 }
 
 interface UpdateProjectPayload {
   name: string;
-  core_problem?: string;
 }
 
 export async function createProject(payload: CreateProjectPayload): Promise<Project> {
   const formData = new FormData();
   formData.append("name", payload.name);
-  if (payload.keywords) {
-    formData.append("keywords", payload.keywords);
-  }
-  if (payload.core_problem) {
-    formData.append("core_problem", payload.core_problem);
-  }
   if (payload.guide_file) {
     formData.append("guide_file", payload.guide_file);
   }

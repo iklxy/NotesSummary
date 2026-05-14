@@ -12,13 +12,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import re
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from InterviewLogger import log_project
 from LLMProviders import build_provider
 from config import config
-from db import fetch_project_by_id, fetch_project_guide_by_project_id, update_project_guide
+from db import fetch_project_by_id, fetch_project_guide_by_project_id, update_project, update_project_guide
 
 try:
     import fitz  # type: ignore
@@ -122,8 +123,64 @@ def _build_guide_summary_prompt(chunk_count: int) -> tuple[str, str]:
 5. 不要输出“根据上述内容”等过程性话语，直接输出最终总结。
 
 【各片段总结】
+    """.strip()
+    return system_prompt, user_prompt
+
+
+def _build_core_problem_prompt(project_name: str, keywords: str, summary_text: str) -> tuple[str, str]:
+    system_prompt = (
+        "你是一名严谨的医疗项目背景摘要助手，擅长把项目指南学习总结压缩成可直接写入项目表的核心问题描述。"
+    )
+    user_prompt = f"""
+请基于下面的项目指南学习总结，为项目生成一段可写入数据库 `core_problem` 字段的核心问题描述。
+
+要求：
+1. 只能基于给定总结，不要引入新信息或主观推断。
+2. 用一段中文自然语言输出，长度控制在 80-120 个汉字左右。
+3. 重点概括项目要解决的核心问题、适用场景和主要关注点。
+4. 不要输出标题、列表、引号或额外解释，只输出正文。
+5. 生成结果要适合直接在项目详情页展示。
+
+【项目名称】
+{project_name or "未命名项目"}
+
+【项目关键词】
+{keywords or "无"}
+
+【项目指南学习总结】
+{summary_text}
 """.strip()
     return system_prompt, user_prompt
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", " ", _normalize_text(text)).strip()
+
+
+def _fallback_core_problem(summary_text: str) -> str:
+    compact = _compact_text(summary_text)
+    if not compact:
+        return ""
+    if len(compact) <= 120:
+        return compact
+    clipped = compact[:117].rstrip("，,；;。:：、 ")
+    return f"{clipped}..."
+
+
+def _generate_core_problem_from_summary(summary_text: str, project_name: str, keywords: str) -> str:
+    provider, model_name = _build_provider()
+    system_prompt, user_prompt = _build_core_problem_prompt(
+        project_name=project_name,
+        keywords=keywords,
+        summary_text=summary_text,
+    )
+    return provider.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        model_name=model_name,
+        max_tokens=2048,
+        temperature=0.2,
+    ).strip()
 
 
 def _build_provider() -> tuple[Any, str]:
@@ -294,6 +351,25 @@ def process_project_guide(project_id: int) -> None:
         if not summary_text.strip():
             raise RuntimeError("guide summary generation returned empty text")
 
+        project_row = fetch_project_by_id(project_id)
+        project_name = str(project_row.get("name") or "").strip() if project_row else ""
+        project_keywords = str(project_row.get("keywords") or "").strip() if project_row else ""
+        try:
+            core_problem_text = _generate_core_problem_from_summary(
+                summary_text=summary_text,
+                project_name=project_name,
+                keywords=project_keywords,
+            )
+        except Exception:
+            core_problem_text = ""
+            log_project(
+                "GUIDE",
+                project_id,
+                f"core problem generation failed error=\n{traceback.format_exc()}",
+            )
+        if not core_problem_text.strip():
+            core_problem_text = _fallback_core_problem(summary_text)
+
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         update_project_guide(
             project_id,
@@ -303,10 +379,23 @@ def process_project_guide(project_id: int) -> None:
             error_message=None,
             generated_at=generated_at,
         )
+        if core_problem_text.strip():
+            try:
+                update_project(project_id=project_id, core_problem=core_problem_text.strip())
+            except Exception:
+                log_project(
+                    "GUIDE",
+                    project_id,
+                    f"update project core_problem failed error=\n{traceback.format_exc()}",
+                )
         log_project(
             "GUIDE",
             project_id,
-            f"guide processing done extracted_chars={len(extracted_text)} summary_chars={len(summary_text)} ocr_pages={ocr_pages}",
+            "guide processing done "
+            f"extracted_chars={len(extracted_text)} "
+            f"summary_chars={len(summary_text)} "
+            f"core_problem_chars={len(core_problem_text)} "
+            f"ocr_pages={ocr_pages}",
         )
     except Exception as exc:
         error_detail = traceback.format_exc()
