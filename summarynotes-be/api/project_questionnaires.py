@@ -207,23 +207,28 @@ async def create_questionnaire(
     role_name: Optional[str] = Form(None),
     role_type: Optional[str] = Form(None),
     detail_schema_json: Optional[str] = Form(None),
-    object_type: str = Form(...),
+    object_type: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
     project_row = _get_owned_project_or_404(project_id, current_user_id)
     ensure_project_builtin_roles(project_id, current_user_id)
     clean_name = name.strip() or Path(file.filename or "questionnaire").stem
     clean_object_type = _normalize_object_type(object_type)
-    clean_role_type = normalize_role_type(role_type or clean_object_type)
-    if clean_role_type is None:
-        raise HTTPException(status_code=400, detail="role type is required")
 
     role_row: dict | None = None
     if role_id is not None:
         role_row = fetch_project_role_by_id(int(role_id), project_id, current_user_id)
         if not role_row:
             raise HTTPException(status_code=404, detail="role not found")
+        clean_role_type = normalize_role_type(
+            role_type or clean_object_type or role_row.get("role_type") or role_row.get("object_type")
+        )
+        if clean_role_type is None:
+            raise HTTPException(status_code=400, detail="role type is required")
     else:
+        clean_role_type = normalize_role_type(role_type or clean_object_type)
+        if clean_role_type is None:
+            raise HTTPException(status_code=400, detail="role type is required")
         clean_role_name = (role_name or build_default_role_name(clean_role_type)).strip() or build_default_role_name(clean_role_type)
         role_row = fetch_project_role_by_name(project_id, clean_role_name, current_user_id)
         if not role_row:

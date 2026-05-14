@@ -523,20 +523,27 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [interviewFileList, setInterviewFileList] = useState<UploadFile[]>([]);
   const [selectedInterviewRoleId, setSelectedInterviewRoleId] = useState<number | null>(null);
 
-  const loadProjectDetail = useCallback(async () => {
+  const loadProjectDetail = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
     if (!projectId || projectId <= 0) {
       setError("无效的项目 ID");
       return;
     }
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const detail = await getProjectDetail(projectId);
       setProjectDetail(detail);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载项目详情失败");
+      if (!silent) {
+        setError(e instanceof Error ? e.message : "加载项目详情失败");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [projectId]);
 
@@ -558,7 +565,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
       return;
     }
     const timer = window.setInterval(() => {
-      void loadProjectDetail();
+      void loadProjectDetail({ silent: true });
     }, 5000);
     return () => {
       window.clearInterval(timer);
@@ -757,9 +764,14 @@ export default function ProjectDetailClient({ projectId }: Props) {
         return;
       }
       const roleMode = String(values.role_mode || questionnaireRoleMode || "existing").trim();
-      const objectType = normalizeRoleType(values.object_type || values.role_type);
+      const selectedRoleId = Number(values.role_id || questionnaireRoleId || 0);
+      const selectedRole = selectedRoleId ? roleById.get(selectedRoleId) ?? null : null;
+      const objectType =
+        roleMode === "existing"
+          ? normalizeRoleType(selectedRole?.role_type || questionnaireRoleType)
+          : normalizeRoleType(values.object_type || values.role_type || questionnaireRoleType);
       if (!objectType) {
-        message.warning("请选择角色模板类型");
+        message.warning(roleMode === "existing" ? "请选择已有角色对应的模板类型" : "请选择角色模板类型");
         setQuestionnaireSaving(false);
         return;
       }
@@ -767,13 +779,13 @@ export default function ProjectDetailClient({ projectId }: Props) {
       formData.append("name", String(values.name || "").trim());
       formData.append("object_type", objectType);
       if (roleMode === "existing") {
-        const existingRoleId = Number(values.role_id || questionnaireRoleId || 0);
-        if (!existingRoleId) {
+        if (!selectedRoleId) {
           message.warning("请选择已有角色");
           setQuestionnaireSaving(false);
           return;
         }
-        formData.append("role_id", String(existingRoleId));
+        formData.append("role_id", String(selectedRoleId));
+        formData.append("role_type", objectType);
       } else {
         const roleName = String(values.role_name || "").trim();
         if (!roleName) {
