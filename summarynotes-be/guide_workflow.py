@@ -82,7 +82,7 @@ def _normalize_guide_file_item(item: Dict[str, Any], fallback_index: int) -> Dic
     file_type = str(item.get("file_type") or "").strip().lower()
     if not file_type and original_name:
         file_type = Path(original_name).suffix.lower().lstrip(".")
-    if file_type not in {"pdf", "docx", "md"}:
+    if file_type not in {"pdf", "docx", "md", "xlsx"}:
         file_type = "unknown"
     return {
         "index": index,
@@ -341,6 +341,191 @@ def _extract_markdown_text(md_path: Path) -> str:
         raise RuntimeError(f"read markdown failed: {exc}") from exc
 
 
+def _xlsx_column_index(cell_ref: str) -> int:
+    match = re.match(r"^([A-Za-z]+)", str(cell_ref or "").strip())
+    if not match:
+        return 0
+    result = 0
+    for ch in match.group(1).upper():
+        if not ("A" <= ch <= "Z"):
+            return 0
+        result = result * 26 + (ord(ch) - ord("A") + 1)
+    return result
+
+
+def _extract_xlsx_shared_strings(doc_zip: zipfile.ZipFile) -> List[str]:
+    try:
+        shared_strings_xml = doc_zip.read("xl/sharedStrings.xml")
+    except KeyError:
+        return []
+    try:
+        root = ET.fromstring(shared_strings_xml)
+    except Exception as exc:
+        raise RuntimeError(f"parse xlsx shared strings failed: {exc}") from exc
+
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    shared_strings: List[str] = []
+    for si in root.iter(f"{namespace}si"):
+        parts: List[str] = []
+        for node in si.iter():
+            if node.tag == f"{namespace}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{namespace}tab":
+                parts.append("\t")
+            elif node.tag in {f"{namespace}br", f"{namespace}cr"}:
+                parts.append("\n")
+        shared_strings.append(_normalize_text("".join(parts)))
+    return shared_strings
+
+
+def _extract_xlsx_sheet_entries(doc_zip: zipfile.ZipFile) -> List[tuple[str, str]]:
+    workbook_namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    rel_namespace = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    entries: List[tuple[str, str]] = []
+
+    try:
+        workbook_root = ET.fromstring(doc_zip.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(doc_zip.read("xl/_rels/workbook.xml.rels"))
+        rel_map: Dict[str, str] = {}
+        for rel in rels_root.iter(f"{rel_namespace}Relationship"):
+            rel_id = str(rel.get("Id") or "").strip()
+            target = str(rel.get("Target") or "").strip()
+            if rel_id and target:
+                rel_map[rel_id] = target
+
+        for sheet in workbook_root.iter(f"{workbook_namespace}sheet"):
+            sheet_name = str(sheet.get("name") or "Sheet").strip() or "Sheet"
+            rel_id = str(sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id") or "").strip()
+            target = rel_map.get(rel_id, "")
+            if not target:
+                continue
+            target_path = target.lstrip("/")
+            if not target_path.startswith("xl/"):
+                target_path = f"xl/{target_path.lstrip('./')}"
+            entries.append((sheet_name, target_path))
+    except Exception:
+        entries = []
+
+    if entries:
+        return entries
+
+    for info in sorted(doc_zip.infolist(), key=lambda item: item.filename):
+        if info.filename.startswith("xl/worksheets/") and info.filename.endswith(".xml"):
+            entries.append((Path(info.filename).stem, info.filename))
+    return entries
+
+
+def _extract_xlsx_cell_value(
+    cell: ET.Element,
+    shared_strings: List[str],
+) -> str:
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    cell_type = str(cell.get("t") or "").strip().lower()
+    value_node = cell.find(f"{namespace}v")
+    if cell_type == "s" and value_node is not None and value_node.text is not None:
+        try:
+            shared_index = int(value_node.text)
+        except Exception:
+            return _normalize_text(value_node.text)
+        if 0 <= shared_index < len(shared_strings):
+            return _normalize_text(shared_strings[shared_index])
+        return ""
+    if cell_type == "inlineStr":
+        inline_node = cell.find(f"{namespace}is")
+        if inline_node is None:
+            return ""
+        parts: List[str] = []
+        for node in inline_node.iter():
+            if node.tag == f"{namespace}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{namespace}tab":
+                parts.append("\t")
+            elif node.tag in {f"{namespace}br", f"{namespace}cr"}:
+                parts.append("\n")
+        return _normalize_text("".join(parts))
+    if cell_type == "b":
+        return "TRUE" if value_node is not None and str(value_node.text or "").strip() == "1" else "FALSE"
+    if value_node is not None and value_node.text is not None:
+        return _normalize_text(value_node.text)
+    formula_node = cell.find(f"{namespace}f")
+    if formula_node is not None and formula_node.text:
+        return _normalize_text(formula_node.text)
+    return ""
+
+
+def _extract_xlsx_sheet_text(
+    doc_zip: zipfile.ZipFile,
+    sheet_path: str,
+    sheet_name: str,
+    shared_strings: List[str],
+) -> str:
+    try:
+        sheet_xml = doc_zip.read(sheet_path)
+    except KeyError as exc:
+        raise RuntimeError(f"xlsx missing sheet file: {sheet_path}") from exc
+
+    try:
+        root = ET.fromstring(sheet_xml)
+    except Exception as exc:
+        raise RuntimeError(f"parse xlsx sheet failed: {sheet_name}: {exc}") from exc
+
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    sheet_data = root.find(f"{namespace}sheetData")
+    if sheet_data is None:
+        return ""
+
+    lines: List[str] = [f"## 工作表：{sheet_name}"]
+    for row in sheet_data.iter(f"{namespace}row"):
+        row_values: Dict[int, str] = {}
+        max_index = 0
+        for cell in row.iter(f"{namespace}c"):
+            ref = str(cell.get("r") or "").strip()
+            cell_index = _xlsx_column_index(ref)
+            if cell_index <= 0:
+                continue
+            value = _extract_xlsx_cell_value(cell, shared_strings)
+            if not value.strip():
+                continue
+            row_values[cell_index] = value.strip()
+            max_index = max(max_index, cell_index)
+
+        if max_index <= 0:
+            continue
+
+        ordered_values = [row_values.get(index, "") for index in range(1, max_index + 1)]
+        row_text = "\t".join(ordered_values).strip()
+        if row_text:
+            lines.append(row_text)
+
+    if len(lines) <= 1:
+        return ""
+    return "\n".join(lines).strip()
+
+
+def _extract_xlsx_text(xlsx_path: Path) -> tuple[str, Dict[str, Any]]:
+    if not zipfile.is_zipfile(xlsx_path):
+        raise RuntimeError("xlsx file is not a valid zip archive")
+
+    with zipfile.ZipFile(xlsx_path) as doc_zip:
+        shared_strings = _extract_xlsx_shared_strings(doc_zip)
+        sheet_entries = _extract_xlsx_sheet_entries(doc_zip)
+        if not sheet_entries:
+            raise RuntimeError("xlsx workbook contains no worksheets")
+
+        sheet_texts: List[str] = []
+        text_sheet_count = 0
+        for sheet_name, sheet_path in sheet_entries:
+            sheet_text = _extract_xlsx_sheet_text(doc_zip, sheet_path, sheet_name, shared_strings)
+            if sheet_text:
+                sheet_texts.append(sheet_text)
+                text_sheet_count += 1
+
+    extracted_text = "\n\n".join(sheet_texts).strip()
+    if not extracted_text:
+        raise RuntimeError("no text extracted from xlsx file")
+    return extracted_text, {"sheet_count": len(sheet_entries), "text_sheet_count": text_sheet_count}
+
+
 def _extract_guide_text_by_type(file_path: Path, file_type: str) -> tuple[str, Dict[str, Any]]:
     normalized_type = str(file_type or "").strip().lower()
     if normalized_type == "pdf":
@@ -350,6 +535,8 @@ def _extract_guide_text_by_type(file_path: Path, file_type: str) -> tuple[str, D
         return _extract_docx_text(file_path), {}
     if normalized_type == "md":
         return _extract_markdown_text(file_path), {}
+    if normalized_type == "xlsx":
+        return _extract_xlsx_text(file_path)
     raise RuntimeError(f"unsupported guide file type: {file_type}")
 
 

@@ -476,9 +476,9 @@ def _normalize_guide_file_name(file_name: str) -> str:
 
 def _detect_guide_file_type(file_name: str) -> str:
     suffix = Path(str(file_name or "")).suffix.lower().lstrip(".")
-    if suffix in {"pdf", "docx", "md"}:
+    if suffix in {"pdf", "docx", "md", "xlsx"}:
         return suffix
-    raise HTTPException(status_code=400, detail="当前仅支持 pdf / docx / md 格式指南")
+    raise HTTPException(status_code=400, detail="当前仅支持 pdf / docx / md / xlsx 格式指南")
 
 
 def _build_guide_display_name(file_names: list[str]) -> str:
@@ -648,7 +648,7 @@ def create_project(
     参数:
         name: 项目名称。
         keywords: 项目关键词，可空。
-        guide_file: 项目指南附件，可空，支持多文件上传，格式为 pdf/docx/md。
+        guide_file: 项目指南附件，可空，支持多文件上传，格式为 pdf/docx/md/xlsx。
 
     返回:
         新创建项目的基础信息字典，至少包含:

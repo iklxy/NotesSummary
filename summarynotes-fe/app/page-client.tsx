@@ -249,12 +249,12 @@ export default function Home() {
                 multiple
                 fileList={guideFileList}
                 onChange={({ fileList }) => setGuideFileList(fileList)}
-                accept=".pdf,.docx,.md"
+                accept=".pdf,.docx,.md,.xlsx"
               >
                 <Button icon={<UploadOutlined />}>选择指南文件</Button>
               </Upload>
               <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                支持一次上传多个 pdf、docx 或 md 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
+                支持一次上传多个 pdf、docx、md 或 xlsx 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
               </Typography.Text>
             </Form.Item>
           ) : null}
