@@ -24,6 +24,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     ...options,
     headers,
     credentials: "include",
+    cache: options.cache ?? "no-store",
   });
   const responseText = await response.text();
   if (!response.ok) {

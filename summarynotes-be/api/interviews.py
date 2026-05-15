@@ -97,6 +97,46 @@ def _get_interview_backup_dir(project_id: int, interview_id: int) -> Path:
     return _get_data_root() / f"project_{project_id}" / f"interview_{interview_id}"
 
 
+def _write_minutes_backup_files(
+    project_id: int,
+    interview_id: int,
+    minutes_json: Any,
+    minutes_text: str,
+) -> tuple[Path, Path]:
+    """
+    将智能纲要同步写入访谈本地备份目录。
+
+    参数:
+        project_id: 项目 ID。
+        interview_id: 访谈 ID。
+        minutes_json: 需要落盘的 minutes JSON。
+        minutes_text: 需要写入 minutes.txt 的纯文本。
+
+    返回:
+        (minutes_json_path, minutes_txt_path)。
+    """
+    backup_dir = _get_interview_backup_dir(project_id, interview_id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(minutes_json, dict):
+        backup_payload = dict(minutes_json)
+        backup_payload["raw_minutes_text"] = minutes_text
+        backup_payload["minutes_text"] = minutes_text
+        backup_payload.setdefault("sections", [])
+    else:
+        backup_payload = {
+            "raw_minutes_text": minutes_text,
+            "minutes_text": minutes_text,
+            "sections": [],
+        }
+
+    minutes_json_path = backup_dir / "minutes.json"
+    minutes_txt_path = backup_dir / "minutes.txt"
+    minutes_json_path.write_text(json.dumps(backup_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    minutes_txt_path.write_text(minutes_text.rstrip() + "\n", encoding="utf-8")
+    return minutes_json_path, minutes_txt_path
+
+
 def _safe_load_json_file(path: Path) -> Dict[str, Any] | None:
     """
     安全读取 JSON 文件。
@@ -1530,6 +1570,15 @@ def update_interview_overall_notes_minutes(
                 "sections": [],
             }
     minutes_text = _render_minutes_payload_text(minutes_json) if isinstance(minutes_json, dict) else str(minutes_json or "")
+    try:
+        _write_minutes_backup_files(
+            project_id=project_id,
+            interview_id=interview_id,
+            minutes_json=minutes_json,
+            minutes_text=minutes_text,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update overall notes minutes file sync failed: {e}")
     return OverallNotesMinutesUpdateResponse(
         success=True,
         interview_id=interview_id,
