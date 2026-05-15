@@ -135,12 +135,12 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
       setMinutesRefreshing(true);
       const resp = await refreshInterviewMinutes(interviewId);
       if (!resp.success) {
-        throw new Error(resp.message || "刷新智能纲要失败");
+        throw new Error(resp.message || "刷新智能纪要失败");
       }
-      message.success("智能纲要已刷新");
+      message.success("智能纪要已刷新");
       setReloadToken((value) => value + 1);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "刷新智能纲要失败");
+      message.error(e instanceof Error ? e.message : "刷新智能纪要失败");
     } finally {
       setMinutesRefreshing(false);
     }
@@ -153,11 +153,11 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
       await updateInterviewOverallNotesMinutes(interviewId, savedMinutesJson);
       setSavingMinutes(false);
       router.push(`/interviews/${interviewId}/overall-notes`);
-      message.success("智能纲要已保存，Key BQ 正在后台刷新");
+      message.success("智能纪要已保存，Key BQ 正在后台刷新");
       return;
     } catch (e) {
       setSavingMinutes(false);
-      message.error(e instanceof Error ? e.message : "保存智能纲要失败");
+      message.error(e instanceof Error ? e.message : "保存智能纪要失败");
     }
   };
 
@@ -179,10 +179,10 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                 全文 Notes 编辑 #{interviewId > 0 ? interviewId : "无效"}
               </Title>
               <Paragraph className="summarynotes-hero-description">
-                这里只允许编辑智能纲要。
+                这里只允许编辑智能纪要。
               </Paragraph>
               <div className="summarynotes-hero-tags">
-                <Tag color="green">B 智能纲要</Tag>
+                <Tag color="green">B 智能纪要</Tag>
               </div>
             </div>
             <Space wrap className="summarynotes-hero-actions">
@@ -193,7 +193,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                 导出全文 Notes
               </Button>
               <Button onClick={handleRefreshMinutes} loading={minutesRefreshing}>
-                刷新智能纲要
+                刷新智能纪要
               </Button>
             </Space>
           </div>
@@ -220,15 +220,15 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
             />
           ) : data ? (
             <Space direction="vertical" size="large" style={{ width: "100%" }}>
-              <Card className="summarynotes-notes-section-card" title="智能纲要">
+              <Card className="summarynotes-notes-section-card" title="智能纪要">
                 <Row gutter={[20, 20]}>
                   <Col xs={24}>
                     <div className="summarynotes-notes-editor-panel">
                       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
                         <div>
-                          <Text className="summarynotes-panel-label">编辑智能纲要</Text>
+                          <Text className="summarynotes-panel-label">编辑智能纪要</Text>
                           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                            直接编辑整篇智能纲要长文本，保存后会覆盖当前内容。
+                            直接编辑整篇智能纪要长文本，保存后会覆盖当前内容。
                           </Paragraph>
                         </div>
                         <TextArea
@@ -239,11 +239,11 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                             });
                           }}
                           rows={28}
-                          placeholder="请输入完整的智能纲要长文本"
+                          placeholder="请输入完整的智能纪要长文本"
                           className="summarynotes-json-editor"
                         />
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          保存后会直接覆盖当前智能纲要全文。
+                          保存后会直接覆盖当前智能纪要全文。
                         </Text>
 
                         <div className="summarynotes-editor-actions">
@@ -253,7 +253,7 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
                             onClick={() => void handleSaveMinutes()}
                             loading={savingMinutes}
                           >
-                            保存智能纲要
+                            保存智能纪要
                           </Button>
                         </div>
                       </Space>

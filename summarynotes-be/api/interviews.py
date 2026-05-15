@@ -15,6 +15,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 
 from api.auth import require_current_user_id
+from DbAccess import DbAccess
+from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from db import (
     delete_interview_graph,
     delete_fewshot_sample,
@@ -37,6 +39,7 @@ from db import (
     update_interview_note_content,
     update_interview_summary_text_with_corrections,
     upsert_interview_minutes,
+    replace_key_bq_rows_for_interview,
 )
 from schemas.interviews import (
     DeleteInterviewResponse,
@@ -144,7 +147,10 @@ def _refresh_kbq_notes_for_interview(interview_id: int) -> Dict[str, Any]:
     该逻辑既会被公开接口调用，也会被智能纲要保存流程复用。
     """
     url = f"{_get_internal_base()}/internal/interviews/{interview_id}/refresh-kbq-notes"
-    resp = requests.post(url, timeout=600)
+    try:
+        resp = requests.post(url, timeout=600)
+    except requests.RequestException:
+        return _refresh_kbq_notes_locally(interview_id)
     if resp.status_code >= 400:
         try:
             detail = resp.json()
@@ -390,6 +396,149 @@ def _get_internal_base() -> str:
     """
     base = os.getenv("INTERNAL_SERVICE_BASE", "http://127.0.0.1:8000")
     return base.rstrip("/")
+
+
+def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
+    """
+    从项目 KBQ JSON 中提取可回填到访谈的 key BQ 列表。
+    """
+
+    def _normalize_dimensions(raw_value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_value, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        for item in raw_value:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                dimension: Dict[str, Any] = {"name": name}
+                description = str(item.get("description") or "").strip()
+                if description:
+                    dimension["description"] = description
+                normalized.append(dimension)
+            else:
+                text = str(item or "").strip()
+                if text:
+                    normalized.append({"name": text})
+        return normalized
+
+    def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, List[Dict[str, Any]]]:
+        if not isinstance(raw_value, dict):
+            return {"user_demension": [], "llm_demension": [], "demension": []}
+
+        user_demension = _normalize_dimensions(
+            raw_value.get("user_demension")
+            if raw_value.get("user_demension") is not None
+            else raw_value.get("user_dimensions")
+        )
+        llm_demension = _normalize_dimensions(
+            raw_value.get("llm_demension")
+            if raw_value.get("llm_demension") is not None
+            else raw_value.get("llm_dimensions")
+            if raw_value.get("llm_dimensions") is not None
+            else raw_value.get("supplemental_dimensions")
+        )
+        demension = _normalize_dimensions(
+            raw_value.get("demension") if raw_value.get("demension") is not None else raw_value.get("dimensions")
+        )
+        if not demension:
+            demension = list(user_demension) + [item for item in llm_demension if item not in user_demension]
+
+        return {
+            "user_demension": user_demension,
+            "llm_demension": llm_demension,
+            "demension": demension,
+        }
+
+    if core_problem is None:
+        return []
+    obj: Any = core_problem
+    if isinstance(core_problem, str):
+        try:
+            obj = json.loads(core_problem)
+        except Exception:
+            return []
+    if not isinstance(obj, dict):
+        return []
+    items = obj.get("key_bq_list") or []
+    result: List[Dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            order = item.get("order") or idx
+            dimension_bundle = _normalize_dimension_bundle(item)
+        else:
+            text = str(item or "").strip()
+            order = idx
+            dimension_bundle = {"user_demension": [], "llm_demension": [], "demension": []}
+        if not text:
+            continue
+        dimension_json = dimension_bundle if any(dimension_bundle.values()) else None
+        result.append(
+            {
+                "order": int(order),
+                "text": text,
+                "dimension_json": dimension_json,
+                "status": "pending",
+            }
+        )
+    return result
+
+
+def _refresh_kbq_notes_locally(interview_id: int) -> Dict[str, Any]:
+    """
+    在当前进程中直接执行 KBQ 刷新，作为内部 HTTP 调用失败时的兜底。
+    """
+    log_interview("KBQ", interview_id, "local refresh-kbq-notes start")
+    interview = DbAccess.get_interview_by_id(interview_id)
+    if not interview:
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    project_id = int(interview.get("parse_project_id") or 0)
+    project = fetch_project_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    project_key_bq_json = project.get("key_bq_json")
+    key_bq_items = _extract_key_bq_items(project_key_bq_json)
+    if not key_bq_items:
+        raise HTTPException(status_code=400, detail="no key BQ found in current project key bq")
+
+    try:
+        written = replace_key_bq_rows_for_interview(
+            project_id=project_id,
+            interview_id=interview_id,
+            key_bq_items=key_bq_items,
+        )
+    except Exception as e:
+        log_interview("KBQ", interview_id, f"local refresh-kbq-notes replace_key_bq failed error={e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"refresh key bq failed: {e}")
+
+    try:
+        kbq_result = run_kbq_notes_generation_for_interview(interview_id)
+    except Exception as e:
+        log_interview("KBQ", interview_id, f"local refresh-kbq-notes generate failed error={e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"refresh kbq notes failed: {e}")
+
+    if not isinstance(kbq_result, dict):
+        kbq_result = {"success": False, "message": "invalid kbq result"}
+    kbq_result["key_bq_inserted"] = written
+    kbq_result["refreshed_from_core_problem"] = False
+    kbq_result["refreshed_from_project_key_bq"] = True
+    if kbq_result.get("success"):
+        log_interview(
+            "KBQ",
+            interview_id,
+            f"local refresh-kbq-notes done key_bq_inserted={written} generated={kbq_result.get('generated')} inserted={kbq_result.get('inserted')}",
+        )
+    else:
+        log_interview(
+            "KBQ",
+            interview_id,
+            f"local refresh-kbq-notes failed stage={kbq_result.get('stage')} detail={kbq_result.get('detail')}",
+        )
+    return kbq_result
 
 
 def _get_audio_root() -> Path:

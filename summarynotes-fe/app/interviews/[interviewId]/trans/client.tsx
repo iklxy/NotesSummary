@@ -121,7 +121,7 @@ export default function TransClient({ interviewId }: Props) {
           </Space>
         }
       />
-      <Content className="pt-10 lg:pt-12">
+      <Content className="pt-10 lg:pt-4">
         <div style={{ maxWidth: 1680, margin: "0 auto", padding: "24px" }}>
           {loading ? (
             <div className="flex items-center justify-center py-16">

@@ -90,6 +90,11 @@ interface InterviewFormValues {
 
 type InterviewDetailValues = Record<string, string | number | null | undefined>;
 
+interface InterviewDetailFieldDraft extends InterviewDetailFieldDefinition {
+  uid: string;
+  value?: string | number | null;
+}
+
 const DEFAULT_DOCTOR_ROLE_FIELDS: InterviewDetailFieldDefinition[] = [
   { key: "doctor_level", label: "医生级别", kind: "text" },
   { key: "doctor_title", label: "职称", kind: "text" },
@@ -194,12 +199,29 @@ function buildInterviewFieldOptions(role?: ProjectRole | null): InterviewDetailF
   return getDefaultRoleFields(role.role_type);
 }
 
-function buildRoleTemplateFields(roleType?: string | null): InterviewDetailFieldDefinition[] {
-  const normalized = normalizeRoleType(roleType);
-  if (!normalized) {
-    return [];
+function createInterviewDetailFieldUid(): string {
+  return `field-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createInterviewDetailFieldDraft(
+  field?: Partial<InterviewDetailFieldDefinition>,
+  value?: string | number | null,
+): InterviewDetailFieldDraft {
+  return {
+    uid: createInterviewDetailFieldUid(),
+    key: String(field?.key || "").trim(),
+    label: String(field?.label || "").trim() || String(field?.key || "").trim(),
+    kind: String(field?.kind || "text").trim() || "text",
+    value,
+  };
+}
+
+function buildInterviewDetailFieldDraftsByType(roleType?: string | null): InterviewDetailFieldDraft[] {
+  const fields = getDefaultRoleFields(normalizeRoleType(roleType));
+  if (fields.length === 0) {
+    return [createInterviewDetailFieldDraft()];
   }
-  return getDefaultRoleFields(normalized);
+  return fields.map((field) => createInterviewDetailFieldDraft(field));
 }
 
 interface QuestionnaireReviewState {
@@ -517,12 +539,6 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [questionnaireSaving, setQuestionnaireSaving] = useState(false);
   const [questionnaireForm] = Form.useForm();
   const [questionnaireFileList, setQuestionnaireFileList] = useState<UploadFile[]>([]);
-  const [questionnaireRoleMode, setQuestionnaireRoleMode] = useState<"existing" | "new">("existing");
-  const [questionnaireRoleType, setQuestionnaireRoleType] = useState<"doctor" | "patient" | "custom">("doctor");
-  const [questionnaireRoleId, setQuestionnaireRoleId] = useState<number | null>(null);
-  const [questionnaireRoleFields, setQuestionnaireRoleFields] = useState<InterviewDetailFieldDefinition[]>(
-    cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
-  );
   const [questionnaireReviewState, setQuestionnaireReviewState] =
     useState<QuestionnaireReviewState | null>(null);
   const [questionnaireReviewVisible, setQuestionnaireReviewVisible] = useState(false);
@@ -540,11 +556,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [interviewModalOpen, setInterviewModalOpen] = useState(false);
   const [interviewSaving, setInterviewSaving] = useState(false);
   const [interviewForm] = Form.useForm<InterviewFormValues>();
+  const [interviewDetailFieldsDraft, setInterviewDetailFieldsDraft] = useState<InterviewDetailFieldDraft[]>([]);
   const [interviewDetailModalOpen, setInterviewDetailModalOpen] = useState(false);
-  const [interviewDetailForm] = Form.useForm<InterviewDetailValues>();
-  const [interviewDetailDraft, setInterviewDetailDraft] = useState<InterviewDetailValues>({});
   const [interviewFileList, setInterviewFileList] = useState<UploadFile[]>([]);
-  const [selectedInterviewRoleId, setSelectedInterviewRoleId] = useState<number | null>(null);
 
   const loadProjectDetail = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -679,110 +693,29 @@ export default function ProjectDetailClient({ projectId }: Props) {
     [questionnaires],
   );
 
-  const selectedInterviewRole = useMemo(() => {
-    if (!selectedInterviewRoleId) {
-      return null;
-    }
-    return roleById.get(selectedInterviewRoleId) ?? null;
-  }, [roleById, selectedInterviewRoleId]);
-
-  const interviewDetailFields = useMemo(() => {
-    if (!selectedInterviewRole) {
-      return [];
-    }
-    const fields = buildInterviewFieldOptions(selectedInterviewRole);
-    return fields.length > 0 ? fields : getDefaultRoleFields(selectedInterviewRole.role_type);
-  }, [selectedInterviewRole]);
-
-  const questionnaireRoleOptions = useMemo(
-    () =>
-      roles.map((role) => ({
-        value: role.id,
-        label: role.role_name,
-      })),
-    [roles],
-  );
+  const interviewDetailDraft = useMemo<InterviewDetailValues>(() => {
+    const values: InterviewDetailValues = {};
+    interviewDetailFieldsDraft.forEach((field) => {
+      const key = String(field.key || "").trim();
+      const value = field.value;
+      if (!key || value === null || value === undefined || value === "") {
+        return;
+      }
+      values[key] = value;
+    });
+    return values;
+  }, [interviewDetailFieldsDraft]);
 
   const openQuestionnaireModal = (targetRoleId?: number) => {
     questionnaireForm.resetFields();
     setQuestionnaireFileList([]);
-    const firstRole = targetRoleId ? roleById.get(targetRoleId) ?? roles[0] ?? null : roles[0] ?? null;
-    setQuestionnaireRoleMode("existing");
-    setQuestionnaireRoleId(firstRole?.id ?? null);
-    setQuestionnaireRoleType((normalizeRoleType(firstRole?.role_type) ?? "doctor") as "doctor" | "patient" | "custom");
-    setQuestionnaireRoleFields(
-      firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
-    );
+    const targetRole = targetRoleId ? roleById.get(targetRoleId) ?? null : roles[0] ?? null;
+    const targetType = (normalizeRoleType(targetRole?.role_type) ?? "doctor") as "doctor" | "patient" | "custom";
     questionnaireForm.setFieldsValue({
-      role_mode: "existing",
-      role_id: firstRole?.id ?? undefined,
-      role_type: firstRole?.role_type ?? "doctor",
-      role_name: firstRole?.role_name ?? "",
-      object_type: firstRole?.role_type ?? "doctor",
-      role_detail_schema_json: firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
+      name: "",
+      object_type: targetType,
     });
     setQuestionnaireModalOpen(true);
-  };
-
-  const handleQuestionnaireRoleModeChange = (mode: "existing" | "new") => {
-    setQuestionnaireRoleMode(mode);
-    if (mode === "existing") {
-      const firstRole = (questionnaireRoleId ? roleById.get(questionnaireRoleId) : null) ?? roles[0] ?? null;
-      setQuestionnaireRoleId(firstRole?.id ?? null);
-      setQuestionnaireRoleType((normalizeRoleType(firstRole?.role_type) ?? "doctor") as "doctor" | "patient" | "custom");
-      setQuestionnaireRoleFields(
-        firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
-      );
-      questionnaireForm.setFieldsValue({
-        role_mode: "existing",
-        role_id: firstRole?.id ?? undefined,
-        role_type: firstRole?.role_type ?? "doctor",
-        role_name: firstRole?.role_name ?? "",
-        object_type: firstRole?.role_type ?? "doctor",
-        role_detail_schema_json: firstRole ? buildInterviewFieldOptions(firstRole) : cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS),
-      });
-      return;
-    }
-    const nextFields = buildRoleTemplateFields(questionnaireRoleType);
-    setQuestionnaireRoleFields(nextFields);
-    questionnaireForm.setFieldsValue({
-      role_mode: "new",
-      role_id: undefined,
-      role_type: questionnaireRoleType,
-      role_name: "",
-      object_type: questionnaireRoleType,
-      role_detail_schema_json: nextFields,
-    });
-  };
-
-  const handleQuestionnaireRoleTypeChange = (roleType: "doctor" | "patient" | "custom") => {
-    setQuestionnaireRoleType(roleType);
-    const nextFields = buildRoleTemplateFields(roleType);
-    setQuestionnaireRoleFields(nextFields);
-    questionnaireForm.setFieldsValue({
-      role_type: roleType,
-      object_type: roleType,
-      role_detail_schema_json: nextFields,
-    });
-  };
-
-  const handleQuestionnaireExistingRoleChange = (roleId: number) => {
-    const nextRole = roleById.get(roleId) ?? null;
-    setQuestionnaireRoleId(roleId);
-    if (!nextRole) {
-      return;
-    }
-    const nextType = (normalizeRoleType(nextRole.role_type) ?? "doctor") as "doctor" | "patient" | "custom";
-    setQuestionnaireRoleType(nextType);
-    const nextFields = buildInterviewFieldOptions(nextRole);
-    setQuestionnaireRoleFields(nextFields);
-    questionnaireForm.setFieldsValue({
-      role_id: roleId,
-      role_type: nextType,
-      object_type: nextType,
-      role_name: nextRole.role_name,
-      role_detail_schema_json: nextFields,
-    });
   };
 
   const handleQuestionnaireModalCancel = () => {
@@ -791,10 +724,6 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
     setQuestionnaireModalOpen(false);
     setQuestionnaireFileList([]);
-    setQuestionnaireRoleMode("existing");
-    setQuestionnaireRoleType("doctor");
-    setQuestionnaireRoleId(null);
-    setQuestionnaireRoleFields(cloneFieldDefinitions(DEFAULT_DOCTOR_ROLE_FIELDS));
   };
 
   const openQuestionnaireReview = async (questionnaire: ProjectQuestionnaire) => {
@@ -824,41 +753,16 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setQuestionnaireSaving(false);
         return;
       }
-      const roleMode = String(values.role_mode || questionnaireRoleMode || "existing").trim();
-      const selectedRoleId = Number(values.role_id || questionnaireRoleId || 0);
-      const selectedRole = selectedRoleId ? roleById.get(selectedRoleId) ?? null : null;
-      const objectType =
-        roleMode === "existing"
-          ? normalizeRoleType(selectedRole?.role_type || questionnaireRoleType)
-          : normalizeRoleType(values.object_type || values.role_type || questionnaireRoleType);
+      const objectType = normalizeRoleType(values.object_type);
       if (!objectType) {
-        message.warning(roleMode === "existing" ? "请选择已有角色对应的模板类型" : "请选择角色模板类型");
+        message.warning("请选择 DG 所属类型");
         setQuestionnaireSaving(false);
         return;
       }
       const formData = new FormData();
       formData.append("name", String(values.name || "").trim());
       formData.append("object_type", objectType);
-      if (roleMode === "existing") {
-        if (!selectedRoleId) {
-          message.warning("请选择已有角色");
-          setQuestionnaireSaving(false);
-          return;
-        }
-        formData.append("role_id", String(selectedRoleId));
-        formData.append("role_type", objectType);
-      } else {
-        const roleName = String(values.role_name || "").trim();
-        if (!roleName) {
-          message.warning("请输入角色名称");
-          setQuestionnaireSaving(false);
-          return;
-        }
-        const roleFields = normalizeFieldDefinitions(values.role_detail_schema_json || questionnaireRoleFields);
-        formData.append("role_name", roleName);
-        formData.append("role_type", objectType);
-        formData.append("detail_schema_json", JSON.stringify(roleFields));
-      }
+      formData.append("role_type", objectType);
       formData.append("file", file as File);
       const created = await createProjectQuestionnaire(projectId, formData);
       message.success("DG 已上传");
@@ -940,6 +844,42 @@ export default function ProjectDetailClient({ projectId }: Props) {
     setGuideResultVisible(true);
   };
 
+  const addInterviewDetailField = () => {
+    setInterviewDetailFieldsDraft((prev) => [...prev, createInterviewDetailFieldDraft()]);
+  };
+
+  const updateInterviewDetailField = (uid: string, patch: Partial<InterviewDetailFieldDraft>) => {
+    setInterviewDetailFieldsDraft((prev) =>
+      prev.map((field) =>
+        field.uid === uid
+          ? {
+              ...field,
+              ...patch,
+            }
+          : field,
+      ),
+    );
+  };
+
+  const removeInterviewDetailField = (uid: string) => {
+    setInterviewDetailFieldsDraft((prev) => prev.filter((field) => field.uid !== uid));
+  };
+
+  const openInterviewDetailModal = () => {
+    setInterviewDetailModalOpen(true);
+  };
+
+  const handleInterviewDetailModalCancel = () => {
+    if (interviewSaving) {
+      return;
+    }
+    setInterviewDetailModalOpen(false);
+  };
+
+  const handleInterviewDetailModalOk = () => {
+    setInterviewDetailModalOpen(false);
+  };
+
   const handleQuestionnaireDelete = (item: ProjectQuestionnaire) => {
     Modal.confirm({
       title: "确认删除 DG",
@@ -962,13 +902,14 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const openInterviewModal = () => {
     interviewForm.resetFields();
     setInterviewFileList([]);
-    setInterviewDetailDraft({});
-    interviewDetailForm.resetFields();
     if (isGuideLearning(guideStatus)) {
       message.warning("项目指南仍在学习中，建议完成后再创建访谈。");
     }
     const firstQuestionnaire = questionnaires[0] ?? null;
-    setSelectedInterviewRoleId(firstQuestionnaire?.role_id ?? null);
+    const firstQuestionnaireRoleType = normalizeRoleType(
+      firstQuestionnaire?.object_type || firstQuestionnaire?.role_type || null,
+    );
+    setInterviewDetailFieldsDraft(buildInterviewDetailFieldDraftsByType(firstQuestionnaireRoleType));
     interviewForm.setFieldsValue({
       questionnaire_id: firstQuestionnaire?.id ?? undefined,
     } as Partial<InterviewFormValues>);
@@ -980,37 +921,10 @@ export default function ProjectDetailClient({ projectId }: Props) {
     interviewForm.setFieldsValue({
       questionnaire_id: questionnaireId,
     });
-    if (nextQuestionnaire?.role_id) {
-      setSelectedInterviewRoleId(nextQuestionnaire.role_id);
-      interviewForm.setFieldsValue({
-        role_id: nextQuestionnaire.role_id,
-      });
-    }
-  };
-
-  const openInterviewDetailModal = () => {
-    interviewDetailForm.resetFields();
-    interviewDetailForm.setFieldsValue(interviewDetailDraft);
-    setInterviewDetailModalOpen(true);
-  };
-
-  const handleInterviewDetailCancel = () => {
-    if (interviewSaving) {
-      return;
-    }
-    setInterviewDetailModalOpen(false);
-  };
-
-  const handleInterviewDetailSubmit = async () => {
-    try {
-      const values = await interviewDetailForm.validateFields();
-      const normalized = normalizeInterviewDetailValues(values);
-      setInterviewDetailDraft(normalized);
-      setInterviewDetailModalOpen(false);
-      message.success("访谈细节已保存");
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "保存访谈细节失败");
-    }
+    const nextRoleType = normalizeRoleType(
+      nextQuestionnaire?.object_type || nextQuestionnaire?.role_type || null,
+    );
+    setInterviewDetailFieldsDraft(buildInterviewDetailFieldDraftsByType(nextRoleType));
   };
 
   const handleInterviewCancel = () => {
@@ -1018,11 +932,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
       return;
     }
     setInterviewModalOpen(false);
-    setInterviewFileList([]);
     setInterviewDetailModalOpen(false);
-    setInterviewDetailDraft({});
-    interviewDetailForm.resetFields();
-    setSelectedInterviewRoleId(null);
+    setInterviewFileList([]);
+    setInterviewDetailFieldsDraft([]);
   };
 
   const handleInterviewSubmit = async () => {
@@ -1041,9 +953,28 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setInterviewSaving(false);
         return;
       }
+      const normalizedFields = normalizeFieldDefinitions(
+        interviewDetailFieldsDraft.map((field) => ({
+          key: field.key,
+          label: field.label,
+          kind: field.kind,
+        })),
+      );
+      const rawFieldCount = interviewDetailFieldsDraft.filter((field) => String(field.key || "").trim()).length;
+      if (normalizedFields.length !== rawFieldCount) {
+        message.warning("访谈细节字段的标识不能重复或为空");
+        setInterviewSaving(false);
+        return;
+      }
+      const detailPayload = normalizeInterviewDetailValues(
+        Object.fromEntries(
+          interviewDetailFieldsDraft
+            .map((field) => [String(field.key || "").trim(), field.value] as const)
+            .filter(([key]) => Boolean(key)),
+        ),
+      );
       const formData = new FormData();
       formData.append("questionnaire_id", String(questionnaireId));
-      const detailPayload = normalizeInterviewDetailValues(interviewDetailDraft);
       if (Object.keys(detailPayload).length > 0) {
         formData.append("detail_json", JSON.stringify(detailPayload));
       }
@@ -1119,7 +1050,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
           </Form.Item>
         </Form>
       </Modal>
-      <Content className="relative z-0 bg-slate-50 pt-20 lg:pt-24">
+      <Content className="relative z-0 bg-slate-50 pt-20 lg:pt-4">
         <div className="relative z-0 p-6 pt-0 md:p-8 md:pt-0">
           {loading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: "72px 0" }}>
@@ -1207,7 +1138,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         角色 / DG
                       </Title>
                       <Text type="secondary">
-                        一个角色可以维护多份 DG。角色会同时决定该角色下访谈细节模板，创建访谈时会先选角色，再选对应 DG。
+                        一个角色可以维护多份 DG。DG 仅绑定医生、患者或自定义人员类型，访谈细节在创建访谈时维护。
                       </Text>
                     </div>
                     <Button
@@ -1247,10 +1178,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                           >
                             <Space direction="vertical" size={10} style={{ width: "100%" }}>
                               <Text type="secondary" style={{ fontSize: 12 }}>
-                                访谈细节模板：
-                                {role.detail_schema_json.length > 0
-                                  ? role.detail_schema_json.map((field) => field.label).join("、")
-                                  : "暂无模板字段"}
+                                DG 类型：{getRoleTypeLabel(role.role_type)}，访谈细节会在创建访谈时补充。
                               </Text>
                               {roleQuestionnaires.length > 0 ? (
                                 <List
@@ -1465,156 +1393,42 @@ export default function ProjectDetailClient({ projectId }: Props) {
         destroyOnHidden
         width={960}
       >
-        <Form form={questionnaireForm} layout="vertical" initialValues={{ role_mode: "existing" }}>
-          <Form.Item
-            label="角色模式"
-            name="role_mode"
-            rules={[{ required: true, message: "请选择角色模式" }]}
-          >
-            <Select
-              options={[
-                { value: "existing", label: "已有角色" },
-                { value: "new", label: "新建角色" },
-              ]}
-              onChange={(value) => handleQuestionnaireRoleModeChange(value as "existing" | "new")}
-            />
-          </Form.Item>
+        <Form form={questionnaireForm} layout="vertical">
+          <Alert
+            type="info"
+            showIcon
+            message="DG 只绑定类型"
+            description="这里仅选择 DG 属于医生、患者还是自定义人员。访谈细节和自定义字段会在创建访谈时填写。"
+            style={{ marginBottom: 16 }}
+          />
 
-          {questionnaireRoleMode === "existing" ? (
-            <>
+          <Row gutter={12}>
+            <Col span={12}>
               <Form.Item
-                label="选择角色"
-                name="role_id"
-                rules={[{ required: true, message: "请选择角色" }]}
+                label="DG 所属类型"
+                name="object_type"
+                rules={[{ required: true, message: "请选择 DG 所属类型" }]}
               >
                 <Select
-                  placeholder="请选择已创建角色"
-                  options={questionnaireRoleOptions}
-                  onChange={(value) => handleQuestionnaireExistingRoleChange(Number(value))}
+                  options={[
+                    { value: "doctor", label: "医生" },
+                    { value: "patient", label: "患者" },
+                    { value: "custom", label: "自定义人员" },
+                  ]}
                 />
               </Form.Item>
-              {questionnaireRoleId ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  message="当前角色模板"
-                  description={
-                    <Space direction="vertical" size={4}>
-                      <Text>
-                        {roleById.get(questionnaireRoleId)?.role_name || "未命名角色"} ·{" "}
-                        {getRoleTypeLabel(roleById.get(questionnaireRoleId)?.role_type)}
-                      </Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {questionnaireRoleFields.length > 0
-                          ? questionnaireRoleFields.map((field) => field.label).join("、")
-                          : "暂无访谈字段模板"}
-                      </Text>
-                    </Space>
-                  }
-                  style={{ marginBottom: 16 }}
-                />
-              ) : null}
-            </>
-          ) : (
-            <>
-              <Row gutter={12}>
-                <Col span={12}>
-                  <Form.Item
-                    label="角色模板类型"
-                    name="role_type"
-                    rules={[{ required: true, message: "请选择角色类型" }]}
-                  >
-                    <Select
-                      options={[
-                        { value: "doctor", label: "医生模板" },
-                        { value: "patient", label: "患者模板" },
-                        { value: "custom", label: "自定义模板" },
-                      ]}
-                      onChange={(value) =>
-                        handleQuestionnaireRoleTypeChange(value as "doctor" | "patient" | "custom")
-                      }
-                    />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    label="角色名称"
-                    name="role_name"
-                    rules={[{ required: true, message: "请输入角色名称" }]}
-                  >
-                    <Input placeholder="例如：患者家属、护士、药师" />
-                  </Form.Item>
-                </Col>
-              </Row>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                label="DG 名称"
+                name="name"
+                rules={[{ required: true, message: "请输入 DG 名称" }]}
+              >
+                <Input placeholder="请输入 DG 名称" />
+              </Form.Item>
+            </Col>
+          </Row>
 
-              <Divider style={{ margin: "8px 0 16px" }}>访谈字段模板</Divider>
-              <Form.List name="role_detail_schema_json">
-                {(fields, { add, remove }) => (
-                  <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                    {fields.map((field, index) => (
-                      <Card
-                        key={field.key}
-                        size="small"
-                        style={{
-                          borderRadius: 14,
-                          background: "rgba(59, 130, 246, 0.03)",
-                        }}
-                      >
-                        <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            字段 #{index + 1}
-                          </Text>
-                          <Button danger type="text" onClick={() => remove(field.name)}>
-                            删除
-                          </Button>
-                        </Space>
-                        <Row gutter={12}>
-                          <Col span={8}>
-                            <Form.Item label="字段标识" name={[field.name, "key"]} style={{ marginBottom: 0, marginTop: 8 }}>
-                              <Input placeholder="例如 region" />
-                            </Form.Item>
-                          </Col>
-                          <Col span={8}>
-                            <Form.Item label="字段名称" name={[field.name, "label"]} style={{ marginBottom: 0, marginTop: 8 }}>
-                              <Input placeholder="例如 地区" />
-                            </Form.Item>
-                          </Col>
-                          <Col span={8}>
-                            <Form.Item label="字段类型" name={[field.name, "kind"]} style={{ marginBottom: 0, marginTop: 8 }}>
-                              <Select
-                                options={[
-                                  { value: "text", label: "文本" },
-                                  { value: "number", label: "数字" },
-                                ]}
-                              />
-                            </Form.Item>
-                          </Col>
-                        </Row>
-                      </Card>
-                    ))}
-                    <Button
-                      type="dashed"
-                      icon={<PlusOutlined />}
-                      onClick={() => add({ key: "", label: "", kind: "text" })}
-                      block
-                    >
-                      添加字段
-                    </Button>
-                  </Space>
-                )}
-              </Form.List>
-            </>
-          )}
-
-          <Divider style={{ margin: "16px 0" }} />
-
-          <Form.Item
-            label="DG 名称"
-            name="name"
-            rules={[{ required: true, message: "请输入 DG 名称" }]}
-          >
-            <Input placeholder="请输入 DG 名称" />
-          </Form.Item>
           <Form.Item label="DG 文件">
             <Upload
               beforeUpload={() => false}
@@ -1624,11 +1438,11 @@ export default function ProjectDetailClient({ projectId }: Props) {
               accept=".docx"
             >
               <Button icon={<UploadOutlined />}>选择 docx 文件</Button>
-            </Upload>
-            <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-              上传后会保存在项目目录的 `question/` 子目录，并自动转换成 md/json。
-            </Text>
-          </Form.Item>
+              </Upload>
+              <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
+                上传后会保存在项目目录的 `question/` 子目录，并自动转换成 md/json。
+              </Text>
+            </Form.Item>
         </Form>
       </Modal>
 
@@ -1837,7 +1651,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 key: "files",
                 label: "文件明细",
                 children: guideFiles.length > 0 ? (
-                  <div style={{ display: "grid", gap: 16 }}>
+                  <div style={{ display: "grid", gap: 16 ,width: "100%"}}>
                     {guideFiles.map((file, index) => {
                       const title = file.original_name || `指南文件 ${index + 1}`;
                       const fileType = String(file.file_type || "unknown").toUpperCase();
@@ -1846,6 +1660,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         <Card
                           key={`${file.index ?? index}-${title}`}
                           size="small"
+                          style={{maxWidth: "100%",overflow:"hidden"}}
                           title={
                             <Space wrap>
                               <Text strong>{title}</Text>
@@ -1903,15 +1718,15 @@ export default function ProjectDetailClient({ projectId }: Props) {
         cancelButtonProps={{ disabled: interviewSaving }}
         closable={!interviewSaving}
         maskClosable={!interviewSaving}
-        width={1040}
+        width={1180}
         destroyOnHidden
       >
-        {roles.length === 0 || questionnaires.length === 0 || getKeyBqCount(projectKeyBq) === 0 ? (
+        {questionnaires.length === 0 || getKeyBqCount(projectKeyBq) === 0 ? (
           <Alert
             type="warning"
             showIcon
-            message="请先准备角色、DG 和 KBQ"
-            description="新建访谈要求至少有一个角色及其对应 DG，以及项目 KBQ。"
+            message="请先准备 DG 和 KBQ"
+            description="新建访谈要求至少有一个 DG，以及项目 KBQ。"
             style={{ marginBottom: 16 }}
           />
         ) : null}
@@ -1926,14 +1741,35 @@ export default function ProjectDetailClient({ projectId }: Props) {
                 style={{ borderRadius: 16, marginBottom: 16 }}
                 title="访谈细节"
                 extra={
-                  <Button size="small" type="primary" onClick={openInterviewDetailModal}>
-                    填写 / 修改
+                  <Button size="small" type="primary" ghost onClick={openInterviewDetailModal}>
+                    编辑访谈细节
                   </Button>
                 }
               >
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {summarizeInterviewDetail(interviewDetailFields, interviewDetailDraft)}
-                </Text>
+                <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    这里展示本次访谈细节的当前状态，点击按钮可在独立窗口中填写或新增字段。
+                  </Text>
+                  <div
+                    style={{
+                      borderRadius: 16,
+                      background: "rgba(15, 23, 42, 0.03)",
+                      padding: 16,
+                    }}
+                  >
+                    <Text strong style={{ display: "block", marginBottom: 8 }}>
+                      {interviewDetailFieldsDraft.length > 0 ? "已配置访谈细节" : "尚未配置访谈细节"}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+                      {interviewDetailFieldsDraft.length > 0
+                        ? `当前共 ${interviewDetailFieldsDraft.length} 个字段，点击“编辑访谈细节”可继续调整。`
+                        : "点击“编辑访谈细节”开始填写本次访谈的字段。"}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+                      {summarizeInterviewDetail(interviewDetailFieldsDraft, interviewDetailDraft)}
+                    </Text>
+                  </div>
+                </Space>
               </Card>
             </Col>
             <Col span={12}>
@@ -1951,7 +1787,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
               </Form.Item>
               <div style={{ marginBottom: 16 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  请选择具体 DG 问卷，系统会根据问卷自动带出对应的访谈细节模板。
+                  请选择具体 DG 问卷，系统会根据 DG 类型带出默认字段，访谈细节请在左侧独立窗口中填写。
                 </Text>
               </div>
               <Form.Item label="音频文件">
@@ -1975,41 +1811,110 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
       <Modal
         open={interviewDetailModalOpen}
-        title="访谈细节"
-        onOk={() => void handleInterviewDetailSubmit()}
-        onCancel={handleInterviewDetailCancel}
-        okText="确定"
+        title="编辑访谈细节"
+        onOk={handleInterviewDetailModalOk}
+        onCancel={handleInterviewDetailModalCancel}
+        okText="完成"
         cancelText="取消"
-        closable={!interviewSaving}
-        maskClosable={!interviewSaving}
+        width={960}
         destroyOnHidden
-        width={860}
       >
-        <Form form={interviewDetailForm} layout="vertical">
-          <Row gutter={16}>
-            {interviewDetailFields.map((field) => (
-              <Col key={field.key} span={12}>
-                <Form.Item label={field.label} name={field.key}>
-                  {field.kind === "number" || field.key === "hospital_decile" ? (
-                    <InputNumber
-                      style={{ width: "100%" }}
-                      min={0}
-                      max={10}
-                      placeholder={`请输入${field.label}`}
-                    />
-                  ) : (
-                    <Input placeholder={`请输入${field.label}`} />
-                  )}
-                </Form.Item>
-              </Col>
-            ))}
-          </Row>
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Alert
             type="info"
             showIcon
-            message="这些字段都不是必填项。你可以只填写当前访谈需要的部分。"
+            message="在这里补充访谈细节"
+            description="可以修改默认字段，也可以新增自定义字段。填写内容会保留到创建访谈提交时。"
           />
-        </Form>
+          <Button type="dashed" icon={<PlusOutlined />} onClick={addInterviewDetailField} block>
+            添加字段
+          </Button>
+          {interviewDetailFieldsDraft.length > 0 ? (
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              {interviewDetailFieldsDraft.map((field, index) => (
+                <Card
+                  key={field.uid}
+                  size="small"
+                  style={{ borderRadius: 14, background: "rgba(59, 130, 246, 0.03)" }}
+                >
+                  <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      字段 #{index + 1}
+                    </Text>
+                    <Button
+                      size="small"
+                      danger
+                      type="text"
+                      onClick={() => removeInterviewDetailField(field.uid)}
+                      disabled={interviewDetailFieldsDraft.length === 1}
+                    >
+                      删除
+                    </Button>
+                  </Space>
+                  <Row gutter={12}>
+                    <Col span={8}>
+                      <Form.Item label="字段标识" style={{ marginBottom: 12 }}>
+                        <Input
+                          value={field.key}
+                          placeholder="例如 doctor_level"
+                          onChange={(event) => updateInterviewDetailField(field.uid, { key: event.target.value })}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item label="字段名称" style={{ marginBottom: 12 }}>
+                        <Input
+                          value={field.label}
+                          placeholder="例如 医生级别"
+                          onChange={(event) =>
+                            updateInterviewDetailField(field.uid, { label: event.target.value })
+                          }
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item label="字段类型" style={{ marginBottom: 12 }}>
+                        <Select
+                          value={field.kind === "number" ? "number" : "text"}
+                          options={[
+                            { value: "text", label: "文本" },
+                            { value: "number", label: "数字" },
+                          ]}
+                          onChange={(value) => updateInterviewDetailField(field.uid, { kind: value as "text" | "number" })}
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item label="字段值" style={{ marginBottom: 0 }}>
+                    {field.kind === "number" ? (
+                      <InputNumber
+                        style={{ width: "100%" }}
+                        min={0}
+                        max={10}
+                        value={typeof field.value === "number" ? field.value : undefined}
+                        placeholder={`请输入${field.label || field.key || "字段值"}`}
+                        onChange={(value) =>
+                          updateInterviewDetailField(field.uid, {
+                            value: typeof value === "number" ? value : null,
+                          })
+                        }
+                      />
+                    ) : (
+                      <Input
+                        value={typeof field.value === "string" ? field.value : ""}
+                        placeholder={`请输入${field.label || field.key || "字段值"}`}
+                        onChange={(event) => updateInterviewDetailField(field.uid, { value: event.target.value })}
+                      />
+                    )}
+                  </Form.Item>
+                </Card>
+              ))}
+            </Space>
+          ) : null}
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {summarizeInterviewDetail(interviewDetailFieldsDraft, interviewDetailDraft)}
+          </Text>
+        </Space>
       </Modal>
     </Layout>
   );

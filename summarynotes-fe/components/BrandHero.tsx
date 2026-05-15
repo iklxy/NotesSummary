@@ -88,7 +88,7 @@ export default function BrandHero({
     <div
         style={{ marginBottom: 0 ,minHeight: "max-content" }}
       className={[
-        "relative isolate z-10 overflow-hidden border-b border-slate-200 bg-gradient-to-r from-white via-slate-50 to-cyan-50 px-6 pb-24 pt-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.08)] md:px-10 md:pb-28 md:pt-10",
+        "relative isolate z-10 overflow-hidden border-b border-slate-200 bg-gradient-to-r from-white via-slate-50 to-cyan-50 px-6 pb-8 pt-4 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.08)] md:px-10 md:pb-16 md:pt-10",
         className ?? "",
       ]
         .filter(Boolean)

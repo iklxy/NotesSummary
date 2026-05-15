@@ -103,9 +103,11 @@ export default function Home() {
   return (
     <Layout className="min-h-screen">
       <BrandHero
-        className="mb-14 lg:mb-16"
+        className="mt-4 mb-18 lg:mt-6 lg:mb-24"
         title="项目列表"
         description="点击任意项目进入项目详情页，在详情页中管理 DG、项目 Key BQ、访谈创建和 CA。"
+        titleClassName="text-[42px] leading-tight md:text-[52px]"
+        descriptionClassName="text-[18px] md:text-[20px]"
         stats={
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right shadow-[0_12px_28px_-20px_rgba(15,23,42,0.22)]">
             <div className="text-xs text-slate-500">当前项目</div>
@@ -113,7 +115,7 @@ export default function Home() {
           </div>
         }
       />
-      <Content className="bg-slate-50 pt-10 lg:pt-12">
+      <Content className="bg-slate-50 pt-10 lg:pt-2">
         <div className="p-6 md:p-8">
           <Row gutter={[16, 16]}>
             <Col span={24}>
