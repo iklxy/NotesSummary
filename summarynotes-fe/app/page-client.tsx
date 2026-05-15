@@ -22,7 +22,7 @@ import type { UploadFile } from "antd/es/upload/interface";
 import { UploadOutlined } from "@ant-design/icons";
 import BrandHero from "../components/BrandHero";
 import { Project } from "../lib/types";
-import { createProject, deleteProject, getProjects, updateProject } from "../lib/projectsApi";
+import { createProject, deleteProject, getProjects } from "../lib/projectsApi";
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -31,7 +31,6 @@ export default function Home() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
-  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [guideFileList, setGuideFileList] = useState<UploadFile[]>([]);
   const [form] = Form.useForm();
 
@@ -48,53 +47,30 @@ export default function Home() {
   }, []);
 
   const openCreateProject = () => {
-    setEditingProject(null);
     form.resetFields();
     setGuideFileList([]);
     setModalVisible(true);
   };
 
-  const openEditProject = (project: Project) => {
-    setEditingProject(project);
-    form.setFieldsValue({
-      name: project.name,
-    });
-    setGuideFileList([]);
-    setModalVisible(true);
+  const openProjectDetail = (project: Project) => {
+    router.push(`/projects/${project.id}`);
   };
 
   const handleProjectOk = async () => {
     try {
       const values = await form.validateFields();
-      if (editingProject) {
-        const updated = await updateProject(editingProject.id, {
-          name: values.name as string,
-        });
-        setProjects((prev) =>
-          prev.map((item) =>
-            item.id === editingProject.id
-              ? {
-                  ...item,
-                  ...updated,
-                }
-              : item,
-          ),
-        );
-        message.success("项目已更新");
-      } else {
-        const created = await createProject({
-          name: values.name as string,
-          guide_files: guideFileList
-            .map((item) => item.originFileObj as File | null | undefined)
-            .filter((file): file is File => Boolean(file)),
-        });
-        setProjects((prev) => [created, ...prev]);
-        message.success(
-          guideFileList.length > 0
-            ? "项目已创建，指南正在异步学习中，请稍后在项目详情查看结果"
-            : "项目已创建",
-        );
-      }
+      const created = await createProject({
+        name: values.name as string,
+        guide_files: guideFileList
+          .map((item) => item.originFileObj as File | null | undefined)
+          .filter((file): file is File => Boolean(file)),
+      });
+      setProjects((prev) => [created, ...prev]);
+      message.success(
+        guideFileList.length > 0
+          ? "项目已创建，指南正在异步学习中，请稍后在项目详情查看结果"
+          : "项目已创建",
+      );
       setModalVisible(false);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "请检查表单填写");
@@ -184,11 +160,11 @@ export default function Home() {
                                 ) : null}
                               </Space>
                               <Space>
-                                <Button
+                                  <Button
                                   type="default"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    openEditProject(project);
+                                    openProjectDetail(project);
                                   }}
                                 >
                                   编辑项目
@@ -224,7 +200,7 @@ export default function Home() {
 
       <Modal
         open={modalVisible}
-        title={editingProject ? "编辑项目" : "新建项目"}
+        title="新建项目"
         onOk={() => void handleProjectOk()}
         onCancel={() => {
           setModalVisible(false);
@@ -242,22 +218,20 @@ export default function Home() {
           >
             <Input placeholder="请输入项目名称" />
           </Form.Item>
-          {!editingProject ? (
-            <Form.Item label="上传指南">
-              <Upload
-                beforeUpload={() => false}
-                multiple
-                fileList={guideFileList}
-                onChange={({ fileList }) => setGuideFileList(fileList)}
-                accept=".pdf,.docx,.md,.xlsx"
-              >
-                <Button icon={<UploadOutlined />}>选择指南文件</Button>
-              </Upload>
-              <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
-                支持一次上传多个 pdf、docx、md 或 xlsx 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
-              </Typography.Text>
-            </Form.Item>
-          ) : null}
+          <Form.Item label="上传指南">
+            <Upload
+              beforeUpload={() => false}
+              multiple
+              fileList={guideFileList}
+              onChange={({ fileList }) => setGuideFileList(fileList)}
+              accept=".pdf,.docx,.md,.xlsx"
+            >
+              <Button icon={<UploadOutlined />}>选择指南文件</Button>
+            </Upload>
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
+              支持一次上传多个 pdf、docx、md 或 xlsx 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
+            </Typography.Text>
+          </Form.Item>
         </Form>
       </Modal>
     </Layout>

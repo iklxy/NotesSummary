@@ -45,7 +45,7 @@ import {
   updateProjectQuestionnaireHotwords,
 } from "../../../lib/projectQuestionnairesApi";
 import { updateProjectKeyBqCurrent } from "../../../lib/projectKeyBqApi";
-import { getProjectDetail } from "../../../lib/projectsApi";
+import { getProjectDetail, updateProject } from "../../../lib/projectsApi";
 import type {
   CreatedInterviewResponse,
   InterviewDetailFieldDefinition,
@@ -533,6 +533,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [keyBqForm] = Form.useForm<KeyBqFormValues>();
 
   const [guideResultVisible, setGuideResultVisible] = useState(false);
+  const [projectNameModalOpen, setProjectNameModalOpen] = useState(false);
+  const [projectNameSaving, setProjectNameSaving] = useState(false);
+  const [projectNameForm] = Form.useForm<{ name: string }>();
 
   const [interviewModalOpen, setInterviewModalOpen] = useState(false);
   const [interviewSaving, setInterviewSaving] = useState(false);
@@ -576,6 +579,50 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const guideSummaryText = useMemo(() => project?.guide_summary_text ?? "", [project]);
   const guideExtractedText = useMemo(() => project?.guide_extracted_text ?? "", [project]);
   const guideFiles = useMemo(() => project?.guide_files_json ?? [], [project]);
+
+  const openProjectNameModal = () => {
+    if (!project) {
+      return;
+    }
+    projectNameForm.setFieldsValue({
+      name: project.name,
+    });
+    setProjectNameModalOpen(true);
+  };
+
+  const handleProjectNameModalCancel = () => {
+    if (projectNameSaving) {
+      return;
+    }
+    setProjectNameModalOpen(false);
+  };
+
+  const handleProjectNameSave = async () => {
+    try {
+      setProjectNameSaving(true);
+      const values = await projectNameForm.validateFields();
+      const updated = await updateProject(projectId, {
+        name: values.name as string,
+      });
+      setProjectDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              project: {
+                ...prev.project,
+                ...updated,
+              },
+            }
+          : prev,
+      );
+      message.success("项目名称已更新");
+      setProjectNameModalOpen(false);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "更新项目名称失败");
+    } finally {
+      setProjectNameSaving(false);
+    }
+  };
 
   useEffect(() => {
     void loadProjectDetail();
@@ -1042,6 +1089,9 @@ export default function ProjectDetailClient({ projectId }: Props) {
         }
         actions={
           <Space wrap>
+            <Button icon={<EditOutlined />} onClick={openProjectNameModal} disabled={!project}>
+              编辑项目名称
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => void loadProjectDetail()}>
               刷新
             </Button>
@@ -1049,6 +1099,26 @@ export default function ProjectDetailClient({ projectId }: Props) {
           </Space>
         }
       />
+      <Modal
+        open={projectNameModalOpen}
+        title="编辑项目名称"
+        onOk={() => void handleProjectNameSave()}
+        onCancel={handleProjectNameModalCancel}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={projectNameSaving}
+        destroyOnHidden
+      >
+        <Form form={projectNameForm} layout="vertical">
+          <Form.Item
+            label="项目名称"
+            name="name"
+            rules={[{ required: true, message: "请输入项目名称" }]}
+          >
+            <Input placeholder="请输入项目名称" />
+          </Form.Item>
+        </Form>
+      </Modal>
       <Content className="relative z-0 bg-slate-50 pt-20 lg:pt-24">
         <div className="relative z-0 p-6 pt-0 md:p-8 md:pt-0">
           {loading ? (
