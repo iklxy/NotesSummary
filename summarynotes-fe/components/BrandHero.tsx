@@ -28,17 +28,17 @@ interface BrandHeroProps {
 
 const BRAND_SIZE_MAP: Record<NonNullable<BrandMarkProps["size"]>, { badgeClassName: string; logoClassName: string; titleClassName: string }> = {
   sm: {
-    badgeClassName: "px-3 py-2",
+    badgeClassName: "px-2 py-0",
     logoClassName: "h-7",
     titleClassName: "text-sm",
   },
   md: {
-    badgeClassName: "px-3 py-2",
+    badgeClassName: "px-3 py-0",
     logoClassName: "h-8",
     titleClassName: "text-[13px]",
   },
   lg: {
-    badgeClassName: "px-4 py-3",
+    badgeClassName: "px-2 py-0",
     logoClassName: "h-10",
     titleClassName: "text-base",
   },
@@ -49,7 +49,7 @@ export function BrandMark({ centered = false, className, size = "md" }: BrandMar
   return (
     <div
       className={[
-        "inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/96 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.28)] backdrop-blur-sm",
+        "inline-flex items-center rounded-full border border-slate-200 bg-white/96 shadow-[0_18px_40px_-26px_rgba(15,23,42,0.28)] backdrop-blur-sm",
         centered ? "mx-auto" : "",
         sizeClass.badgeClassName,
         className ?? "",
@@ -59,7 +59,7 @@ export function BrandMark({ centered = false, className, size = "md" }: BrandMar
     >
       <Image
         src={BRAND_LOGO_SRC}
-        alt="BenHealth logo"
+        alt="Work Buddy logo"
         width={2126}
         height={1004}
         className={`${sizeClass.logoClassName} w-auto shrink-0 object-contain`}
@@ -86,6 +86,7 @@ export default function BrandHero({
 }: BrandHeroProps) {
   return (
     <div
+        style={{ marginBottom: 0 }}
       className={[
         "relative isolate z-10 overflow-hidden border-b border-slate-200 bg-gradient-to-r from-white via-slate-50 to-cyan-50 px-6 pb-24 pt-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.08)] md:px-10 md:pb-28 md:pt-10",
         className ?? "",

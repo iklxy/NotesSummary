@@ -163,7 +163,6 @@ export default function OverallNotesClient({ interviewId }: Props) {
     <Layout className="min-h-screen summarynotes-notes-page">
       <Header className="summarynotes-hero">
         <div className="summarynotes-hero-layout">
-          <div className="summarynotes-hero-badge">SUMMARYNOTES</div>
           <div className="summarynotes-hero-inner">
             <div className="summarynotes-hero-copy">
               <Button

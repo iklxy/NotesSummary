@@ -1122,7 +1122,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     <Layout className="min-h-screen">
       <BrandHero
         title={`访谈详情 #${interviewIdNum > 0 ? interviewIdNum : "无效"}`}
-        description="这里集中管理录音、QS、Notes、few-shot 样本和访谈辅助信息。"
+        description="这里集中管理录音、Trans、Notes、KBQ 等信息。"
         backButton={
           <Button
             icon={<ArrowLeftOutlined />}
