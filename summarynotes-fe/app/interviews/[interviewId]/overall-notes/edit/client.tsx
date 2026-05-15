@@ -147,36 +147,17 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
   };
 
   const handleSaveMinutes = async () => {
+    setSavingMinutes(true);
     try {
-      setSavingMinutes(true);
       const savedMinutesJson = serializeMinutesDraft(minutesDraft);
-      const resp = await updateInterviewOverallNotesMinutes(interviewId, savedMinutesJson);
-      const nextMinutesJson = resp.minutes_json ?? savedMinutesJson;
-      const nextMinutesText =
-        typeof resp.minutes_text === "string" && resp.minutes_text.trim() ? resp.minutes_text : savedMinutesJson;
-      message.success("智能纲要已保存");
-      const nextMinutes = normalizeMinutesDraft({
-        ...data?.minutes,
-        minutes_json: nextMinutesJson,
-        minutes_text: nextMinutesText,
-      } as InterviewMinutesResponse);
-      setMinutesDraft(nextMinutes);
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              minutes: {
-                ...prev.minutes,
-                minutes_text: nextMinutesText,
-                minutes_json: nextMinutesJson,
-              },
-            }
-          : prev,
-      );
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "保存智能纲要失败");
-    } finally {
+      await updateInterviewOverallNotesMinutes(interviewId, savedMinutesJson);
       setSavingMinutes(false);
+      router.push(`/interviews/${interviewId}/overall-notes`);
+      message.success("智能纲要已保存，Key BQ 正在后台刷新");
+      return;
+    } catch (e) {
+      setSavingMinutes(false);
+      message.error(e instanceof Error ? e.message : "保存智能纲要失败");
     }
   };
 

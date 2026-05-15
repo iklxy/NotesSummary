@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 import os
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 
 from api.auth import require_current_user_id
@@ -135,6 +135,44 @@ def _write_minutes_backup_files(
     minutes_json_path.write_text(json.dumps(backup_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     minutes_txt_path.write_text(minutes_text.rstrip() + "\n", encoding="utf-8")
     return minutes_json_path, minutes_txt_path
+
+
+def _refresh_kbq_notes_for_interview(interview_id: int) -> Dict[str, Any]:
+    """
+    触发指定访谈的 KBQ Notes 重建。
+
+    该逻辑既会被公开接口调用，也会被智能纲要保存流程复用。
+    """
+    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/refresh-kbq-notes"
+    resp = requests.post(url, timeout=600)
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    try:
+        result = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"parse refresh kbq notes response failed: {e}")
+
+    if isinstance(result, dict) and result.get("success"):
+        return result
+    raise HTTPException(status_code=500, detail=f"refresh kbq notes failed: {result}")
+
+
+def _refresh_kbq_notes_background(interview_id: int) -> None:
+    """
+    后台触发 KBQ Notes 重建。
+
+    该任务不会影响保存接口的返回时机，只记录成功或失败日志。
+    """
+    try:
+        result = _refresh_kbq_notes_for_interview(interview_id)
+        log_interview("KBQ", interview_id, f"background refresh kbq notes done inserted={result.get('inserted')}")
+    except Exception as e:
+        log_interview("KBQ", interview_id, f"background refresh kbq notes failed error={e}\n{traceback.format_exc()}")
 
 
 def _safe_load_json_file(path: Path) -> Dict[str, Any] | None:
@@ -1546,6 +1584,7 @@ def update_interview_overall_notes_kbq(
 def update_interview_overall_notes_minutes(
     interview_id: int,
     payload: OverallNotesMinutesUpdateRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: int = Depends(require_current_user_id),
 ) -> OverallNotesMinutesUpdateResponse:
     """
@@ -1579,6 +1618,7 @@ def update_interview_overall_notes_minutes(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"update overall notes minutes file sync failed: {e}")
+    background_tasks.add_task(_refresh_kbq_notes_background, interview_id)
     return OverallNotesMinutesUpdateResponse(
         success=True,
         interview_id=interview_id,
@@ -1673,31 +1713,14 @@ def refresh_interview_kbq_notes(
     """
     log_interview("KBQ", interview_id, "refresh kbq notes start")
     _get_owned_interview_or_404(interview_id, current_user_id)
-
-    url = f"{_get_internal_base()}/internal/interviews/{interview_id}/refresh-kbq-notes"
     try:
-        resp = requests.post(url, timeout=600)
+        result = _refresh_kbq_notes_for_interview(interview_id)
     except Exception as e:
         log_interview("KBQ", interview_id, f"refresh kbq notes request failed error={e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"refresh kbq notes request failed: {e}")
+        raise
 
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json()
-        except Exception:
-            detail = resp.text
-        raise HTTPException(status_code=resp.status_code, detail=detail)
-
-    try:
-        result = resp.json()
-        if isinstance(result, dict) and result.get("success"):
-            log_interview("KBQ", interview_id, f"refresh kbq notes done inserted={result.get('inserted')}")
-        else:
-            log_interview("KBQ", interview_id, f"refresh kbq notes failed detail={result}")
-        return result
-    except Exception as e:
-        log_interview("KBQ", interview_id, f"parse refresh kbq notes response failed error={e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"parse refresh kbq notes response failed: {e}")
+    log_interview("KBQ", interview_id, f"refresh kbq notes done inserted={result.get('inserted')}")
+    return result
 
 
 @router.post(
