@@ -1139,23 +1139,23 @@ export default function ProjectDetailClient({ projectId }: Props) {
             />
           ) : project ? (
             <div className="space-y-6 lg:space-y-8">
-              <div className="summarynotes-page-intro-block">
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                    <div>
-                      <Title level={4} style={{ marginBottom: 8 }} className="summarynotes-section-title">
-                        项目概览
-                      </Title>
-                      <Space wrap>
-                        <Tag color="gold">项目 ID：{project.id}</Tag>
-                        {getGuideStatusTag(guideStatus)}
-                      </Space>
-                    </div>
+              <Card className="summarynotes-project-list-shell">
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
+                  <div>
+                    <Title level={4} style={{ marginBottom: 4 }} className="summarynotes-section-title">
+                      项目概览
+                    </Title>
+                    <Space wrap>
+                      <Tag color="gold">项目 ID：{project.id}</Tag>
+                      {getGuideStatusTag(guideStatus)}
+                    </Space>
                   </div>
-                  <Divider style={{ margin: "18px 0" }} />
-                  <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                    {project.core_problem || "暂无旧项目背景说明。"}
-                  </Paragraph>
-              </div>
+                </div>
+                <Divider style={{ margin: "18px 0" }} />
+                <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                  {project.core_problem || "暂无旧项目背景说明。"}
+                </Paragraph>
+              </Card>
 
                 <Card className="summarynotes-project-list-shell">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
