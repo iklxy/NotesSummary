@@ -1028,7 +1028,6 @@ export default function ProjectDetailClient({ projectId }: Props) {
       <BrandHero
         className="mb-20 lg:mb-24"
         title={project?.name || `项目 ${projectId}`}
-        description="在这里维护项目 KBQ、角色对应的 DG，以及访谈入口。新建访谈时会先选角色，再选择对应 DG，并自动套用该角色的访谈细节模板。"
         backButton={
           <Button icon={<ArrowLeftOutlined />} onClick={() => router.push("/")} className="summarynotes-hero-back">
             返回项目列表
