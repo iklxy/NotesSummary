@@ -337,7 +337,7 @@ CREATE TABLE `bh_project_interview_cards` (
     FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`) ON UPDATE CASCADE,
   CONSTRAINT `fk_bh_project_interview_cards_interview`
     FOREIGN KEY (`project_interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='访谈卡片主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='访谈卡片主表';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -376,7 +376,7 @@ CREATE TABLE `bh_project_interview_cards_items` (
     FOREIGN KEY (`project_interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `bh_project_interview_cards_items_chk_1` CHECK (json_valid(`generated_json`)),
   CONSTRAINT `bh_project_interview_cards_items_chk_2` CHECK (`final_json` IS NULL OR json_valid(`final_json`))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='访谈卡片明细表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='访谈卡片明细表';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --

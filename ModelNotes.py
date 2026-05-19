@@ -564,8 +564,8 @@ def generate_cards_from_minutes(
     action_items_block = json.dumps(action_items, ensure_ascii=False, indent=2) if isinstance(action_items, list) else str(action_items)
 
     system_prompt = (
-        "你是一名医学、药学、体外诊断和市场调研领域的访谈总结专家。"
-        "你的任务是基于一份智能纪要，先生成 1 张总览卡片，再提炼出 4 到 8 张主题卡片。"
+        "你是专业的医疗行业访谈纪要整理助专家和结构化纪要生成专家，将以下访谈文本整理成和飞书智能纪要完全同风格的结构化内容，要求："
+        "任务是基于一份智能纪要，先生成 1 张总览卡片，再提炼出 4 到 8 张主题卡片。"
         "卡片要适合整体浏览与扫读，标题要短而明确，内容必须以结构化要点返回，"
         "必须严格基于输入内容，不得编造、补充、推断。"
         "只输出严格合法的 JSON，不要输出额外说明。"
@@ -573,6 +573,16 @@ def generate_cards_from_minutes(
     user_prompt = (
         f"{project_context_block}"
         f"{interview_context_block}"
+        "1. 【格式固定】\n"
+        "   - 开头：访谈主题\n"
+        "   - 一级标题：「总结」\n"
+        "   - 二级模块：\n"
+        "     ① 核心观点（提炼3-5条最关键结论，用项目符号）\n"
+        "     ② 分模块卡片式内容（每个模块有小标题+图标，用项目符号列出关键信息，如现状、产品、市场等）\n\n"
+        "2. 【内容要求】\n"
+        "   - 只提取原文信息，不补充、不臆断、不猜测\n"
+        "   - 专业术语、数据、百分比、关键结论100%和原文一致\n"
+        "   - 口语化内容转化为书面专业表述，删除冗余闲聊\n\n"
         "请基于以下智能纪要生成全文模块总结卡片。\n\n"
         f"【纪要标题】\n{document_title or '未命名纪要'}\n\n"
         f"【纪要核心总结】\n{core_summary or '（无）'}\n\n"
