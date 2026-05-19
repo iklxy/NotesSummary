@@ -165,14 +165,82 @@ export interface InterviewSummaryResponse {
   items: InterviewSummaryItem[];
 }
 
+export interface InterviewCardItem {
+  id: number;
+  cards_id: number;
+  project_id: number;
+  project_interview_id: number;
+  card_order: number;
+  card_title: string;
+  card_summary?: string | null;
+  generated_json: unknown;
+  final_json?: unknown;
+  review_status?: string | null;
+  review_comment?: string | null;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
+  updated_by?: number | null;
+  updated_at?: string | null;
+}
+
+export interface InterviewCardsResponse {
+  interview_id: number;
+  project_id?: number | null;
+  status?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  items: InterviewCardItem[];
+}
+
+export interface InterviewCardsGenerationResponse {
+  success: boolean;
+  interview_id: number;
+  project_id?: number | null;
+  cards_id?: number | null;
+  generated?: number | null;
+  inserted?: number | null;
+  cards?: unknown;
+  minutes_text_len?: number | null;
+  llm_raw_output?: unknown;
+  fallback?: boolean | null;
+  warning?: string | null;
+  message?: string | null;
+}
+
 export interface InterviewOverallNotesResponse {
   interview_id: number;
   project_id?: number | null;
   note_content?: string | null;
+  cards: InterviewCardsResponse;
   kbq_notes: InterviewKbqNotesResponse;
   minutes: InterviewMinutesResponse;
   notes?: InterviewNotesResponse | null;
   summary: InterviewSummaryResponse;
+}
+
+export interface InterviewCardItemCreateRequest {
+  card_title: string;
+  card_order?: number | null;
+  card_summary?: string | null;
+  generated_json: unknown;
+  final_json?: unknown;
+  review_status?: string | null;
+  review_comment?: string | null;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
+}
+
+export interface InterviewCardItemUpdateRequest {
+  card_order?: number | null;
+  card_title?: string | null;
+  card_summary?: string | null;
+  generated_json?: unknown;
+  final_json?: unknown;
+  review_status?: string | null;
+  review_comment?: string | null;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
 }
 
 export interface OverallNotesSummaryUpdateResponse {

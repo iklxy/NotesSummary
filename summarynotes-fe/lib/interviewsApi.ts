@@ -11,11 +11,15 @@ import {
   GenerateMinutesResponse,
   InterviewNotesResponse,
   InterviewOverallNotesResponse,
+  InterviewCardItemCreateRequest,
+  InterviewCardItemUpdateRequest,
+  InterviewCardsResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
   OverallNotesKbqUpdateResponse,
   OverallNotesMinutesUpdateResponse,
   OverallNotesSummaryUpdateResponse,
+  InterviewCardsGenerationResponse,
   RefreshKbqNotesResponse,
   QuestionCreateItem,
   QuestionCreateResponse,
@@ -94,6 +98,51 @@ export function updateInterviewOverallNotesMinutes(
       body: JSON.stringify({ minutes_json: minutesJson }),
     },
   );
+}
+
+export function getInterviewCards(interviewId: number): Promise<InterviewCardsResponse> {
+  return request<InterviewCardsResponse>(`/api/interviews/${interviewId}/cards`);
+}
+
+export function refreshInterviewCards(
+  interviewId: number,
+): Promise<InterviewCardsResponse & { generation?: InterviewCardsGenerationResponse | null }> {
+  return request<InterviewCardsResponse & { generation?: InterviewCardsGenerationResponse | null }>(
+    `/api/interviews/${interviewId}/cards/refresh`,
+    {
+    method: "POST",
+    },
+  );
+}
+
+export function createInterviewCardsItem(
+  interviewId: number,
+  payload: InterviewCardItemCreateRequest,
+): Promise<InterviewCardsResponse> {
+  return request<InterviewCardsResponse>(`/api/interviews/${interviewId}/cards/items`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateInterviewCardsItem(
+  interviewId: number,
+  itemId: number,
+  payload: InterviewCardItemUpdateRequest,
+): Promise<InterviewCardsResponse> {
+  return request<InterviewCardsResponse>(`/api/interviews/${interviewId}/cards/items/${itemId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteInterviewCardsItem(
+  interviewId: number,
+  itemId: number,
+): Promise<InterviewCardsResponse> {
+  return request<InterviewCardsResponse>(`/api/interviews/${interviewId}/cards/items/${itemId}`, {
+    method: "DELETE",
+  });
 }
 
 export function refreshInterviewKbqNotes(

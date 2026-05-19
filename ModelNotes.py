@@ -2,6 +2,7 @@
 "@Author: lixinyang"
 
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from Fewshot import build_fewshot_prompt_block
@@ -365,6 +366,255 @@ def generate_overall_interview_note(
         lines = content.splitlines()
         content = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
     return content
+
+
+def _normalize_card_items(raw_cards: Any) -> List[Dict[str, Any]]:
+    """
+    将模型返回的卡片列表归一化为统一结构。
+
+    参数:
+        raw_cards: 模型返回的 cards / items 原始内容。
+
+    返回:
+        规范化后的卡片列表。
+    """
+    if not isinstance(raw_cards, list):
+        return []
+
+    cards: List[Dict[str, Any]] = []
+    for card_index, item in enumerate(raw_cards, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("card_title") or "").strip()
+        summary = str(item.get("summary") or item.get("card_summary") or "").strip()
+        tags_raw = item.get("tags") or item.get("labels") or []
+        points_raw = item.get("points") or item.get("items") or item.get("bullets") or []
+        source_sections_raw = item.get("source_sections") or item.get("sources") or []
+        card_type = str(item.get("card_type") or item.get("type") or "").strip().lower()
+        if isinstance(tags_raw, list):
+            tags = [str(tag).strip() for tag in tags_raw if str(tag).strip()]
+        elif isinstance(tags_raw, str):
+            tags = [tag.strip() for tag in re.split(r"[，,、\n]+", tags_raw) if tag.strip()]
+        else:
+            tags = []
+        points: List[str] = []
+        if isinstance(points_raw, list):
+            for point in points_raw:
+                if isinstance(point, dict):
+                    point_text = str(
+                        point.get("text")
+                        or point.get("summary")
+                        or point.get("content")
+                        or point.get("title")
+                        or ""
+                    ).strip()
+                else:
+                    point_text = str(point).strip()
+                if point_text:
+                    points.append(point_text)
+        elif isinstance(points_raw, str):
+            points = [point.strip() for point in re.split(r"[\n]+", points_raw) if point.strip()]
+        if isinstance(source_sections_raw, list):
+            source_sections = [str(section).strip() for section in source_sections_raw if str(section).strip()]
+        elif isinstance(source_sections_raw, str):
+            source_sections = [section.strip() for section in re.split(r"[，,、\n]+", source_sections_raw) if section.strip()]
+        else:
+            source_sections = []
+        layout_span_raw = item.get("layout_span") or item.get("span")
+        try:
+            layout_span = int(layout_span_raw) if layout_span_raw is not None else (3 if card_type == "overview" else 1)
+        except Exception:
+            layout_span = 3 if card_type == "overview" else 1
+        order_raw = item.get("order") if item.get("order") is not None else item.get("card_order")
+        try:
+            order_value = int(order_raw) if order_raw is not None else card_index
+        except Exception:
+            order_value = card_index
+        if card_type != "overview" and not points and summary:
+            points = [part.strip() for part in re.split(r"[。！？!?；;\n]+", summary) if part.strip()]
+        if not title and not summary and not tags and not points:
+            continue
+        cards.append(
+            {
+                "order": order_value,
+                "title": title,
+                "summary": summary,
+                "tags": tags,
+                "points": points,
+                "source_sections": source_sections,
+                "card_type": card_type or ("overview" if order_value == 0 else "topic"),
+                "layout_span": layout_span,
+            }
+        )
+    return cards
+
+
+def parse_cards_response(
+    generate_fn: Callable[[str, str], str],
+    content: str,
+) -> Dict[str, Any]:
+    """
+    将模型返回的 cards 文本解析为结构化字典。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        content: 模型原始输出文本。
+
+    返回:
+        至少包含 `cards` 字段的字典。
+    """
+    result = _parse_json_with_repair(generate_fn, content)
+    if not isinstance(result, dict):
+        result = {"cards": [], "llm_raw_output": content}
+    normalized_cards: List[Dict[str, Any]] = []
+    overview_card = result.get("overview_card") or result.get("summary_card")
+    if isinstance(overview_card, dict):
+        overview_payload = dict(overview_card)
+        overview_payload.setdefault("card_type", "overview")
+        overview_payload.setdefault("order", 0)
+        overview_payload.setdefault("layout_span", 3)
+        normalized_cards.extend(_normalize_card_items([overview_payload]))
+    raw_cards = result.get("cards")
+    if raw_cards is None:
+        raw_cards = result.get("items")
+    if isinstance(raw_cards, list) and isinstance(overview_card, dict):
+        filtered_cards: List[Dict[str, Any]] = []
+        for item in raw_cards:
+            if not isinstance(item, dict):
+                continue
+            card_type = str(item.get("card_type") or item.get("type") or "").strip().lower()
+            order_raw = item.get("order") if item.get("order") is not None else item.get("card_order")
+            try:
+                order_value = int(order_raw) if order_raw is not None else -1
+            except Exception:
+                order_value = -1
+            if order_value == 0 or card_type == "overview":
+                continue
+            filtered_cards.append(item)
+        raw_cards = filtered_cards
+    normalized_cards.extend(_normalize_card_items(raw_cards))
+    normalized_cards.sort(key=lambda item: (int(item.get("order") or 0), int(item.get("layout_span") or 1)))
+    result["cards"] = normalized_cards
+    if isinstance(overview_card, dict):
+        result["overview_card"] = normalized_cards[0] if normalized_cards else overview_card
+    result.setdefault("llm_raw_output", content)
+    return result
+
+
+def generate_cards_from_minutes(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    minutes_payload: Dict[str, Any],
+    interview_context_block: str = "",
+) -> Dict[str, Any]:
+    """
+    基于智能纪要生成全文模块卡片。
+
+    参数:
+        generate_fn: 实际执行 LLM 调用的函数。
+        project_context_block: 已格式化好的项目背景块。
+        minutes_payload: 智能纪要 JSON。
+        interview_context_block: 可选的访谈背景块。
+
+    返回:
+        结构化卡片字典，包含 `cards` 与 `llm_raw_output`。
+    """
+    minutes_text = str(minutes_payload.get("minutes_text") or minutes_payload.get("raw_minutes_text") or "").strip()
+    if not minutes_text:
+        minutes_sections = minutes_payload.get("sections") or []
+        if isinstance(minutes_sections, list):
+            rendered_lines: List[str] = []
+            for section in minutes_sections:
+                if not isinstance(section, dict):
+                    continue
+                section_order = section.get("order")
+                section_title = str(section.get("title") or "").strip()
+                section_summary = str(section.get("summary") or section.get("content") or "").strip()
+                if section_title:
+                    rendered_lines.append(
+                        f"## 第{section_order}部分：{section_title}" if section_order is not None else f"## {section_title}"
+                    )
+                if section_summary:
+                    rendered_lines.append(section_summary)
+                items = section.get("items") or []
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        item_order = item.get("order")
+                        item_title = str(item.get("title") or "").strip()
+                        item_summary = str(item.get("summary") or item.get("content") or "").strip()
+                        prefix = f"{item_order}. " if item_order is not None else "- "
+                        if item_title and item_summary:
+                            rendered_lines.append(f"{prefix}{item_title}：{item_summary}")
+                        elif item_title:
+                            rendered_lines.append(f"{prefix}{item_title}")
+                        elif item_summary:
+                            rendered_lines.append(f"{prefix}{item_summary}")
+                rendered_lines.append("")
+            minutes_text = "\n".join(rendered_lines).strip()
+    core_summary = str(minutes_payload.get("core_summary") or "").strip()
+    highlights = minutes_payload.get("highlights") or []
+    action_items = minutes_payload.get("action_items") or []
+    document_title = str(minutes_payload.get("document_title") or "").strip()
+
+    highlights_block = "\n".join(
+        f"- {str(item).strip()}" for item in highlights if str(item).strip()
+    ) or "（无）"
+    action_items_block = json.dumps(action_items, ensure_ascii=False, indent=2) if isinstance(action_items, list) else str(action_items)
+
+    system_prompt = (
+        "你是一名医学、药学、体外诊断和市场调研领域的访谈总结专家。"
+        "你的任务是基于一份智能纪要，先生成 1 张总览卡片，再提炼出 4 到 8 张主题卡片。"
+        "卡片要适合整体浏览与扫读，标题要短而明确，内容必须以结构化要点返回，"
+        "必须严格基于输入内容，不得编造、补充、推断。"
+        "只输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"{interview_context_block}"
+        "请基于以下智能纪要生成全文模块总结卡片。\n\n"
+        f"【纪要标题】\n{document_title or '未命名纪要'}\n\n"
+        f"【纪要核心总结】\n{core_summary or '（无）'}\n\n"
+        f"【纪要高亮】\n{highlights_block}\n\n"
+        f"【纪要待办】\n{action_items_block}\n\n"
+        f"【纪要正文】\n{minutes_text or '（空）'}\n\n"
+        "要求：\n"
+        "1. 必须固定生成 1 张总览卡片，放在所有主题卡片之前，总览卡片标题固定为“全文总览”。\n"
+        "2. 总览卡片使用 overview_card 字段返回，order 固定为 0，layout_span 固定为 3，summary 为一段约 100 个字的中文总结。\n"
+        "3. 总览卡片只输出一段 summary，不要输出 points；tags 可为空或使用简短标签。\n"
+        "4. 其余卡片必须包含 order、title、tags、points；建议可选包含 summary 作为补充概述。\n"
+        "5. points 必须是数组，建议 3 到 5 个要点，每个要点尽量控制在 10 个汉字左右，要求短、准、明确。\n"
+        "6. summary 若存在，只作为一句话补充概述，不要用来承载主要内容。\n"
+        "7. 不要在 points 中写长句、不要把多个要点合并成一条。\n"
+        "8. 主题卡片按主题重要性排序，最核心的放前面。\n"
+        "9. 只使用给定纪要中的信息，不要引入纪要外的新事实。\n"
+        "10. 如果纪要信息太少，也要尽量生成最贴近主题的卡片，但不要虚构。\n"
+        "11. 输出时只返回 JSON，不要包含 markdown、解释或多余文本。\n"
+        "JSON 的参考结构如下：\n"
+        "{\n"
+        '  "overview_card": {\n'
+        '    "order": 0,\n'
+        '    "card_type": "overview",\n'
+        '    "layout_span": 3,\n'
+        '    "title": "全文总览",\n'
+        '    "summary": "约100字的整体总结",\n'
+        '    "tags": ["总览"]\n'
+        "  },\n"
+        '  "cards": [\n'
+        "    {\n"
+        '      "order": 1,\n'
+        '      "title": "卡片标题",\n'
+        '      "summary": "一句话概述（可选）",\n'
+        '      "points": ["要点1", "要点2", "要点3"],\n'
+        '      "tags": ["标签1", "标签2"],\n'
+        '      "source_sections": ["可选来源章节"]\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    )
+    content = generate_fn(system_prompt, user_prompt)
+    return parse_cards_response(generate_fn, content)
 
 
 def _normalize_minutes_outline_items(raw_items: Any) -> List[Dict[str, Any]]:

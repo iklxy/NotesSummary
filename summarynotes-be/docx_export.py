@@ -11,6 +11,7 @@ Word 文稿导出工具。
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from xml.sax.saxutils import escape
@@ -35,6 +36,23 @@ def _clean_text(value: Any) -> str:
         return ""
     text = str(value)
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _load_json_like(value: Any) -> Any:
+    """
+    将 JSON 字符串、dict 或 list 统一解析为 Python 对象。
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    if value is None:
+        return None
+    text = _clean_text(value)
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
 
 
 def _format_timestamp_mmss(value: Any) -> str:
@@ -159,6 +177,51 @@ def _w_paragraph_runs(
     return f"<w:p>{ppr}{''.join(parts)}</w:p>"
 
 
+def _w_image_paragraph(
+    rel_id: str,
+    width_emu: int,
+    height_emu: int,
+    name: str,
+    doc_pr_id: int,
+) -> str:
+    """
+    生成一个 Word 图片段落 XML。
+    """
+    return (
+        "<w:p>"
+        "<w:r>"
+        "<w:drawing>"
+        '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+        f'<wp:extent cx="{int(width_emu)}" cy="{int(height_emu)}"/>'
+        f'<wp:docPr id="{int(doc_pr_id)}" name="{escape(name)}"/>'
+        '<wp:cNvGraphicFramePr>'
+        '<a:graphicFrameLocks noChangeAspect="1" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>'
+        "</wp:cNvGraphicFramePr>"
+        '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        "<pic:nvPicPr>"
+        f'<pic:cNvPr id="{int(doc_pr_id)}" name="{escape(name)}"/>'
+        "<pic:cNvPicPr/>"
+        "</pic:nvPicPr>"
+        "<pic:blipFill>"
+        f'<a:blip r:embed="{escape(rel_id)}"/>'
+        '<a:stretch><a:fillRect/></a:stretch>'
+        "</pic:blipFill>"
+        "<pic:spPr>"
+        f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{int(width_emu)}" cy="{int(height_emu)}"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        "</pic:spPr>"
+        "</pic:pic>"
+        "</a:graphicData>"
+        "</a:graphic>"
+        "</wp:inline>"
+        "</w:drawing>"
+        "</w:r>"
+        "</w:p>"
+    )
+
+
 def _w_table_cell(text: str, width: Optional[int] = None) -> str:
     """
     生成 Word 表格单元格 XML。
@@ -229,6 +292,109 @@ def _w_table(header: List[str], rows: List[List[str]]) -> str:
         f"<w:tblGrid>{grid}</w:tblGrid>"
         f"{''.join(tr_parts)}"
         "</w:tbl>"
+    )
+
+
+def _extract_card_tags(card: Dict[str, Any]) -> List[str]:
+    """
+    提取卡片标签列表。
+    """
+    for candidate in (card.get("final_json"), card.get("generated_json")):
+        payload = _load_json_like(candidate)
+        if not isinstance(payload, dict):
+            continue
+        tags = payload.get("tags")
+        if isinstance(tags, list):
+            result = [str(tag).strip() for tag in tags if str(tag).strip()]
+            if result:
+                return result
+    return []
+
+
+def _resolve_card_word_payload(card: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    解析卡片导出所需字段。
+    """
+    payload = _load_json_like(card.get("final_json"))
+    if not isinstance(payload, dict):
+        payload = _load_json_like(card.get("generated_json"))
+    if not isinstance(payload, dict):
+        payload = {}
+
+    title = _clean_text(card.get("card_title")) or _clean_text(payload.get("title")) or "卡片"
+    summary = _clean_text(card.get("card_summary")) or _clean_text(payload.get("summary"))
+    tags = _extract_card_tags(card)
+    if not tags and isinstance(payload.get("tags"), list):
+        tags = [str(tag).strip() for tag in payload.get("tags") if str(tag).strip()]
+    review_status = _clean_text(card.get("review_status")) or "pending"
+    order = card.get("card_order")
+    return {
+        "title": title,
+        "summary": summary,
+        "tags": tags,
+        "review_status": review_status,
+        "order": order,
+    }
+
+
+def _build_card_status_text(review_status: str) -> str:
+    """
+    将审核状态转换为适合展示的中文文案。
+    """
+    return {
+        "approved": "已通过",
+        "rejected": "已驳回",
+        "needs_revision": "待修改",
+        "pending": "待审核",
+    }.get(review_status, review_status or "待审核")
+
+
+def _build_overall_notes_card_block(card: Dict[str, Any], fallback_order: int) -> str:
+    """
+    生成一张卡片对应的 Word 表格块。
+    """
+    payload = _resolve_card_word_payload(card)
+    order = payload["order"] or fallback_order
+    status_text = _build_card_status_text(payload["review_status"])
+
+    inner_parts: List[str] = []
+    inner_parts.append(_paragraph_from_text(f"卡片 {order} · {status_text}", bold=True, size=22))
+    inner_parts.append(_paragraph_from_text(payload["title"], bold=True, size=28))
+
+    if payload["tags"]:
+        inner_parts.append(_paragraph_from_text("标签：" + "、".join(payload["tags"]), size=20))
+
+    if payload["summary"]:
+        _append_markdown_text(inner_parts, payload["summary"], base_size=22)
+    else:
+        inner_parts.append(_paragraph_from_text("暂无摘要。", size=22))
+
+    inner_xml = "".join(inner_parts)
+    return (
+        '<w:tbl>'
+        '<w:tblPr>'
+        '<w:tblStyle w:val="TableGrid"/>'
+        '<w:tblW w:w="0" w:type="auto"/>'
+        '<w:tblBorders>'
+        '<w:top w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '<w:left w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '<w:right w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '<w:insideH w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '<w:insideV w:val="single" w:sz="8" w:space="0" w:color="D1D5DB"/>'
+        '</w:tblBorders>'
+        '</w:tblPr>'
+        '<w:tblGrid><w:gridCol w:w="9600"/></w:tblGrid>'
+        '<w:tr>'
+        '<w:tc>'
+        '<w:tcPr>'
+        '<w:tcW w:w="9600" w:type="dxa"/>'
+        '<w:shd w:val="clear" w:color="auto" w:fill="F8FAFC"/>'
+        '</w:tcPr>'
+        f'{inner_xml}'
+        '</w:tc>'
+        '</w:tr>'
+        '</w:tbl>'
     )
 
 
@@ -414,6 +580,7 @@ def _build_overall_notes_document_xml(
     note_content: str,
     kbq_items: List[Dict[str, Any]],
     minutes_text: str,
+    card_items: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     组装整体 Notes 的 Word 主文档 XML。
@@ -424,6 +591,7 @@ def _build_overall_notes_document_xml(
         note_content: 访谈级 Summary Notes。
         kbq_items: KBQ Notes 结构化条目。
         minutes_text: 智能纪要的 Markdown 文本。
+        card_items: 卡片明细列表；若条目中包含 data(bytes) 则仍按图片处理，否则按 Word 文本卡片处理。
 
     返回:
         `word/document.xml` 的完整 XML 文本。
@@ -438,7 +606,32 @@ def _build_overall_notes_document_xml(
     if subtitle_lines:
         paragraphs.append(_w_blank_paragraph())
 
-    paragraphs.append(_paragraph_from_text("A. KBQ Notes", bold=True, size=28))
+    paragraphs.append(_paragraph_from_text("A. 全文模块总结卡片", bold=True, size=28))
+    if card_items:
+        image_width_emu = int(6.25 * 914400)
+        for index, card_item in enumerate(card_items, start=1):
+            if not isinstance(card_item, dict):
+                continue
+            image_data = card_item.get("data")
+            if isinstance(image_data, (bytes, bytearray)):
+                image_name = str(card_item.get("name") or f"card_{index}.png")
+                image_width = int(card_item.get("width") or 1200)
+                image_height = int(card_item.get("height") or 0)
+                if image_height <= 0:
+                    image_height = 1
+                image_height_emu = int(image_width_emu * image_height / image_width)
+                rel_id = str(card_item.get("rel_id") or f"rId{index}")
+                doc_pr_id = 1000 + index
+                paragraphs.append(_w_image_paragraph(rel_id, image_width_emu, image_height_emu, image_name, doc_pr_id))
+                paragraphs.append(_w_blank_paragraph())
+                continue
+            paragraphs.append(_build_overall_notes_card_block(card_item, index))
+            paragraphs.append(_w_blank_paragraph())
+    else:
+        paragraphs.append(_paragraph_from_text("暂无卡片。", size=22))
+        paragraphs.append(_w_blank_paragraph())
+
+    paragraphs.append(_paragraph_from_text("B. KBQ Notes", bold=True, size=28))
     if kbq_items:
         for item in kbq_items:
             bq_order = item.get("bq_order")
@@ -480,7 +673,7 @@ def _build_overall_notes_document_xml(
         paragraphs.append(_paragraph_from_text("暂无 KBQ Notes。", size=22))
         paragraphs.append(_w_blank_paragraph())
 
-    paragraphs.append(_paragraph_from_text("B. 智能纪要", bold=True, size=28))
+    paragraphs.append(_paragraph_from_text("C. 智能纪要", bold=True, size=28))
     _append_markdown_text(paragraphs, minutes_text, base_size=22)
 
     body = "".join(paragraphs)
@@ -489,6 +682,8 @@ def _build_overall_notes_document_xml(
         '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"'
         ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
         ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+        ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+        ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"'
         ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
         ' xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
         ' xmlns:v="urn:schemas-microsoft-com:vml"'
@@ -521,6 +716,7 @@ def build_overall_notes_docx_bytes(
     note_content: str,
     kbq_items: List[Dict[str, Any]],
     minutes_text: str,
+    card_items: Optional[List[Dict[str, Any]]] = None,
 ) -> bytes:
     """
     生成“全文 Notes”对应的 .docx 文件二进制。
@@ -531,6 +727,7 @@ def build_overall_notes_docx_bytes(
         note_content: 访谈级 Summary Notes。
         kbq_items: KBQ Notes 结构化条目。
         minutes_text: 智能纪要 Markdown 文本。
+        card_items: 卡片明细列表；若条目中包含 data(bytes) 则仍按图片处理，否则按 Word 文本卡片处理。
 
     返回:
         可直接写入 .docx 文件的二进制内容。
@@ -541,6 +738,7 @@ def build_overall_notes_docx_bytes(
         note_content=note_content,
         kbq_items=kbq_items,
         minutes_text=minutes_text,
+        card_items=card_items,
     )
     core_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -568,6 +766,7 @@ def build_overall_notes_docx_bytes(
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Default Extension="png" ContentType="image/png"/>'
         '<Override PartName="/word/document.xml" '
         'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
         '<Override PartName="/docProps/core.xml" '
@@ -576,6 +775,22 @@ def build_overall_notes_docx_bytes(
         'ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
         "</Types>"
     )
+    image_items = [item for item in (card_items or []) if isinstance(item, dict) and isinstance(item.get("data"), (bytes, bytearray))]
+    document_rels = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    ]
+    for index, _item in enumerate(image_items, start=1):
+        rel_id = f"rId{index}"
+        document_rels.append(
+            f'<Relationship Id="{rel_id}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="media/image{index}.png"/>'
+        )
+        _item["rel_id"] = rel_id
+        _item.setdefault("name", f"image{index}.png")
+    document_rels.append("</Relationships>")
+    document_rels_xml = "".join(document_rels)
     rels_root = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -595,9 +810,13 @@ def build_overall_notes_docx_bytes(
     with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", content_types)
         archive.writestr("_rels/.rels", rels_root)
+        if image_items:
+            archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
         archive.writestr("docProps/core.xml", core_xml)
         archive.writestr("docProps/app.xml", app_xml)
         archive.writestr("word/document.xml", document_xml)
+        for index, item in enumerate(image_items, start=1):
+            archive.writestr(f"word/media/image{index}.png", bytes(item["data"]))
     return buffer.getvalue()
 
 

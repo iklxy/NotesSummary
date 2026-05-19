@@ -14,6 +14,18 @@ PROJECT_KEY_BQ_CURRENT_NAME = "__current__"
 dotenv.load_dotenv()
 
 
+def _json_or_none(value: Any) -> Optional[str]:
+    """
+    将任意值归一化为 JSON 字符串或空值。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    text = str(value).strip()
+    return text or None
+
+
 def get_connection() -> pymysql.connections.Connection:
     """
     创建并返回一个 MySQL 数据库连接。
@@ -1948,6 +1960,452 @@ def update_interview_minutes_json(
     return row
 
 
+def fetch_interview_cards_by_interview(interview_id: int) -> dict | None:
+    """
+    查询某个访谈下的卡片主记录。
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            project_interview_id,
+            status,
+            error_message,
+            created_at,
+            updated_at
+        FROM bh_project_interview_cards
+        WHERE project_interview_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (interview_id,))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def upsert_interview_cards(
+    project_id: int,
+    interview_id: int,
+    status: str = "pending",
+    error_message: Optional[str] = None,
+) -> dict | None:
+    """
+    插入或更新访谈卡片主记录。
+    """
+    sql = """
+        INSERT INTO bh_project_interview_cards
+            (project_id, project_interview_id, status, error_message)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            project_id = VALUES(project_id),
+            status = VALUES(status),
+            error_message = VALUES(error_message)
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (project_id, interview_id, status, error_message))
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_id,
+                    project_interview_id,
+                    status,
+                    error_message,
+                    created_at,
+                    updated_at
+                FROM bh_project_interview_cards
+                WHERE project_interview_id = %s
+                LIMIT 1
+                """,
+                (interview_id,),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_interview_cards_items_by_cards_id(cards_id: int) -> list[dict]:
+    """
+    查询某个卡片主记录下的全部卡片明细。
+    """
+    sql = """
+        SELECT
+            id,
+            cards_id,
+            project_id,
+            project_interview_id,
+            card_order,
+            card_title,
+            card_summary,
+            generated_json,
+            final_json,
+            review_status,
+            review_comment,
+            reviewed_by,
+            reviewed_at,
+            updated_by,
+            updated_at
+        FROM bh_project_interview_cards_items
+        WHERE cards_id = %s
+        ORDER BY card_order ASC, id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (cards_id,))
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
+def fetch_interview_cards_bundle(interview_id: int) -> dict | None:
+    """
+    查询指定访谈的卡片主表与明细。
+    """
+    cards_row = fetch_interview_cards_by_interview(interview_id)
+    if not cards_row:
+        return None
+    items = fetch_interview_cards_items_by_cards_id(int(cards_row["id"]))
+    return {
+        **cards_row,
+        "items": items,
+    }
+
+
+def ensure_interview_cards(project_id: int, interview_id: int) -> dict | None:
+    """
+    确保访谈卡片主记录存在，不存在时创建一条。
+    """
+    row = fetch_interview_cards_by_interview(interview_id)
+    if row:
+        return row
+    return upsert_interview_cards(project_id=project_id, interview_id=interview_id, status="pending")
+
+
+def insert_interview_cards_item(
+    cards_id: int,
+    project_id: int,
+    project_interview_id: int,
+    card_order: int,
+    card_title: str,
+    card_summary: Optional[str],
+    generated_json: Any,
+    final_json: Any = None,
+    review_status: str = "pending",
+    review_comment: Optional[str] = None,
+    reviewed_by: Optional[int] = None,
+    reviewed_at: Optional[str] = None,
+    updated_by: Optional[int] = None,
+) -> dict | None:
+    """
+    插入一条卡片明细。
+    """
+    sql = """
+        INSERT INTO bh_project_interview_cards_items
+            (cards_id, project_id, project_interview_id, card_order, card_title, card_summary,
+             generated_json, final_json, review_status, review_comment, reviewed_by, reviewed_at, updated_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    final_payload = final_json if final_json is not None else generated_json
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    cards_id,
+                    project_id,
+                    project_interview_id,
+                    card_order,
+                    card_title,
+                    card_summary,
+                    _json_or_none(generated_json),
+                    _json_or_none(final_payload),
+                    review_status,
+                    review_comment,
+                    reviewed_by,
+                    reviewed_at,
+                    updated_by,
+                ),
+            )
+            new_id = cursor.lastrowid
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    cards_id,
+                    project_id,
+                    project_interview_id,
+                    card_order,
+                    card_title,
+                    card_summary,
+                    generated_json,
+                    final_json,
+                    review_status,
+                    review_comment,
+                    reviewed_by,
+                    reviewed_at,
+                    updated_by,
+                    updated_at
+                FROM bh_project_interview_cards_items
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (new_id,),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def update_interview_cards_item(
+    item_id: int,
+    project_id: int,
+    project_interview_id: int,
+    card_order: Optional[int] = None,
+    card_title: Optional[str] = None,
+    card_summary: Optional[str] = None,
+    generated_json: Any = None,
+    final_json: Any = None,
+    review_status: Optional[str] = None,
+    review_comment: Optional[str] = None,
+    reviewed_by: Optional[int] = None,
+    reviewed_at: Optional[str] = None,
+    updated_by: Optional[int] = None,
+) -> dict | None:
+    """
+    更新一条卡片明细。
+    """
+    fields: list[str] = []
+    params: list[Any] = []
+    if card_order is not None:
+        fields.append("card_order = %s")
+        params.append(card_order)
+    if card_title is not None:
+        fields.append("card_title = %s")
+        params.append(card_title)
+    if card_summary is not None:
+        fields.append("card_summary = %s")
+        params.append(card_summary)
+    if generated_json is not None:
+        fields.append("generated_json = %s")
+        params.append(_json_or_none(generated_json))
+    if final_json is not None:
+        fields.append("final_json = %s")
+        params.append(_json_or_none(final_json))
+    if review_status is not None:
+        fields.append("review_status = %s")
+        params.append(review_status)
+    if review_comment is not None:
+        fields.append("review_comment = %s")
+        params.append(review_comment)
+    if reviewed_by is not None:
+        fields.append("reviewed_by = %s")
+        params.append(reviewed_by)
+    if reviewed_at is not None:
+        fields.append("reviewed_at = %s")
+        params.append(reviewed_at)
+    if updated_by is not None:
+        fields.append("updated_by = %s")
+        params.append(updated_by)
+    if not fields:
+        return fetch_interview_cards_item_by_id(item_id, project_interview_id)
+
+    sql = f"""
+        UPDATE bh_project_interview_cards_items
+        SET {', '.join(fields)}
+        WHERE id = %s AND project_id = %s AND project_interview_id = %s
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, cards_id, card_order
+                FROM bh_project_interview_cards_items
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (item_id, project_interview_id),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                conn.rollback()
+                return None
+
+            current_order = int(current_row.get("card_order") or 0)
+            current_cards_id = int(current_row.get("cards_id") or 0)
+            target_order = int(card_order) if card_order is not None else current_order
+
+            if card_order is not None and target_order != current_order:
+                cursor.execute(
+                    """
+                    UPDATE bh_project_interview_cards_items
+                    SET card_order = 0
+                    WHERE id = %s AND project_interview_id = %s
+                    """,
+                    (item_id, project_interview_id),
+                )
+                if target_order < current_order:
+                    cursor.execute(
+                        """
+                        UPDATE bh_project_interview_cards_items
+                        SET card_order = card_order + 1
+                        WHERE cards_id = %s
+                          AND project_interview_id = %s
+                          AND card_order >= %s
+                          AND card_order < %s
+                          AND id <> %s
+                        """,
+                        (current_cards_id, project_interview_id, target_order, current_order, item_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE bh_project_interview_cards_items
+                        SET card_order = card_order - 1
+                        WHERE cards_id = %s
+                          AND project_interview_id = %s
+                          AND card_order > %s
+                          AND card_order <= %s
+                          AND id <> %s
+                        """,
+                        (current_cards_id, project_interview_id, current_order, target_order, item_id),
+                    )
+
+            params.extend([item_id, project_id, project_interview_id])
+            cursor.execute(sql, params)
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    cards_id,
+                    project_id,
+                    project_interview_id,
+                    card_order,
+                    card_title,
+                    card_summary,
+                    generated_json,
+                    final_json,
+                    review_status,
+                    review_comment,
+                    reviewed_by,
+                    reviewed_at,
+                    updated_by,
+                    updated_at
+                FROM bh_project_interview_cards_items
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (item_id,),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_interview_cards_item_by_id(item_id: int, project_interview_id: int) -> dict | None:
+    """
+    查询单条卡片明细。
+    """
+    sql = """
+        SELECT
+            id,
+            cards_id,
+            project_id,
+            project_interview_id,
+            card_order,
+            card_title,
+            card_summary,
+            generated_json,
+            final_json,
+            review_status,
+            review_comment,
+            reviewed_by,
+            reviewed_at,
+            updated_by,
+            updated_at
+        FROM bh_project_interview_cards_items
+        WHERE id = %s AND project_interview_id = %s
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (item_id, project_interview_id))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def delete_interview_cards_item(item_id: int, project_interview_id: int) -> dict | None:
+    """
+    删除单条卡片明细。
+    """
+    row = fetch_interview_cards_item_by_id(item_id, project_interview_id)
+    if not row:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            deleted_order = int(row.get("card_order") or 0)
+            cards_id = int(row.get("cards_id") or 0)
+            cursor.execute(
+                """
+                DELETE FROM bh_project_interview_cards_items
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (item_id, project_interview_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            if deleted_order > 0:
+                cursor.execute(
+                    """
+                    UPDATE bh_project_interview_cards_items
+                    SET card_order = card_order - 1
+                    WHERE cards_id = %s
+                      AND project_interview_id = %s
+                      AND card_order > %s
+                    """,
+                    (cards_id, project_interview_id, deleted_order),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
 def upsert_ca_table(
     project_id: int,
     ca_json: Any,
@@ -2204,6 +2662,14 @@ def delete_interview_graph(interview_id: int) -> dict | None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM bh_project_interview_cards_items WHERE project_interview_id = %s",
+                (interview_id,),
+            )
+            cursor.execute(
+                "DELETE FROM bh_project_interview_cards WHERE project_interview_id = %s",
+                (interview_id,),
+            )
             cursor.execute(
                 "DELETE FROM bh_project_interview_key_bq WHERE project_interview_id = %s",
                 (interview_id,),

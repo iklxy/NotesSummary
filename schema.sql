@@ -315,6 +315,71 @@ CREATE TABLE `bh_project_interview_minutes` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `bh_project_interview_cards`
+--
+
+DROP TABLE IF EXISTS `bh_project_interview_cards`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bh_project_interview_cards` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `project_interview_id` bigint NOT NULL COMMENT '访谈ID',
+  `status` varchar(32) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/generating/done/failed',
+  `error_message` text COMMENT '错误信息',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_bh_project_interview_cards_interview_id` (`project_interview_id`),
+  KEY `idx_bh_project_interview_cards_project_id` (`project_id`),
+  KEY `idx_bh_project_interview_cards_status` (`status`),
+  CONSTRAINT `fk_bh_project_interview_cards_project`
+    FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`) ON UPDATE CASCADE,
+  CONSTRAINT `fk_bh_project_interview_cards_interview`
+    FOREIGN KEY (`project_interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='访谈卡片主表';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `bh_project_interview_cards_items`
+--
+
+DROP TABLE IF EXISTS `bh_project_interview_cards_items`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bh_project_interview_cards_items` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `cards_id` bigint unsigned NOT NULL COMMENT '卡片主表ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `project_interview_id` bigint NOT NULL COMMENT '访谈ID',
+  `card_order` int NOT NULL COMMENT '卡片顺序',
+  `card_title` varchar(255) NOT NULL COMMENT '卡片标题',
+  `card_summary` longtext COMMENT '卡片摘要',
+  `generated_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'LLM原始生成JSON',
+  `final_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '人工编辑后的最终JSON',
+  `review_status` varchar(32) NOT NULL DEFAULT 'pending' COMMENT '审核状态：pending/approved/rejected/needs_revision',
+  `review_comment` text COMMENT '审核意见',
+  `reviewed_by` bigint DEFAULT NULL COMMENT '审核人ID',
+  `reviewed_at` datetime DEFAULT NULL COMMENT '审核时间',
+  `updated_by` bigint DEFAULT NULL COMMENT '最后编辑人ID',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_bh_project_interview_cards_items_cards_order` (`cards_id`,`card_order`),
+  KEY `idx_bh_project_interview_cards_items_project_id` (`project_id`),
+  KEY `idx_bh_project_interview_cards_items_interview_id` (`project_interview_id`),
+  KEY `idx_bh_project_interview_cards_items_review_status` (`review_status`),
+  CONSTRAINT `fk_bh_project_interview_cards_items_cards`
+    FOREIGN KEY (`cards_id`) REFERENCES `bh_project_interview_cards` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_bh_project_interview_cards_items_project`
+    FOREIGN KEY (`project_id`) REFERENCES `bh_project` (`id`) ON UPDATE CASCADE,
+  CONSTRAINT `fk_bh_project_interview_cards_items_interview`
+    FOREIGN KEY (`project_interview_id`) REFERENCES `bh_project_interview` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `bh_project_interview_cards_items_chk_1` CHECK (json_valid(`generated_json`)),
+  CONSTRAINT `bh_project_interview_cards_items_chk_2` CHECK (`final_json` IS NULL OR json_valid(`final_json`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='访谈卡片明细表';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `bh_project_interview_notes`
 --
 

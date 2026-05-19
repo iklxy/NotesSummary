@@ -20,8 +20,12 @@ from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from db import (
     delete_interview_graph,
     delete_fewshot_sample,
+    delete_interview_cards_item,
     delete_question_and_notes,
     fetch_interview_by_id,
+    fetch_interview_cards_bundle,
+    fetch_interview_cards_by_interview,
+    fetch_interview_cards_item_by_id,
     fetch_interview_minutes_by_interview,
     fetch_interview_summary_by_id,
     fetch_fewshot_samples_by_interview,
@@ -33,16 +37,22 @@ from db import (
     fetch_notes_rows_by_interview,
     fetch_questions_by_interview,
     insert_fewshot_sample,
+    insert_interview_cards_item,
     insert_questions_for_interview,
     update_interview_kbq_note_json,
+    update_interview_cards_item,
     update_interview_minutes_json,
     update_interview_note_content,
     update_interview_summary_text_with_corrections,
     upsert_interview_minutes,
+    upsert_interview_cards,
     replace_key_bq_rows_for_interview,
 )
 from schemas.interviews import (
     DeleteInterviewResponse,
+    InterviewCardItemCreateRequest,
+    InterviewCardItemUpdateRequest,
+    InterviewCardsResponse,
     FewshotSampleCreateRequest,
     FewshotSampleCreateResponse,
     FewshotSampleDeleteResponse,
@@ -69,6 +79,7 @@ from schemas.interviews import (
 from storage import delete_remote_object
 from docx_export import build_overall_notes_docx_bytes, build_transcript_docx_bytes, DOCX_MIME_TYPE
 from InterviewLogger import log_interview
+from CardsWorkflow import generate_cards_for_interview
 
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -668,12 +679,29 @@ def _resolve_overall_notes_payload(interview_id: int, current_user_id: int) -> D
         "note_content": interview.get("note_content"),
         "kbq_notes": kbq_payload,
         "minutes": minutes_payload,
+        "cards": _build_interview_cards_response(
+            interview_id=interview_id,
+            project_id=interview.get("parse_project_id"),
+            row=fetch_interview_cards_bundle(interview_id),
+        ),
         "summary": {
             "interview_id": interview_id,
             "items": summary_rows,
         },
         "interview": interview,
     }
+
+
+def _build_overall_notes_card_items(cards_payload: Dict[str, Any] | None) -> List[Dict[str, Any]]:
+    """
+    提取整体 Notes 的卡片明细，用于 Word 导出。
+    """
+    if not isinstance(cards_payload, dict):
+        return []
+    items = cards_payload.get("items") or []
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _build_interview_notes_response(
@@ -868,6 +896,63 @@ def _build_interview_minutes_response(
         "error_message": row.get("error_message"),
         "generated_at": row.get("generated_at"),
         "minutes_json": minutes_json,
+    }
+
+
+def _build_interview_cards_response(
+    interview_id: int,
+    project_id: int | None,
+    row: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """
+    将访谈卡片主表与明细整理为前端可直接消费的结构。
+    """
+    if not row:
+        return {
+            "interview_id": interview_id,
+            "project_id": project_id,
+            "status": None,
+            "error_message": None,
+            "created_at": None,
+            "updated_at": None,
+            "items": [],
+        }
+
+    raw_items = row.get("items") or []
+    items: List[Dict[str, Any]] = []
+    if isinstance(raw_items, list):
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            items.append(
+                {
+                    "id": item.get("id"),
+                    "cards_id": item.get("cards_id"),
+                    "project_id": item.get("project_id"),
+                    "project_interview_id": item.get("project_interview_id"),
+                    "card_order": item.get("card_order"),
+                    "card_title": item.get("card_title"),
+                    "card_summary": item.get("card_summary"),
+                    "generated_json": _parse_json_like(item.get("generated_json"), item.get("generated_json")),
+                    "final_json": _parse_json_like(item.get("final_json"), item.get("final_json")),
+                    "review_status": item.get("review_status"),
+                    "review_comment": item.get("review_comment"),
+                    "reviewed_by": item.get("reviewed_by"),
+                    "reviewed_at": item.get("reviewed_at"),
+                    "updated_by": item.get("updated_by"),
+                    "updated_at": item.get("updated_at"),
+                }
+            )
+
+    items.sort(key=lambda item: (int(item.get("card_order") or 0), int(item.get("id") or 0)))
+    return {
+        "interview_id": interview_id,
+        "project_id": project_id,
+        "status": row.get("status"),
+        "error_message": row.get("error_message"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "items": items,
     }
 
 
@@ -1066,6 +1151,23 @@ def _parse_sample_json(raw: Any) -> tuple[Any, str | None, str | None, int]:
     evidence = parsed.get("evidence")
     evidence_count = len(evidence) if isinstance(evidence, list) else 0
     return parsed, summary if isinstance(summary, str) else None, analysis if isinstance(analysis, str) else None, evidence_count
+
+
+def _parse_json_like(raw: Any, fallback: Any = None) -> Any:
+    """
+    解析 JSON 字符串、dict 或 list；失败时回退到 fallback。
+    """
+    if raw is None:
+        return fallback
+    if isinstance(raw, (dict, list)):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return fallback
+    try:
+        return json.loads(text)
+    except Exception:
+        return raw if fallback is None else fallback
 
 
 _SUMMARY_DIFF_TOKEN_RE = re.compile(
@@ -1777,6 +1879,188 @@ def update_interview_overall_notes_minutes(
 
 
 @router.get(
+    "/{interview_id}/cards",
+    response_model=Dict[str, Any],
+)
+def get_interview_cards(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    读取访谈卡片主表与明细。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    payload = _build_interview_cards_response(
+        interview_id=interview_id,
+        project_id=interview.get("parse_project_id"),
+        row=fetch_interview_cards_bundle(interview_id),
+    )
+    return payload
+
+
+@router.post(
+    "/{interview_id}/cards/refresh",
+    response_model=Dict[str, Any],
+)
+def refresh_interview_cards(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    基于当前智能纪要重新生成全文模块总结卡片。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    log_interview("CARDS", interview_id, "refresh cards start")
+    try:
+        generation_result = generate_cards_for_interview(interview_id)
+    except Exception as e:
+        log_interview("CARDS", interview_id, f"refresh cards exception error={e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"refresh cards failed: {e}")
+    payload = _build_interview_cards_response(
+        interview_id=interview_id,
+        project_id=project_id,
+        row=fetch_interview_cards_bundle(interview_id),
+    )
+    payload["generation"] = generation_result
+    return payload
+
+
+@router.post(
+    "/{interview_id}/cards/items",
+    response_model=Dict[str, Any],
+)
+def create_interview_cards_item(
+    interview_id: int,
+    payload: InterviewCardItemCreateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    新增一条卡片明细。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    cards_row = ensure_interview_cards(project_id, interview_id)
+    if not cards_row:
+        raise HTTPException(status_code=500, detail="create interview cards parent failed")
+
+    cards_bundle = fetch_interview_cards_bundle(interview_id) or {"items": []}
+    existing_items = cards_bundle.get("items") or []
+    next_order = 1
+    if isinstance(existing_items, list) and existing_items:
+        next_order = max(int(item.get("card_order") or 0) for item in existing_items) + 1
+    card_order = int(payload.card_order or next_order)
+
+    card_title = payload.card_title.strip()
+    card_summary = payload.card_summary.strip() if isinstance(payload.card_summary, str) else payload.card_summary
+    generated_json = payload.generated_json
+    final_json = payload.final_json if payload.final_json is not None else payload.generated_json
+    review_status = str(payload.review_status or "pending").strip() or "pending"
+    if payload.reviewed_at:
+        reviewed_at = payload.reviewed_at
+    elif review_status != "pending":
+        reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        reviewed_at = None
+
+    inserted = insert_interview_cards_item(
+        cards_id=int(cards_row["id"]),
+        project_id=project_id,
+        project_interview_id=interview_id,
+        card_order=card_order,
+        card_title=card_title,
+        card_summary=card_summary,
+        generated_json=generated_json,
+        final_json=final_json,
+        review_status=review_status,
+        review_comment=payload.review_comment,
+        reviewed_by=payload.reviewed_by or current_user_id,
+        reviewed_at=reviewed_at,
+        updated_by=current_user_id,
+    )
+    if not inserted:
+        raise HTTPException(status_code=500, detail="insert interview cards item failed")
+    payload_dict = _build_interview_cards_response(
+        interview_id=interview_id,
+        project_id=project_id,
+        row=fetch_interview_cards_bundle(interview_id),
+    )
+    return payload_dict
+
+
+@router.put(
+    "/{interview_id}/cards/items/{item_id}",
+    response_model=Dict[str, Any],
+)
+def update_interview_cards_item_endpoint(
+    interview_id: int,
+    item_id: int,
+    payload: InterviewCardItemUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    更新一条卡片明细。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    existing = fetch_interview_cards_item_by_id(item_id, interview_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="cards item not found")
+
+    review_status = payload.review_status
+    reviewed_at = payload.reviewed_at
+    if review_status is not None and not reviewed_at and review_status != str(existing.get("review_status") or "pending"):
+        reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    updated = update_interview_cards_item(
+        item_id=item_id,
+        project_id=project_id,
+        project_interview_id=interview_id,
+        card_order=payload.card_order,
+        card_title=payload.card_title,
+        card_summary=payload.card_summary,
+        generated_json=payload.generated_json,
+        final_json=payload.final_json,
+        review_status=review_status,
+        review_comment=payload.review_comment,
+        reviewed_by=payload.reviewed_by,
+        reviewed_at=reviewed_at,
+        updated_by=current_user_id,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="cards item not found")
+    return _build_interview_cards_response(
+        interview_id=interview_id,
+        project_id=project_id,
+        row=fetch_interview_cards_bundle(interview_id),
+    )
+
+
+@router.delete(
+    "/{interview_id}/cards/items/{item_id}",
+    response_model=Dict[str, Any],
+)
+def delete_interview_cards_item_endpoint(
+    interview_id: int,
+    item_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    删除一条卡片明细。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    deleted = delete_interview_cards_item(item_id, interview_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="cards item not found")
+    return _build_interview_cards_response(
+        interview_id=interview_id,
+        project_id=project_id,
+        row=fetch_interview_cards_bundle(interview_id),
+    )
+
+
+@router.get(
     "/{interview_id}/overall-notes/export-word",
 )
 def export_interview_overall_notes_word(
@@ -1798,6 +2082,8 @@ def export_interview_overall_notes_word(
         project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
 
         note_content = str(payload.get("note_content") or "")
+        cards_payload = payload.get("cards") or {}
+        card_items = _build_overall_notes_card_items(cards_payload if isinstance(cards_payload, dict) else None)
         kbq_items = []
         kbq_payload = payload.get("kbq_notes") or {}
         if isinstance(kbq_payload, dict):
@@ -1830,6 +2116,7 @@ def export_interview_overall_notes_word(
             note_content=note_content,
             kbq_items=kbq_items,
             minutes_text=minutes_text,
+            card_items=card_items,
         )
         filename = _build_overall_notes_export_filename(interview_name, interview_id)
         headers = {

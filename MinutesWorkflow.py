@@ -670,6 +670,24 @@ def generate_minutes_for_interview(
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
         minutes_chars = len(minutes_txt.strip())
+        cards_result: Dict[str, Any] = {"success": False, "generated": 0, "inserted": 0}
+        try:
+            from CardsWorkflow import generate_cards_for_interview
+
+            cards_result = generate_cards_for_interview(
+                interview_id,
+                project_context=project_context,
+            )
+        except Exception as cards_exc:
+            cards_result = {
+                "success": False,
+                "generated": 0,
+                "inserted": 0,
+                "message": f"generate cards failed: {cards_exc}",
+            }
+            log(interview_id=interview_id, message=f"run_cards failed error={cards_exc}\n{traceback.format_exc()}")
+        if not cards_result.get("success"):
+            log(interview_id=interview_id, message=f"run_cards warning detail={cards_result}")
         log(
             interview_id=interview_id,
             message=(
@@ -693,7 +711,11 @@ def generate_minutes_for_interview(
             "outline_txt_path": minutes_payload.get("outline_txt_path"),
             "minutes_json_path": str(minutes_json_path),
             "minutes_txt_path": str(minutes_txt_path),
-            "warnings": [],
+            "cards_generated": cards_result.get("generated", 0),
+            "cards_inserted": cards_result.get("inserted", 0),
+            "cards_success": bool(cards_result.get("success")),
+            "cards_message": cards_result.get("message"),
+            "warnings": [cards_result.get("message")] if cards_result.get("message") else [],
         }
     except Exception as exc:
         error_message = f"generate minutes failed: {exc}"

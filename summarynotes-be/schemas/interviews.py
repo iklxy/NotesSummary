@@ -61,6 +61,70 @@ class GenerateMinutesResponse(BaseModel):
     message: Optional[str] = None
 
 
+class InterviewCardItem(BaseModel):
+    """
+    单条全文模块卡片结构。
+    """
+    id: int
+    cards_id: int
+    project_id: int
+    project_interview_id: int
+    card_order: int
+    card_title: str
+    card_summary: Optional[str] = None
+    generated_json: Any
+    final_json: Optional[Any] = None
+    review_status: Optional[str] = None
+    review_comment: Optional[str] = None
+    reviewed_by: Optional[int] = None
+    reviewed_at: Optional[str] = None
+    updated_by: Optional[int] = None
+    updated_at: Optional[str] = None
+
+
+class InterviewCardsResponse(BaseModel):
+    """
+    /api/interviews/{interview_id}/cards 接口返回值。
+    """
+    interview_id: int
+    project_id: Optional[int] = None
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    items: List[InterviewCardItem] = Field(default_factory=list)
+
+
+class InterviewCardItemCreateRequest(BaseModel):
+    """
+    创建一条卡片明细的请求体。
+    """
+    card_title: str
+    card_order: Optional[int] = None
+    card_summary: Optional[str] = None
+    generated_json: Any
+    final_json: Optional[Any] = None
+    review_status: Optional[str] = None
+    review_comment: Optional[str] = None
+    reviewed_by: Optional[int] = None
+    reviewed_at: Optional[str] = None
+
+
+class InterviewCardItemUpdateRequest(BaseModel):
+    """
+    更新一条卡片明细的请求体。
+    """
+    card_order: Optional[int] = None
+    card_title: Optional[str] = None
+    card_summary: Optional[str] = None
+    generated_json: Optional[Any] = None
+    final_json: Optional[Any] = None
+    review_status: Optional[str] = None
+    review_comment: Optional[str] = None
+    reviewed_by: Optional[int] = None
+    reviewed_at: Optional[str] = None
+
+
 class QuestionIntentItem(BaseModel):
     """
     单条 question intent 结构。

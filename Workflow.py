@@ -582,6 +582,10 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
                 "generate_minutes",
                 f"done minutes_chars={minutes_result.get('minutes_chars', 0)} inserted={minutes_result.get('inserted', 0)}",
             )
+        cards_warning = None
+        if minutes_result.get("cards_success") is False:
+            cards_warning = minutes_result.get("cards_message") or "generate cards failed"
+            _workflow_log(interview_id, "generate_cards", f"warning detail={minutes_result}")
 
         kbq_result = {"success": False, "message": "kbq skipped because smart minutes generation failed", "inserted": 0}
         if minutes_result.get("success"):
@@ -615,7 +619,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             "notes_inserted": minutes_result.get("inserted", 0),
             "warnings": [
                 warning
-                for warning in [overall_note_warning, kbq_warning, minutes_warning]
+                for warning in [overall_note_warning, kbq_warning, minutes_warning, cards_warning]
                 if warning
             ],
         }
