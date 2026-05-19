@@ -594,7 +594,7 @@ def generate_cards_from_minutes(
         "2. 总览卡片使用 overview_card 字段返回，order 固定为 0，layout_span 固定为 3，summary 为一段约 100 个字的中文总结。\n"
         "3. 总览卡片只输出一段 summary，不要输出 points；tags 可为空或使用简短标签。\n"
         "4. 其余卡片必须包含 order、title、tags、points；建议可选包含 summary 作为补充概述。\n"
-        "5. points 必须是数组，建议 3 到 5 个要点，每个要点尽量控制在 10 个汉字左右，要求短、准、明确。\n"
+        "5. points 必须是数组，建议 3 到 5 个要点，每个要点尽量控制在 20 个汉字左右，要求短、准、明确。\n"
         "6. summary 若存在，只作为一句话补充概述，不要用来承载主要内容。\n"
         "7. 不要在 points 中写长句、不要把多个要点合并成一条。\n"
         "8. 主题卡片按主题重要性排序，最核心的放前面。\n"
