@@ -474,10 +474,17 @@ def parse_cards_response(
         overview_payload.setdefault("order", 0)
         overview_payload.setdefault("layout_span", 3)
         normalized_cards.extend(_normalize_card_items([overview_payload]))
+    core_points_card = result.get("core_points_card") or result.get("core_viewpoints_card")
+    if isinstance(core_points_card, dict):
+        core_points_payload = dict(core_points_card)
+        core_points_payload.setdefault("card_type", "overview")
+        core_points_payload.setdefault("order", 1)
+        core_points_payload.setdefault("layout_span", 3)
+        normalized_cards.extend(_normalize_card_items([core_points_payload]))
     raw_cards = result.get("cards")
     if raw_cards is None:
         raw_cards = result.get("items")
-    if isinstance(raw_cards, list) and isinstance(overview_card, dict):
+    if isinstance(raw_cards, list) and (isinstance(overview_card, dict) or isinstance(core_points_card, dict)):
         filtered_cards: List[Dict[str, Any]] = []
         for item in raw_cards:
             if not isinstance(item, dict):
@@ -488,7 +495,7 @@ def parse_cards_response(
                 order_value = int(order_raw) if order_raw is not None else -1
             except Exception:
                 order_value = -1
-            if order_value == 0 or card_type == "overview":
+            if order_value in {0, 1} or card_type == "overview":
                 continue
             filtered_cards.append(item)
         raw_cards = filtered_cards
@@ -497,6 +504,12 @@ def parse_cards_response(
     result["cards"] = normalized_cards
     if isinstance(overview_card, dict):
         result["overview_card"] = normalized_cards[0] if normalized_cards else overview_card
+    if isinstance(core_points_card, dict):
+        core_points_index = 1 if isinstance(overview_card, dict) else 0
+        if len(normalized_cards) > core_points_index:
+            result["core_points_card"] = normalized_cards[core_points_index]
+        else:
+            result["core_points_card"] = core_points_card
     result.setdefault("llm_raw_output", content)
     return result
 
@@ -565,7 +578,7 @@ def generate_cards_from_minutes(
 
     system_prompt = (
         "你是专业的医疗行业访谈纪要整理助专家和结构化纪要生成专家，将以下访谈文本整理成和飞书智能纪要完全同风格的结构化内容，要求："
-        "任务是基于一份智能纪要，先生成 1 张总览卡片，再提炼出 4 到 8 张主题卡片。"
+        "任务是基于一份智能纪要，先生成 1 张总览卡片，再生成 1 张核心观点卡，再提炼出 4 到 8 张主题卡片。"
         "卡片要适合整体浏览与扫读，标题要短而明确，内容必须以结构化要点返回，"
         "必须严格基于输入内容，不得编造、补充、推断。"
         "只输出严格合法的 JSON，不要输出额外说明。"
@@ -577,8 +590,9 @@ def generate_cards_from_minutes(
         "   - 开头：访谈主题\n"
         "   - 一级标题：「总结」\n"
         "   - 二级模块：\n"
-        "     ① 核心观点（提炼3-5条最关键结论，用项目符号）\n"
-        "     ② 分模块卡片式内容（每个模块有小标题+图标，用项目符号列出关键信息，如现状、产品、市场等）\n\n"
+        "     ① 全文总览（约200字的详细总结，作为整体概览）\n"
+        "     ② 核心观点（3-5条最关键观点，和全文总览同级别）\n"
+        "     ③ 分模块卡片式内容（每个模块有小标题+图标，用项目符号列出关键信息，如现状、产品、市场等）\n\n"
         "2. 【内容要求】\n"
         "   - 只提取原文信息，不补充、不臆断、不猜测\n"
         "   - 专业术语、数据、百分比、关键结论100%和原文一致\n"
@@ -590,17 +604,21 @@ def generate_cards_from_minutes(
         f"【纪要待办】\n{action_items_block}\n\n"
         f"【纪要正文】\n{minutes_text or '（空）'}\n\n"
         "要求：\n"
-        "1. 必须固定生成 1 张总览卡片，放在所有主题卡片之前，总览卡片标题固定为“全文总览”。\n"
-        "2. 总览卡片使用 overview_card 字段返回，order 固定为 0，layout_span 固定为 3，summary 为一段约 100 个字的中文总结。\n"
-        "3. 总览卡片只输出一段 summary，不要输出 points；tags 可为空或使用简短标签。\n"
-        "4. 其余卡片必须包含 order、title、tags、points；建议可选包含 summary 作为补充概述。\n"
-        "5. points 必须是数组，建议 3 到 5 个要点，每个要点尽量控制在 20 个汉字左右，要求短、准、明确。\n"
-        "6. summary 若存在，只作为一句话补充概述，不要用来承载主要内容。\n"
-        "7. 不要在 points 中写长句、不要把多个要点合并成一条。\n"
-        "8. 主题卡片按主题重要性排序，最核心的放前面。\n"
-        "9. 只使用给定纪要中的信息，不要引入纪要外的新事实。\n"
-        "10. 如果纪要信息太少，也要尽量生成最贴近主题的卡片，但不要虚构。\n"
-        "11. 输出时只返回 JSON，不要包含 markdown、解释或多余文本。\n"
+        "1. 必须固定生成 1 张总览卡片，放在所有卡片之前，总览卡片标题固定为“全文总览”。\n"
+        "2. 总览卡片使用 overview_card 字段返回，order 固定为 0，layout_span 固定为 3，summary 为一段约 200 个字的详细总结。\n"
+        "3. 总览卡片只输出一段 summary，不要输出 points；不要出现“所有内容均来自访谈”“以下仅根据访谈内容”等套话或免责声明。\n"
+        "4. 在总览卡片之后，必须再生成 1 张同级别的“核心观点”卡片，使用 core_points_card 字段返回，order 固定为 1，layout_span 固定为 3，标题固定为“核心观点”。\n"
+        "5. 核心观点卡片内容必须提炼整个 minutes 中提到的重要观点，建议用 3 到 5 条项目符号组织，内容要比主题卡更完整，但仍保持精炼。\n"
+        "6. 核心观点卡片可以只返回 summary，summary 中用换行或项目符号列出关键观点，不要再写长篇解释。\n"
+        "7. 其余主题卡片必须包含 order、title、tags、points；建议可选包含 summary 作为补充概述。\n"
+        "8. 主题卡片的 points 必须是数组，建议 3 到 5 个要点，每个要点尽量控制在 50 个汉字左右，要求短、准、明确。\n"
+        "9. summary 若存在，只作为一句话补充概述，不要用来承载主要内容。\n"
+        "10. 不要在 points 中写长句、不要把多个要点合并成一条。\n"
+        "11. 主题卡片按主题重要性排序，最核心的放前面；order 从 2 开始编号。\n"
+        "12. 只使用给定纪要中的信息，不要引入纪要外的新事实。\n"
+        "13. 如果纪要信息太少，也要尽量生成最贴近主题的卡片，但不要虚构。\n"
+        "14. 输出时只返回 JSON，不要包含 markdown、解释或多余文本。\n"
+        "15. points 重点关注市场、产品、竞争、用户等方面的具体信息，避免过于笼统的总结。\n"
         "JSON 的参考结构如下：\n"
         "{\n"
         '  "overview_card": {\n'
@@ -608,15 +626,23 @@ def generate_cards_from_minutes(
         '    "card_type": "overview",\n'
         '    "layout_span": 3,\n'
         '    "title": "全文总览",\n'
-        '    "summary": "约100字的整体总结",\n'
+        '    "summary": "约200字的详细总结",\n'
         '    "tags": ["总览"]\n'
+        "  },\n"
+        '  "core_points_card": {\n'
+        '    "order": 1,\n'
+        '    "card_type": "overview",\n'
+        '    "layout_span": 3,\n'
+        '    "title": "核心观点",\n'
+        '    "summary": "· 观点1\\n· 观点2\\n· 观点3",\n'
+        '    "tags": ["核心观点"]\n'
         "  },\n"
         '  "cards": [\n'
         "    {\n"
-        '      "order": 1,\n'
+        '      "order": 2,\n'
         '      "title": "卡片标题",\n'
         '      "summary": "一句话概述（可选）",\n'
-        '      "points": ["要点1", "要点2", "要点3"],\n'
+        '      "points": ["要点1（约50字）", "要点2（约50字）", "要点3（约50字）"],\n'
         '      "tags": ["标签1", "标签2"],\n'
         '      "source_sections": ["可选来源章节"]\n'
         "    }\n"
