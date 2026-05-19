@@ -93,6 +93,7 @@ type InterviewDetailValues = Record<string, string | number | null | undefined>;
 interface InterviewDetailFieldDraft extends InterviewDetailFieldDefinition {
   uid: string;
   value?: string | number | null;
+  isPreset?: boolean;
 }
 
 const DEFAULT_DOCTOR_ROLE_FIELDS: InterviewDetailFieldDefinition[] = [
@@ -206,6 +207,7 @@ function createInterviewDetailFieldUid(): string {
 function createInterviewDetailFieldDraft(
   field?: Partial<InterviewDetailFieldDefinition>,
   value?: string | number | null,
+  options?: { isPreset?: boolean },
 ): InterviewDetailFieldDraft {
   return {
     uid: createInterviewDetailFieldUid(),
@@ -213,15 +215,16 @@ function createInterviewDetailFieldDraft(
     label: String(field?.label || "").trim() || String(field?.key || "").trim(),
     kind: String(field?.kind || "text").trim() || "text",
     value,
+    isPreset: Boolean(options?.isPreset),
   };
 }
 
 function buildInterviewDetailFieldDraftsByType(roleType?: string | null): InterviewDetailFieldDraft[] {
   const fields = getDefaultRoleFields(normalizeRoleType(roleType));
   if (fields.length === 0) {
-    return [createInterviewDetailFieldDraft()];
+    return [createInterviewDetailFieldDraft(undefined, undefined, { isPreset: false })];
   }
-  return fields.map((field) => createInterviewDetailFieldDraft(field));
+  return fields.map((field) => createInterviewDetailFieldDraft(field, undefined, { isPreset: true }));
 }
 
 interface QuestionnaireReviewState {
@@ -539,6 +542,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [questionnaireSaving, setQuestionnaireSaving] = useState(false);
   const [questionnaireForm] = Form.useForm();
   const [questionnaireFileList, setQuestionnaireFileList] = useState<UploadFile[]>([]);
+  const questionnaireObjectType = Form.useWatch("object_type", questionnaireForm);
   const [questionnaireReviewState, setQuestionnaireReviewState] =
     useState<QuestionnaireReviewState | null>(null);
   const [questionnaireReviewVisible, setQuestionnaireReviewVisible] = useState(false);
@@ -714,6 +718,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
     questionnaireForm.setFieldsValue({
       name: "",
       object_type: targetType,
+      role_name: targetType === "custom" ? targetRole?.role_name ?? "" : undefined,
     });
     setQuestionnaireModalOpen(true);
   };
@@ -759,10 +764,19 @@ export default function ProjectDetailClient({ projectId }: Props) {
         setQuestionnaireSaving(false);
         return;
       }
+      const roleName = String(values.role_name || "").trim();
+      if (objectType === "custom" && !roleName) {
+        message.warning("请选择自定义人员名称");
+        setQuestionnaireSaving(false);
+        return;
+      }
       const formData = new FormData();
       formData.append("name", String(values.name || "").trim());
       formData.append("object_type", objectType);
       formData.append("role_type", objectType);
+      if (roleName) {
+        formData.append("role_name", roleName);
+      }
       formData.append("file", file as File);
       const created = await createProjectQuestionnaire(projectId, formData);
       message.success("DG 已上传");
@@ -845,7 +859,10 @@ export default function ProjectDetailClient({ projectId }: Props) {
   };
 
   const addInterviewDetailField = () => {
-    setInterviewDetailFieldsDraft((prev) => [...prev, createInterviewDetailFieldDraft()]);
+    setInterviewDetailFieldsDraft((prev) => [
+      ...prev,
+      createInterviewDetailFieldDraft(undefined, undefined, { isPreset: false }),
+    ]);
   };
 
   const updateInterviewDetailField = (uid: string, patch: Partial<InterviewDetailFieldDraft>) => {
@@ -1398,7 +1415,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
             type="info"
             showIcon
             message="DG 只绑定类型"
-            description="这里仅选择 DG 属于医生、患者还是自定义人员。访谈细节和自定义字段会在创建访谈时填写。"
+            description="这里仅选择 DG 属于医生、患者还是自定义人员。若选择自定义人员，请同时填写人员名称。访谈细节和自定义字段会在创建访谈时填写。"
             style={{ marginBottom: 16 }}
           />
 
@@ -1428,6 +1445,16 @@ export default function ProjectDetailClient({ projectId }: Props) {
               </Form.Item>
             </Col>
           </Row>
+
+          {questionnaireObjectType === "custom" ? (
+            <Form.Item
+              label="自定义人员名称"
+              name="role_name"
+              rules={[{ required: true, message: "请输入自定义人员名称" }]}
+            >
+              <Input placeholder="例如 甲医院主任医师 / 某品牌关键用户 / 自定义访谈对象" />
+            </Form.Item>
+          ) : null}
 
           <Form.Item label="DG 文件">
             <Upload
@@ -1824,7 +1851,19 @@ export default function ProjectDetailClient({ projectId }: Props) {
             type="info"
             showIcon
             message="在这里补充访谈细节"
-            description="可以修改默认字段，也可以新增自定义字段。填写内容会保留到创建访谈提交时。"
+            description={
+              <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                <Text>
+                  系统预设字段只需要填写“字段值”，不需要再填字段标识、字段名称或字段类型。
+                </Text>
+                <Text>
+                  新增自定义字段时，请继续填写“字段标识、字段名称、字段类型、字段值”，这些内容会直接传给后端保存。
+                </Text>
+                <Text type="danger">
+                  如果自定义字段缺少字段标识或字段名称等必要信息，可能会导致访谈创建失败。
+                </Text>
+              </Space>
+            }
           />
           <Button type="dashed" icon={<PlusOutlined />} onClick={addInterviewDetailField} block>
             添加字段
@@ -1838,9 +1877,12 @@ export default function ProjectDetailClient({ projectId }: Props) {
                   style={{ borderRadius: 14, background: "rgba(59, 130, 246, 0.03)" }}
                 >
                   <Space style={{ width: "100%", justifyContent: "space-between" }} align="start">
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      字段 #{index + 1}
-                    </Text>
+                    <Space wrap size={6}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        字段 #{index + 1}
+                      </Text>
+                      {field.isPreset ? <Tag color="green">系统预设</Tag> : <Tag color="orange">自定义字段</Tag>}
+                    </Space>
                     <Button
                       size="small"
                       danger
@@ -1851,40 +1893,50 @@ export default function ProjectDetailClient({ projectId }: Props) {
                       删除
                     </Button>
                   </Space>
-                  <Row gutter={12}>
-                    <Col span={8}>
-                      <Form.Item label="字段标识" style={{ marginBottom: 12 }}>
-                        <Input
-                          value={field.key}
-                          placeholder="例如 doctor_level"
-                          onChange={(event) => updateInterviewDetailField(field.uid, { key: event.target.value })}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item label="字段名称" style={{ marginBottom: 12 }}>
-                        <Input
-                          value={field.label}
-                          placeholder="例如 医生级别"
-                          onChange={(event) =>
-                            updateInterviewDetailField(field.uid, { label: event.target.value })
-                          }
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item label="字段类型" style={{ marginBottom: 12 }}>
-                        <Select
-                          value={field.kind === "number" ? "number" : "text"}
-                          options={[
-                            { value: "text", label: "文本" },
-                            { value: "number", label: "数字" },
-                          ]}
-                          onChange={(value) => updateInterviewDetailField(field.uid, { kind: value as "text" | "number" })}
-                        />
-                      </Form.Item>
-                    </Col>
-                  </Row>
+                  {field.isPreset ? (
+                    <Space direction="vertical" size="small" style={{ width: "100%" }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        预设字段：{field.label || field.key || "未命名字段"}。这里只需要填写字段值。
+                      </Text>
+                    </Space>
+                  ) : (
+                    <Row gutter={12}>
+                      <Col span={8}>
+                        <Form.Item label="字段标识" style={{ marginBottom: 12 }}>
+                          <Input
+                            value={field.key}
+                            placeholder="例如 doctor_level"
+                            onChange={(event) => updateInterviewDetailField(field.uid, { key: event.target.value })}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item label="字段名称" style={{ marginBottom: 12 }}>
+                          <Input
+                            value={field.label}
+                            placeholder="例如 医生级别"
+                            onChange={(event) =>
+                              updateInterviewDetailField(field.uid, { label: event.target.value })
+                            }
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item label="字段类型" style={{ marginBottom: 12 }}>
+                          <Select
+                            value={field.kind === "number" ? "number" : "text"}
+                            options={[
+                              { value: "text", label: "文本" },
+                              { value: "number", label: "数字" },
+                            ]}
+                            onChange={(value) =>
+                              updateInterviewDetailField(field.uid, { kind: value as "text" | "number" })
+                            }
+                          />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  )}
                   <Form.Item label="字段值" style={{ marginBottom: 0 }}>
                     {field.kind === "number" ? (
                       <InputNumber
