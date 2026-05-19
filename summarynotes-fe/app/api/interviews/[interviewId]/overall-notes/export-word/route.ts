@@ -51,3 +51,54 @@ export async function GET(
     headers,
   });
 }
+
+export async function POST(
+  request: NextRequest,
+  context: { params: { interviewId: string } | Promise<{ interviewId: string }> },
+) {
+  const { interviewId } = await Promise.resolve(context.params);
+  const interviewIdNum = Number(interviewId);
+  if (!Number.isFinite(interviewIdNum) || interviewIdNum <= 0) {
+    return NextResponse.json({ detail: "invalid interview id" }, { status: 400 });
+  }
+
+  const backendBaseUrl = getBackendBaseUrl();
+  const upstreamUrl = `${backendBaseUrl}/api/interviews/${interviewIdNum}/overall-notes/export-word`;
+  const formData = await request.formData();
+  const upstreamFormData = new FormData();
+  for (const [key, value] of formData.entries()) {
+    upstreamFormData.append(key, value);
+  }
+
+  const upstream = await fetch(upstreamUrl, {
+    method: "POST",
+    headers: {
+      cookie: request.headers.get("cookie") || "",
+    },
+    body: upstreamFormData,
+    cache: "no-store",
+  });
+
+  const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+  const contentDisposition = upstream.headers.get("content-disposition");
+  if (!upstream.ok) {
+    const detailText = await upstream.text().catch(() => "");
+    return new NextResponse(detailText || "export overall notes word failed", {
+      status: upstream.status,
+      headers: {
+        "content-type": contentType,
+      },
+    });
+  }
+
+  const body = await upstream.arrayBuffer();
+  const headers = new Headers();
+  headers.set("content-type", contentType);
+  if (contentDisposition) {
+    headers.set("content-disposition", contentDisposition);
+  }
+  return new NextResponse(body, {
+    status: upstream.status,
+    headers,
+  });
+}

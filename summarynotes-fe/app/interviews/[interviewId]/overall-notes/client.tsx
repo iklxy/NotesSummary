@@ -7,13 +7,18 @@ import { Alert, Button, Card, Layout, message, Space, Spin, Tag, Typography } fr
 import { ArrowLeftOutlined, DownloadOutlined, EditOutlined, ReloadOutlined } from "@ant-design/icons";
 import MarkdownContent from "../../../../components/MarkdownContent";
 import {
-  exportInterviewOverallNotesWord,
   getInterviewOverallNotes,
   refreshInterviewCards,
   refreshInterviewKbqNotes,
   refreshInterviewMinutes,
 } from "../../../../lib/interviewsApi";
+import {
+  captureOverallNotesCardsPng,
+  exportOverallNotesWordWithImage,
+  OVERALL_NOTES_CARD_EXPORT_ID,
+} from "../../../../lib/overallNotesExport";
 import type { InterviewOverallNotesResponse, InterviewCardItem } from "../../../../lib/types";
+import OverallNotesCardsSection from "../../../../components/OverallNotesCardsSection";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -368,7 +373,8 @@ export default function OverallNotesClient({ interviewId }: Props) {
   const handleExportOverallNotesWord = async () => {
     try {
       setExporting(true);
-      const resp = await exportInterviewOverallNotesWord(interviewId);
+      const cardImage = await captureOverallNotesCardsPng();
+      const resp = await exportOverallNotesWordWithImage(interviewId, cardImage);
       const url = URL.createObjectURL(resp.blob);
       const link = document.createElement("a");
       link.href = url;
@@ -659,6 +665,13 @@ export default function OverallNotesClient({ interviewId }: Props) {
           )}
         </div>
       </Content>
+      {data?.cards ? (
+        <div className="summarynotes-card-export-stage" aria-hidden="true">
+          <div className="summarynotes-card-export-shell">
+            <OverallNotesCardsSection items={data.cards.items} containerId={OVERALL_NOTES_CARD_EXPORT_ID} />
+          </div>
+        </div>
+      ) : null}
     </Layout>
   );
 }

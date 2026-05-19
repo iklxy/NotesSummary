@@ -26,7 +26,6 @@ import {
   SaveOutlined,
 } from "@ant-design/icons";
 import {
-  exportInterviewOverallNotesWord,
   createInterviewCardsItem,
   deleteInterviewCardsItem,
   getInterviewOverallNotes,
@@ -35,11 +34,17 @@ import {
   updateInterviewCardsItem,
   updateInterviewOverallNotesMinutes,
 } from "../../../../../lib/interviewsApi";
+import {
+  captureOverallNotesCardsPng,
+  exportOverallNotesWordWithImage,
+  OVERALL_NOTES_CARD_EXPORT_ID,
+} from "../../../../../lib/overallNotesExport";
 import type {
   InterviewCardItem,
   InterviewMinutesResponse,
   InterviewOverallNotesResponse,
 } from "../../../../../lib/types";
+import OverallNotesCardsSection from "../../../../../components/OverallNotesCardsSection";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -223,6 +228,22 @@ function buildCardJson(draft: CardDraft): Record<string, unknown> {
   };
 }
 
+function buildExportCardItems(drafts: CardDraft[], interviewId: number, projectId: number): InterviewCardItem[] {
+  return drafts.map((draft, index) => ({
+    id: draft.id ?? draft.card_order ?? index + 1,
+    cards_id: draft.cards_id ?? 0,
+    project_id: projectId,
+    project_interview_id: interviewId,
+    card_order: draft.card_order,
+    card_title: draft.card_title.trim() || (draft.card_order === 0 ? "全文总览" : `卡片 ${draft.card_order}`),
+    card_summary: draft.card_summary.trim(),
+    generated_json: draft.generated_json,
+    final_json: draft.final_json ?? buildCardJson(draft),
+    review_status: draft.review_status,
+    review_comment: draft.review_comment,
+  }));
+}
+
 export default function OverallNotesEditClient({ interviewId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<InterviewOverallNotesResponse | null>(null);
@@ -262,7 +283,8 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
   const handleExportOverallNotesWord = async () => {
     try {
       setExporting(true);
-      const resp = await exportInterviewOverallNotesWord(interviewId);
+      const cardImage = await captureOverallNotesCardsPng();
+      const resp = await exportOverallNotesWordWithImage(interviewId, cardImage);
       const url = URL.createObjectURL(resp.blob);
       const link = document.createElement("a");
       link.href = url;
@@ -413,6 +435,8 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
       message.error(e instanceof Error ? e.message : "保存智能纪要失败");
     }
   };
+
+  const exportCardItems = buildExportCardItems(cardsDraft, interviewId, data?.project_id ?? 0);
 
   return (
     <Layout className="min-h-screen summarynotes-notes-page">
@@ -657,6 +681,11 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
           ) : null}
         </div>
       </Content>
+      <div className="summarynotes-card-export-stage" aria-hidden="true">
+        <div className="summarynotes-card-export-shell">
+          <OverallNotesCardsSection items={exportCardItems} containerId={OVERALL_NOTES_CARD_EXPORT_ID} />
+        </div>
+      </div>
     </Layout>
   );
 }

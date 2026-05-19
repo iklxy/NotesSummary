@@ -3,6 +3,7 @@ import mimetypes
 import shutil
 import json
 import re
+import struct
 import traceback
 from difflib import SequenceMatcher
 from datetime import datetime
@@ -11,7 +12,7 @@ from typing import Any, Dict, List
 
 import os
 import requests
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from api.auth import require_current_user_id
@@ -702,6 +703,20 @@ def _build_overall_notes_card_items(cards_payload: Dict[str, Any] | None) -> Lis
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
+
+
+def _extract_png_dimensions(image_bytes: bytes) -> tuple[int, int]:
+    """
+    读取 PNG 图片的宽高。
+    """
+    if len(image_bytes) < 24:
+        raise HTTPException(status_code=400, detail="card_image is too small")
+    if image_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+        raise HTTPException(status_code=400, detail="card_image must be a PNG image")
+    width, height = struct.unpack(">II", image_bytes[16:24])
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="invalid card_image size")
+    return int(width), int(height)
 
 
 def _build_interview_notes_response(
@@ -2076,14 +2091,61 @@ def export_interview_overall_notes_word(
     C. 智能纪要
     """
     log_interview("NOTES", interview_id, "overall-notes export-word start")
+    return _build_overall_notes_word_response(interview_id, current_user_id)
+
+
+@router.post(
+    "/{interview_id}/overall-notes/export-word",
+)
+async def export_interview_overall_notes_word_from_image(
+    interview_id: int,
+    card_image: UploadFile = File(...),
+    current_user_id: int = Depends(require_current_user_id),
+) -> Response:
+    """
+    接收前端生成的卡片 PNG，并导出全文 Notes 为 Word。
+    """
+    log_interview("NOTES", interview_id, "overall-notes export-word-from-image start")
+    image_bytes = await card_image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="card_image is empty")
+    width, height = _extract_png_dimensions(image_bytes)
+    image_name = card_image.filename or f"overall_notes_cards_{interview_id}.png"
+    return _build_overall_notes_word_response(
+        interview_id,
+        current_user_id,
+        card_items_override=[
+            {
+                "data": image_bytes,
+                "width": width,
+                "height": height,
+                "name": image_name,
+                "rel_id": "rIdCards1",
+            }
+        ],
+    )
+
+
+def _build_overall_notes_word_response(
+    interview_id: int,
+    current_user_id: int,
+    *,
+    card_items_override: List[Dict[str, Any]] | None = None,
+) -> Response:
+    """
+    组装全文 Notes Word 文档并返回 Response。
+    """
     try:
         payload = _resolve_overall_notes_payload(interview_id, current_user_id)
         interview = payload.pop("interview", None) or _get_owned_interview_or_404(interview_id, current_user_id)
         project_row = fetch_project_by_id(int(interview.get("parse_project_id") or 0), current_user_id)
 
         note_content = str(payload.get("note_content") or "")
-        cards_payload = payload.get("cards") or {}
-        card_items = _build_overall_notes_card_items(cards_payload if isinstance(cards_payload, dict) else None)
+        if card_items_override is not None:
+            card_items = card_items_override
+        else:
+            cards_payload = payload.get("cards") or {}
+            card_items = _build_overall_notes_card_items(cards_payload if isinstance(cards_payload, dict) else None)
         kbq_items = []
         kbq_payload = payload.get("kbq_notes") or {}
         if isinstance(kbq_payload, dict):

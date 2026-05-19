@@ -781,7 +781,7 @@ def build_overall_notes_docx_bytes(
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
     ]
     for index, _item in enumerate(image_items, start=1):
-        rel_id = f"rId{index}"
+        rel_id = str(_item.get("rel_id") or f"rId{index}")
         document_rels.append(
             f'<Relationship Id="{rel_id}" '
             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
