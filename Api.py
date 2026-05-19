@@ -29,7 +29,7 @@ from db import fetch_project_by_id
 
 
 app = FastAPI()
-TRANSCRIBE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="transcribe")
+TRANSCRIBE_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="transcribe")
 
 
 def _load_interview_or_404(interview_id: int) -> Dict[str, Any]:
