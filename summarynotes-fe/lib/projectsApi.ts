@@ -17,6 +17,32 @@ interface UpdateProjectPayload {
   name: string;
 }
 
+async function submitProjectGuideUpload(
+  url: string,
+  guideFiles: File[],
+): Promise<Project> {
+  const formData = new FormData();
+  guideFiles.forEach((file) => {
+    formData.append("guide_file", file);
+  });
+  const baseUrl = getBaseUrl().replace(/\/$/, "");
+  const resp = await fetch(`${baseUrl}${url}`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`guide upload failed: ${JSON.stringify(detail)}`);
+  }
+  return (await resp.json()) as Project;
+}
+
 export async function createProject(payload: CreateProjectPayload): Promise<Project> {
   const formData = new FormData();
   formData.append("name", payload.name);
@@ -56,6 +82,13 @@ export function updateProject(projectId: number, payload: UpdateProjectPayload):
     method: "PUT",
     body: JSON.stringify(payload),
   });
+}
+
+export function uploadProjectGuide(
+  projectId: number,
+  guideFiles: File[],
+): Promise<Project> {
+  return submitProjectGuideUpload(`/api/projects/${projectId}/guide`, guideFiles);
 }
 
 export function deleteProject(projectId: number): Promise<DeleteProjectResponse> {

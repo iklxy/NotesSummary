@@ -45,7 +45,7 @@ import {
   updateProjectQuestionnaireHotwords,
 } from "../../../lib/projectQuestionnairesApi";
 import { updateProjectKeyBqCurrent } from "../../../lib/projectKeyBqApi";
-import { getProjectDetail, updateProject } from "../../../lib/projectsApi";
+import { getProjectDetail, updateProject, uploadProjectGuide } from "../../../lib/projectsApi";
 import type {
   CreatedInterviewResponse,
   InterviewDetailFieldDefinition,
@@ -553,6 +553,8 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const [keyBqForm] = Form.useForm<KeyBqFormValues>();
 
   const [guideResultVisible, setGuideResultVisible] = useState(false);
+  const [guideUploadFileList, setGuideUploadFileList] = useState<UploadFile[]>([]);
+  const [guideUploading, setGuideUploading] = useState(false);
   const [projectNameModalOpen, setProjectNameModalOpen] = useState(false);
   const [projectNameSaving, setProjectNameSaving] = useState(false);
   const [projectNameForm] = Form.useForm<{ name: string }>();
@@ -597,6 +599,16 @@ export default function ProjectDetailClient({ projectId }: Props) {
   const guideSummaryText = useMemo(() => project?.guide_summary_text ?? "", [project]);
   const guideExtractedText = useMemo(() => project?.guide_extracted_text ?? "", [project]);
   const guideFiles = useMemo(() => project?.guide_files_json ?? [], [project]);
+  const guideFileNames = useMemo(
+    () =>
+      guideFiles
+        .map((file, index) => {
+          const name = String(file.original_name || "").trim();
+          return name || `指南文件 ${index + 1}`;
+        })
+        .filter((name) => Boolean(name)),
+    [guideFiles],
+  );
 
   const openProjectNameModal = () => {
     if (!project) {
@@ -774,7 +786,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
       formData.append("name", String(values.name || "").trim());
       formData.append("object_type", objectType);
       formData.append("role_type", objectType);
-      if (roleName) {
+      if (objectType === "custom" && roleName) {
         formData.append("role_name", roleName);
       }
       formData.append("file", file as File);
@@ -856,6 +868,37 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
   const openGuideResultModal = () => {
     setGuideResultVisible(true);
+  };
+
+  const handleGuideUpload = async () => {
+    const guideFiles = guideUploadFileList
+      .map((item) => item.originFileObj as File | null | undefined)
+      .filter((file): file is File => Boolean(file));
+    if (guideFiles.length === 0) {
+      message.warning("请先选择指南文件");
+      return;
+    }
+    try {
+      setGuideUploading(true);
+      const updated = await uploadProjectGuide(projectId, guideFiles);
+      setProjectDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              project: {
+                ...prev.project,
+                ...updated,
+              },
+            }
+          : prev,
+      );
+      setGuideUploadFileList([]);
+      message.success("指南已上传，正在异步学习");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "上传指南失败");
+    } finally {
+      setGuideUploading(false);
+    }
   };
 
   const addInterviewDetailField = () => {
@@ -1112,10 +1155,10 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         项目指南学习
                       </Title>
                       <Text type="secondary">
-                        上传 PDF 指南后，系统会异步处理。这里仅展示当前处理状态，详情可点击右侧按钮查看。
+                        上传 PDF / DOCX / MD / XLSX 指南后，系统会异步处理。这里可以随时补传指南并查看当前处理状态。
                       </Text>
                     </div>
-                    <Space>
+                    <Space wrap>
                       <Button onClick={openGuideResultModal} disabled={!guideSummaryText && !guideExtractedText}>
                         查看学习结果
                       </Button>
@@ -1128,6 +1171,24 @@ export default function ProjectDetailClient({ projectId }: Props) {
                       {project.guide_generated_at ? (
                         <Tag color="green">完成时间：{formatDate(project.guide_generated_at)}</Tag>
                       ) : null}
+                    </Space>
+                    <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        已学习文件
+                      </Text>
+                      {guideFileNames.length > 0 ? (
+                        <Space wrap size={[8, 8]}>
+                          {guideFileNames.map((name, index) => (
+                            <Tag key={`${name}-${index}`} color="cyan">
+                              {name}
+                            </Tag>
+                          ))}
+                        </Space>
+                      ) : (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          目前还没有上传指南文件。
+                        </Text>
+                      )}
                     </Space>
                     {project.guide_error_message ? (
                       <Alert
@@ -1145,6 +1206,45 @@ export default function ProjectDetailClient({ projectId }: Props) {
                         description="学习完成后，你可以在这里查看总结结果；创建访谈时建议先等待学习结束。"
                       />
                     ) : null}
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={project.guide_file_name ? "重新上传指南" : "上传指南并学习"}
+                      description={
+                        project.guide_file_name
+                          ? "如果项目创建时没有上传指南，或者需要更新指南内容，可以在这里重新上传。上传后会自动触发指南学习。"
+                          : "如果项目创建时没有上传指南，可以现在在项目详情页补传，上传后会自动触发指南学习。"
+                      }
+                    />
+                    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                      <Upload
+                        beforeUpload={() => false}
+                        multiple
+                        fileList={guideUploadFileList}
+                        onChange={({ fileList }) => setGuideUploadFileList(fileList)}
+                        accept=".pdf,.docx,.md,.xlsx"
+                      >
+                        <Button icon={<UploadOutlined />}>选择指南文件</Button>
+                      </Upload>
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          onClick={() => void handleGuideUpload()}
+                          loading={guideUploading}
+                          disabled={guideUploadFileList.length === 0}
+                        >
+                          上传并学习
+                        </Button>
+                        {guideUploadFileList.length > 0 ? (
+                          <Button onClick={() => setGuideUploadFileList([])} disabled={guideUploading}>
+                            清空已选文件
+                          </Button>
+                        ) : null}
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        支持一次上传多个 pdf、docx、md 或 xlsx 文件。若当前已有指南，新上传内容会覆盖当前学习结果。
+                      </Text>
+                    </Space>
                   </Space>
                 </Card>
 

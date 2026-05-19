@@ -698,6 +698,42 @@ def create_project(
     return _normalize_project_row(project_row)
 
 
+@router.post("/{project_id}/guide", response_model=Dict[str, Any])
+def upload_project_guide(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    current_user_id: int = Depends(require_current_user_id),
+    guide_file: Optional[list[UploadFile]] = File(None),
+) -> Dict[str, Any]:
+    """
+    为已有项目上传指南，并触发后续学习流程。
+    """
+    _get_owned_project_or_404(project_id, current_user_id)
+    guide_files = [file for file in (guide_file or []) if file is not None and file.filename]
+    if not guide_files:
+        raise HTTPException(status_code=400, detail="请至少上传一个指南文件")
+
+    try:
+        guide_file_name, guide_file_path, guide_files_json = _save_uploaded_project_guide_files(project_id, guide_files)
+        update_project_guide(
+            project_id,
+            guide_file_name=guide_file_name,
+            guide_file_path=guide_file_path,
+            file_type="mixed" if len(guide_files) > 1 else _detect_guide_file_type(guide_files[0].filename or ""),
+            guide_files_json=guide_files_json,
+            status="queued",
+            error_message=None,
+        )
+        background_tasks.add_task(process_project_guide, project_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"upload project guide failed: {e}")
+
+    project_row = fetch_project_by_id(project_id, current_user_id)
+    if not project_row:
+        raise HTTPException(status_code=500, detail="upload project guide failed")
+    return _normalize_project_row(project_row)
+
+
 @router.put("/{project_id}", response_model=Dict[str, Any])
 def update_project_detail(
     project_id: int,

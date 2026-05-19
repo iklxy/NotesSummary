@@ -233,6 +233,9 @@ export default function Home() {
             <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: "block" }}>
               支持一次上传多个 pdf、docx、md 或 xlsx 文件，上传后会异步做汇总学习，并自动生成项目背景说明。
             </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: "block" }}>
+              这里不是必填项；如果现在不上传，也可以在创建项目后到项目详情页继续上传指南并自动学习。
+            </Typography.Text>
           </Form.Item>
         </Form>
       </Modal>
