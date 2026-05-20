@@ -995,6 +995,25 @@ def _build_transcript_export_filename(interview_name: str | None, interview_id: 
     return f"{cleaned}_全文trans.docx"
 
 
+def _build_transcript_speaker_label(summary_id: Any) -> str:
+    """
+    根据 summary_id 生成导出 trans 的说话人标签。
+
+    参数:
+        summary_id: summary 行的主键。
+
+    返回:
+        说话人1 / 说话人2。
+    """
+    try:
+        sid = int(summary_id)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid <= 0:
+        return "说话人1"
+    return "说话人1" if sid % 2 == 1 else "说话人2"
+
+
 def _build_overall_notes_export_filename(interview_name: str | None, interview_id: int) -> str:
     """
     生成全文 Notes 的导出文件名。
@@ -2513,7 +2532,7 @@ def export_interview_trans_word(
         for row in summary_rows:
             transcript_items.append(
                 {
-                    "speaker": row.get("speaker"),
+                    "speaker": _build_transcript_speaker_label(row.get("id")),
                     "timestamp": row.get("timestamp"),
                     "text": row.get("text"),
                 }

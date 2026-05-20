@@ -209,6 +209,25 @@ class DbAccess:
         finally:
             conn.close()
 
+    @staticmethod
+    def _normalize_json_value(value: Any) -> Any:
+        """
+        将可序列化字段规范化为适合写入数据库的值。
+
+        参数:
+            value: 原始字段值，允许为 dict、list、datetime 或普通标量。
+
+        返回:
+            可直接写入 MySQL 的值。
+        """
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        if hasattr(value, "strftime"):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        return value
+
     # ------------------------------------------------------------------
     # 项目与访谈读取
     # ------------------------------------------------------------------
@@ -668,6 +687,192 @@ class DbAccess:
             WHERE id = %s
         """
         cls._execute_write(sql, (note_content, interview_id))
+
+    # ------------------------------------------------------------------
+    # 工作流任务状态
+    # ------------------------------------------------------------------
+    @classmethod
+    def get_workflow_job_by_interview(
+        cls,
+        interview_id: int,
+        workflow_type: str = "transcription",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        根据访谈 ID 读取对应的工作流任务。
+
+        参数:
+            interview_id: 访谈主键 ID。
+            workflow_type: 工作流类型，默认 `transcription`。
+
+        返回:
+            单条任务记录；若不存在则返回 `None`。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                project_interview_id,
+                workflow_type,
+                status,
+                stage,
+                object_key,
+                audio_url,
+                volc_task_id,
+                task_submitted_at,
+                next_poll_at,
+                last_polled_at,
+                task_expires_at,
+                retry_count,
+                poll_count,
+                lease_owner,
+                lease_expires_at,
+                checkpoint_json,
+                asr_result_json,
+                cleaned_json,
+                error_stage,
+                error_message,
+                error_traceback,
+                started_at,
+                finished_at,
+                created_at,
+                updated_at
+            FROM bh_interview_workflow_jobs
+            WHERE project_interview_id = %s
+              AND workflow_type = %s
+            LIMIT 1
+        """
+        return cls._fetch_one(sql, (interview_id, workflow_type))
+
+    @classmethod
+    def list_recoverable_workflow_jobs(
+        cls,
+        workflow_type: str = "transcription",
+        statuses: Optional[Sequence[str]] = None,
+        stages: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        列出可恢复的工作流任务，供启动时恢复扫描使用。
+
+        参数:
+            workflow_type: 工作流类型，默认 `transcription`。
+            statuses: 可恢复状态集合；为空时使用默认值。
+            stages: 可恢复阶段集合；为空时使用默认值。
+
+        返回:
+            满足恢复条件的任务列表。
+        """
+        status_list = list(statuses or ("queued", "running", "waiting_asr", "recovering"))
+        stage_list = list(stages or ("created", "audio_ready", "asr_submitting", "asr_polling"))
+        if not status_list or not stage_list:
+            return []
+
+        status_placeholders = ",".join(["%s"] * len(status_list))
+        stage_placeholders = ",".join(["%s"] * len(stage_list))
+        sql = f"""
+            SELECT
+                id,
+                project_id,
+                project_interview_id,
+                workflow_type,
+                status,
+                stage,
+                object_key,
+                audio_url,
+                volc_task_id,
+                task_submitted_at,
+                next_poll_at,
+                last_polled_at,
+                task_expires_at,
+                retry_count,
+                poll_count,
+                lease_owner,
+                lease_expires_at,
+                checkpoint_json,
+                asr_result_json,
+                cleaned_json,
+                error_stage,
+                error_message,
+                error_traceback,
+                started_at,
+                finished_at,
+                created_at,
+                updated_at
+            FROM bh_interview_workflow_jobs
+            WHERE workflow_type = %s
+              AND status IN ({status_placeholders})
+              AND stage IN ({stage_placeholders})
+            ORDER BY updated_at ASC, id ASC
+        """
+        params: List[Any] = [workflow_type, *status_list, *stage_list]
+        return cls._fetch_all(sql, params)
+
+    @classmethod
+    def upsert_workflow_job(
+        cls,
+        project_id: int,
+        interview_id: int,
+        workflow_type: str = "transcription",
+        **fields: Any,
+    ) -> None:
+        """
+        插入或更新工作流任务记录。
+
+        参数:
+            project_id: 项目 ID。
+            interview_id: 访谈 ID。
+            workflow_type: 工作流类型。
+            **fields: 允许写入的任务字段。
+
+        返回:
+            无返回值；失败时抛出异常。
+        """
+        allowed_fields = [
+            "status",
+            "stage",
+            "object_key",
+            "audio_url",
+            "volc_task_id",
+            "task_submitted_at",
+            "next_poll_at",
+            "last_polled_at",
+            "task_expires_at",
+            "retry_count",
+            "poll_count",
+            "lease_owner",
+            "lease_expires_at",
+            "checkpoint_json",
+            "asr_result_json",
+            "cleaned_json",
+            "error_stage",
+            "error_message",
+            "error_traceback",
+            "started_at",
+            "finished_at",
+        ]
+
+        payload: Dict[str, Any] = {
+            "project_id": project_id,
+            "project_interview_id": interview_id,
+            "workflow_type": workflow_type,
+        }
+        for field in allowed_fields:
+            if field in fields:
+                payload[field] = cls._normalize_json_value(fields[field])
+
+        columns = list(payload.keys())
+        placeholders = ", ".join(["%s"] * len(columns))
+        update_columns = [column for column in columns if column not in {"project_id", "project_interview_id", "workflow_type"}]
+        update_clause = ", ".join(f"{column} = VALUES({column})" for column in update_columns)
+        sql = f"""
+            INSERT INTO bh_interview_workflow_jobs
+                ({", ".join(columns)})
+            VALUES
+                ({placeholders})
+            ON DUPLICATE KEY UPDATE
+                {update_clause}
+        """
+        params = [payload[column] for column in columns]
+        cls._execute_write(sql, params)
 
     @classmethod
     def upsert_key_bq_rows_for_interview(

@@ -857,8 +857,11 @@ def _build_document_xml(
         paragraphs.append(_w_blank_paragraph())
 
     for item in transcript_items:
+        speaker = _clean_text(item.get("speaker"))
         timestamp = _format_timestamp_mmss(item.get("timestamp"))
         text = _clean_text(item.get("text"))
+        if speaker:
+            paragraphs.append(_w_paragraph(speaker, bold=True, size=22))
         if timestamp:
             paragraphs.append(_w_paragraph(timestamp, bold=True, size=22))
         if text:

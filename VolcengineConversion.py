@@ -421,7 +421,15 @@ def _is_failed_code(code: Any) -> bool:
 # ----------------------------------------------------------------------
 # 对外入口
 # ----------------------------------------------------------------------
-def run_asr(audio_url: str) -> Dict[str, Any]:
+def run_asr(
+    audio_url: str,
+    task_id: str | None = None,
+    *,
+    on_task_submitted: Any | None = None,
+    on_poll: Any | None = None,
+    poll_interval_seconds: int = 2,
+    max_wait_seconds: int = 3600,
+) -> Dict[str, Any]:
     """
     基于给定音频 URL 执行完整的异步语音识别流程。
 
@@ -434,15 +442,20 @@ def run_asr(audio_url: str) -> Dict[str, Any]:
             - speakers: 按连续说话人聚合后的发言列表
 
         当识别失败或轮询超时时，返回空结果：
-            - full_text = ""
-            - speakers = []
+            - success = False
+            - state = "failed" 或 "pending"
     """
-    task_id = submit_task(audio_url)
+    if task_id is None:
+        task_id = submit_task(audio_url)
+        if on_task_submitted is not None:
+            on_task_submitted(task_id)
     started_at = time.time()
 
     while True:
-        time.sleep(2)
+        time.sleep(poll_interval_seconds)
         response = query_task(task_id)
+        if on_poll is not None:
+            on_poll(response)
         response_payload = response.get("resp", {})
         code = response_payload.get("code")
 
@@ -453,12 +466,29 @@ def run_asr(audio_url: str) -> Dict[str, Any]:
                 print("识别到整场文本内容")
             else:
                 print("未在返回结果中找到文本内容")
-            return result
+            return {
+                "success": True,
+                "state": "done",
+                "task_id": task_id,
+                "asr_result": result,
+            }
 
         if _is_failed_code(code):
             print("识别失败，code=", code)
-            return {"full_text": "", "speakers": []}
+            return {
+                "success": False,
+                "state": "failed",
+                "task_id": task_id,
+                "recoverable": False,
+                "message": f"识别失败，code={code}",
+            }
 
-        if time.time() - started_at > 3600:
-            print("等待超时（>3600s）")
-            return {"full_text": "", "speakers": []}
+        if time.time() - started_at > max_wait_seconds:
+            print(f"等待超时（>{max_wait_seconds}s）")
+            return {
+                "success": False,
+                "state": "pending",
+                "task_id": task_id,
+                "recoverable": True,
+                "message": f"等待超时（>{max_wait_seconds}s）",
+            }

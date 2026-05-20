@@ -51,6 +51,26 @@ def _load_interview_or_404(interview_id: int) -> Dict[str, Any]:
     return interview
 
 
+def _run_transcribe_workflow(interview_id: int, source: str) -> None:
+    """
+    在线程池中执行完整工作流。
+
+    参数:
+        interview_id: 访谈主键 ID。
+        source: 触发来源，便于日志区分 api / resume。
+    """
+    try:
+        log_interview("TRANSCRIBE", interview_id, f"job start source={source}")
+        result = run_workflow(interview_id)
+        log_interview("TRANSCRIBE", interview_id, f"job done: {json.dumps(result, ensure_ascii=False)}")
+    except Exception as e:
+        try:
+            DbAccess.update_interview_status(interview_id, 3)
+        except Exception:
+            pass
+        log_interview("TRANSCRIBE", interview_id, f"job failed: {e}\n{traceback.format_exc()}")
+
+
 def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
     """
     将转录工作流提交到后台线程池，并立即返回受理结果。
@@ -68,29 +88,8 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
         HTTPException: 当线程池提交失败时抛出 500。
     """
 
-    def _job() -> None:
-        """
-        在线程池中实际执行完整工作流，并在异常时回写失败状态。
-
-        参数:
-            无。闭包内部直接使用外层 `interview_id`。
-
-        返回:
-            无返回值。执行结果仅用于日志输出。
-        """
-        try:
-            log_interview("TRANSCRIBE", interview_id, "job start")
-            result = run_workflow(interview_id)
-            log_interview("TRANSCRIBE", interview_id, f"job done: {json.dumps(result, ensure_ascii=False)}")
-        except Exception as e:
-            try:
-                DbAccess.update_interview_status(interview_id, 3)
-            except Exception:
-                pass
-            log_interview("TRANSCRIBE", interview_id, f"job failed: {e}\n{traceback.format_exc()}")
-
     try:
-        TRANSCRIBE_EXECUTOR.submit(_job)
+        TRANSCRIBE_EXECUTOR.submit(_run_transcribe_workflow, interview_id, "api")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"submit transcribe job failed: {e}")
 
@@ -99,6 +98,43 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
         "queued": True,
         "interview_id": interview_id,
     }
+
+
+def _resume_pending_transcribe_jobs() -> None:
+    """
+    服务启动时恢复仍停留在 ASR 阶段的工作流任务。
+    """
+    try:
+        jobs = DbAccess.list_recoverable_workflow_jobs()
+    except Exception as e:
+        log_interview("TRANSCRIBE", None, f"startup recovery scan failed: {e}")
+        return
+
+    if not jobs:
+        log_interview("TRANSCRIBE", None, "startup recovery scan found no pending ASR jobs")
+        return
+
+    for job in jobs:
+        interview_id = job.get("project_interview_id")
+        if interview_id is None:
+            continue
+        try:
+            TRANSCRIBE_EXECUTOR.submit(_run_transcribe_workflow, int(interview_id), "resume")
+            log_interview(
+                "TRANSCRIBE",
+                int(interview_id),
+                f"startup recovery queued stage={job.get('stage')} status={job.get('status')}",
+            )
+        except Exception as e:
+            log_interview("TRANSCRIBE", int(interview_id), f"startup recovery queue failed: {e}")
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """
+    FastAPI 启动后恢复未完成的 ASR 任务。
+    """
+    _resume_pending_transcribe_jobs()
 
 
 def _load_interview_notes_rows(interview_id: int) -> List[Dict[str, Any]]:

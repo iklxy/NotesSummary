@@ -3,7 +3,10 @@
 
 
 import json
+import os
+import socket
 import traceback
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 from VolcUpload import upload_local_file, build_object_key, build_local_file_path, get_tos_client, tos
@@ -18,6 +21,80 @@ from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from MinutesWorkflow import generate_minutes_for_interview
 from ProjectContext import load_project_context_by_id
 from config import config
+
+
+WORKFLOW_JOB_TYPE = "transcription"
+WORKFLOW_LEASE_SECONDS = 45 * 60
+WORKFLOW_ASR_TASK_EXPIRES_HOURS = 24
+
+
+def _workflow_owner() -> str:
+    """
+    生成当前 worker 的标识，用于工作流租约与恢复扫描。
+    """
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _now() -> datetime:
+    """
+    返回当前本地时间。
+    """
+    return datetime.now()
+
+
+def _parse_json_maybe(value: Any) -> Any:
+    """
+    尽量将数据库中的 JSON 字符串还原成 Python 对象。
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return value
+        try:
+            return json.loads(text)
+        except Exception:
+            return value
+    return value
+
+
+def _build_asr_checkpoint(
+    *,
+    interview_id: int,
+    project_id: int | None,
+    object_key: str | None,
+    audio_url: str | None,
+    task_id: str | None = None,
+    note: str | None = None,
+    retry_count: int | None = None,
+    poll_count: int | None = None,
+) -> Dict[str, Any]:
+    """
+    构造 ASR 阶段的恢复上下文。
+    """
+    checkpoint: Dict[str, Any] = {
+        "interview_id": interview_id,
+        "project_id": project_id,
+        "object_key": object_key,
+        "audio_url": audio_url,
+    }
+    if task_id is not None:
+        checkpoint["task_id"] = task_id
+    if note is not None:
+        checkpoint["note"] = note
+    if retry_count is not None:
+        checkpoint["retry_count"] = retry_count
+    if poll_count is not None:
+        checkpoint["poll_count"] = poll_count
+    return checkpoint
+
+
+def _task_expires_at(submitted_at: datetime) -> datetime:
+    """
+    按当前约定生成 ASR 任务的可恢复截止时间。
+    """
+    return submitted_at + timedelta(hours=WORKFLOW_ASR_TASK_EXPIRES_HOURS)
 
 
 def _workflow_log(interview_id: int | None, stage: str, message: str) -> None:
@@ -64,6 +141,24 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
                     file_id=object_key,
                     audio_url=audio_url,
                 )
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="audio_ready",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    checkpoint_json=_build_asr_checkpoint(
+                        interview_id=interview_id,
+                        project_id=int(project_id),
+                        object_key=object_key,
+                        audio_url=audio_url,
+                        note="audio uploaded",
+                    ),
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                )
             except Exception as e:
                 _workflow_log(interview_id, "upload", f"failed update after upload error={e}")
                 return {"success": False, "message": f"update after upload failed: {e}"}
@@ -78,6 +173,27 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
                 expires=config.TOS_URL_EXPIRE_SECONDS,
             )
             audio_url = pre.signed_url
+            try:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="audio_ready",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    checkpoint_json=_build_asr_checkpoint(
+                        interview_id=interview_id,
+                        project_id=int(project_id),
+                        object_key=object_key,
+                        audio_url=audio_url,
+                        note="audio reused",
+                    ),
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                )
+            except Exception as e:
+                _workflow_log(interview_id, "upload", f"failed update existing audio job error={e}")
             _workflow_log(interview_id, "upload", f"done existing_object_key={object_key}")
             return {"success": True, "object_key": object_key, "audio_url": audio_url}
     except Exception as e:
@@ -85,29 +201,331 @@ def step_upload_interview_audio(interview_id: int) -> Dict[str, Any]:
         return {"success": False, "message": f"upload step unexpected error: {e}"}
 
 
-def step_transcribe(audio_url: str, interview_id: int | None = None) -> Dict[str, Any]:
+def step_transcribe(
+    audio_url: str,
+    interview_id: int | None = None,
+    project_id: int | None = None,
+    object_key: str | None = None,
+) -> Dict[str, Any]:
     """
     步骤 2：调用 ASR，将云上音频转写为 {full_text, speakers[]} 结构。
     """
     try:
         _workflow_log(interview_id, "transcribe", f"start audio_url={audio_url}")
-        asr_result = run_asr(audio_url) or {}
-        if isinstance(asr_result, dict):
+        job_row = None
+        if interview_id is not None:
+            job_row = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
+        current_project_id = project_id
+        current_object_key = object_key
+        if job_row:
+            if current_project_id is None and job_row.get("project_id") is not None:
+                current_project_id = int(job_row.get("project_id"))
+            if current_object_key is None and job_row.get("object_key"):
+                current_object_key = str(job_row.get("object_key"))
+
+        if job_row and job_row.get("asr_result_json"):
+            cached_asr_result = _parse_json_maybe(job_row.get("asr_result_json"))
+            if isinstance(cached_asr_result, dict):
+                if interview_id is not None and current_project_id is not None:
+                    try:
+                        DbAccess.upsert_workflow_job(
+                            project_id=int(current_project_id),
+                            interview_id=interview_id,
+                            workflow_type=WORKFLOW_JOB_TYPE,
+                            status="running",
+                            stage="asr_done",
+                            object_key=current_object_key,
+                            audio_url=audio_url,
+                            volc_task_id=job_row.get("volc_task_id"),
+                            task_submitted_at=job_row.get("task_submitted_at"),
+                            last_polled_at=_now(),
+                            task_expires_at=job_row.get("task_expires_at"),
+                            retry_count=int(job_row.get("retry_count") or 0),
+                            poll_count=int(job_row.get("poll_count") or 0),
+                            lease_owner=_workflow_owner(),
+                            lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                            asr_result_json=cached_asr_result,
+                            checkpoint_json=_build_asr_checkpoint(
+                                interview_id=interview_id,
+                                project_id=current_project_id,
+                                object_key=current_object_key,
+                                audio_url=audio_url,
+                                task_id=str(job_row.get("volc_task_id") or ""),
+                                note="cached asr result reused",
+                                retry_count=int(job_row.get("retry_count") or 0),
+                                poll_count=int(job_row.get("poll_count") or 0),
+                            ),
+                        )
+                    except Exception:
+                        pass
+                _workflow_log(
+                    interview_id,
+                    "transcribe",
+                    f"reuse cached asr_result task_id={job_row.get('volc_task_id')} stage={job_row.get('stage')}",
+                )
+                return {
+                    "success": True,
+                    "asr_result": cached_asr_result,
+                    "task_id": job_row.get("volc_task_id"),
+                    "cached": True,
+                }
+
+        existing_task_id = None
+        existing_task_expires_at = None
+        existing_task_submitted_at = None
+        if job_row and job_row.get("volc_task_id"):
+            task_expires_at = job_row.get("task_expires_at")
+            if task_expires_at is None or task_expires_at > _now():
+                existing_task_id = str(job_row.get("volc_task_id"))
+                existing_task_expires_at = task_expires_at
+                existing_task_submitted_at = job_row.get("task_submitted_at")
+
+        retry_count = int(job_row.get("retry_count") or 0) if job_row else 0
+        poll_count = int(job_row.get("poll_count") or 0) if job_row else 0
+        poll_state = {"count": poll_count}
+        lease_owner = _workflow_owner()
+        submitted_at = _now()
+        current_task_submitted_at = existing_task_submitted_at or submitted_at
+        current_task_expires_at = existing_task_expires_at or _task_expires_at(submitted_at)
+        current_task_id = existing_task_id or str(job_row.get("volc_task_id") or "")
+
+        if job_row and job_row.get("volc_task_id") and not existing_task_id:
+            retry_count += 1
+
+        def _persist_task_submitted(task_id: str) -> None:
+            nonlocal current_task_id
+            if interview_id is None or current_project_id is None:
+                return
+            current_task_id = task_id
+            current_task_submitted_at_local = submitted_at
+            current_task_expires_at_local = _task_expires_at(current_task_submitted_at_local)
+            DbAccess.upsert_workflow_job(
+                project_id=int(current_project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="waiting_asr",
+                stage="asr_submitting",
+                object_key=current_object_key,
+                audio_url=audio_url,
+                volc_task_id=task_id,
+                task_submitted_at=current_task_submitted_at_local,
+                next_poll_at=current_task_submitted_at_local,
+                last_polled_at=current_task_submitted_at_local,
+                task_expires_at=current_task_expires_at_local,
+                retry_count=retry_count,
+                poll_count=poll_state["count"],
+                lease_owner=lease_owner,
+                lease_expires_at=current_task_submitted_at_local + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json=_build_asr_checkpoint(
+                    interview_id=interview_id,
+                    project_id=current_project_id,
+                    object_key=current_object_key,
+                    audio_url=audio_url,
+                    task_id=task_id,
+                    note="asr submitted",
+                    retry_count=retry_count,
+                    poll_count=poll_state["count"],
+                ),
+            )
+
+        def _persist_poll_state(response: Dict[str, Any]) -> None:
+            if interview_id is None or current_project_id is None:
+                return
+            response_payload = response.get("resp", {}) if isinstance(response, dict) else {}
+            poll_at = _now()
+            poll_state["count"] += 1
+            DbAccess.upsert_workflow_job(
+                project_id=int(current_project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="waiting_asr",
+                stage="asr_polling",
+                object_key=current_object_key,
+                audio_url=audio_url,
+                volc_task_id=current_task_id,
+                last_polled_at=poll_at,
+                next_poll_at=poll_at,
+                retry_count=retry_count,
+                poll_count=poll_state["count"],
+                lease_owner=lease_owner,
+                lease_expires_at=poll_at + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json=_build_asr_checkpoint(
+                    interview_id=interview_id,
+                    project_id=current_project_id,
+                    object_key=current_object_key,
+                    audio_url=audio_url,
+                    task_id=current_task_id,
+                    note=f"poll code={response_payload.get('code')} message={response_payload.get('message')}",
+                    retry_count=retry_count,
+                    poll_count=poll_state["count"],
+                ),
+            )
+
+        run_result = run_asr(
+            audio_url,
+            task_id=existing_task_id,
+            on_task_submitted=_persist_task_submitted if existing_task_id is None else None,
+            on_poll=_persist_poll_state,
+        )
+
+        if run_result.get("success"):
+            asr_result = run_result.get("asr_result") or {}
+            if not isinstance(asr_result, dict):
+                asr_result = {}
+            if interview_id is not None and current_project_id is not None:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(current_project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="asr_done",
+                    object_key=current_object_key,
+                    audio_url=audio_url,
+                    volc_task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                    task_submitted_at=current_task_submitted_at,
+                    last_polled_at=_now(),
+                    task_expires_at=current_task_expires_at,
+                    retry_count=retry_count,
+                    poll_count=max(poll_state["count"], 1),
+                    lease_owner=lease_owner,
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                    asr_result_json=asr_result,
+                    error_stage=None,
+                    error_message=None,
+                    error_traceback=None,
+                    checkpoint_json=_build_asr_checkpoint(
+                        interview_id=interview_id,
+                        project_id=current_project_id,
+                        object_key=current_object_key,
+                        audio_url=audio_url,
+                        task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                        note="asr done",
+                        retry_count=retry_count,
+                        poll_count=max(poll_state["count"], 1),
+                    ),
+                )
             _workflow_log(
                 interview_id,
                 "transcribe",
-                f"done keys={sorted(asr_result.keys())} code={asr_result.get('code')} message={asr_result.get('message')}",
+                f"done keys={sorted(asr_result.keys())} task_id={run_result.get('task_id')} source={'cache' if run_result.get('cached') else 'live'}",
             )
-        else:
-            _workflow_log(interview_id, "transcribe", f"done type={type(asr_result).__name__}")
+            return {
+                "success": True,
+                "asr_result": asr_result,
+                "task_id": run_result.get("task_id") or existing_task_id,
+                "cached": bool(run_result.get("cached")),
+            }
+
+        if run_result.get("recoverable"):
+            if interview_id is not None and current_project_id is not None:
+                now = _now()
+                DbAccess.upsert_workflow_job(
+                    project_id=int(current_project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="waiting_asr",
+                    stage="asr_polling",
+                    object_key=current_object_key,
+                    audio_url=audio_url,
+                    volc_task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                    last_polled_at=now,
+                    next_poll_at=now,
+                    task_expires_at=current_task_expires_at,
+                    retry_count=retry_count,
+                    poll_count=max(poll_state["count"], 1),
+                    lease_owner=lease_owner,
+                    lease_expires_at=now + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                    error_stage="transcribe",
+                    error_message=run_result.get("message"),
+                    checkpoint_json=_build_asr_checkpoint(
+                        interview_id=interview_id,
+                        project_id=current_project_id,
+                        object_key=current_object_key,
+                        audio_url=audio_url,
+                        task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                        note="asr pending",
+                        retry_count=retry_count,
+                        poll_count=max(poll_state["count"], 1),
+                    ),
+                )
+            _workflow_log(
+                interview_id,
+                "transcribe",
+                f"pending task_id={run_result.get('task_id') or existing_task_id} message={run_result.get('message')}",
+            )
+            return {
+                "success": False,
+                "recoverable": True,
+                "message": run_result.get("message") or "ASR pending",
+                "task_id": run_result.get("task_id") or existing_task_id,
+            }
+
+        if interview_id is not None and current_project_id is not None:
+            now = _now()
+            DbAccess.upsert_workflow_job(
+                project_id=int(current_project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="failed",
+                stage="failed",
+                object_key=current_object_key,
+                audio_url=audio_url,
+                volc_task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                last_polled_at=now,
+                next_poll_at=now,
+                retry_count=retry_count,
+                poll_count=max(poll_state["count"], 1),
+                lease_owner=lease_owner,
+                lease_expires_at=now + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                error_stage="transcribe",
+                error_message=run_result.get("message"),
+                checkpoint_json=_build_asr_checkpoint(
+                    interview_id=interview_id,
+                    project_id=current_project_id,
+                    object_key=current_object_key,
+                    audio_url=audio_url,
+                    task_id=str(run_result.get("task_id") or existing_task_id or ""),
+                    note="asr failed",
+                    retry_count=retry_count,
+                    poll_count=max(poll_state["count"], 1),
+                ),
+            )
+        _workflow_log(
+            interview_id,
+            "transcribe",
+            f"failed recoverable=False message={run_result.get('message')}",
+        )
+        return {
+            "success": False,
+            "recoverable": False,
+            "message": run_result.get("message") or "transcribe failed",
+            "task_id": run_result.get("task_id") or existing_task_id,
+        }
     except Exception as e:
         _workflow_log(
             interview_id,
             "transcribe",
             f"failed error={e} traceback={traceback.format_exc()}",
         )
-        return {"success": False, "message": f"transcribe failed: {e}"}
-    return {"success": True, "asr_result": asr_result}
+        if interview_id is not None and project_id is not None:
+            try:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="failed",
+                    stage="failed",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    error_stage="transcribe",
+                    error_message=str(e),
+                    error_traceback=traceback.format_exc(),
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                )
+            except Exception:
+                pass
+        return {"success": False, "recoverable": False, "message": f"transcribe failed: {e}"}
 
 
 def step_store_file_content(interview_id: int, object_key: str, audio_url: str, asr_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -415,6 +833,8 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
     当前工作流会先读取访谈所属项目的背景描述，并将其注入到纠错阶段，
     以便后续 summary 的文本更贴合项目语境。
     """
+    project_id: int | None = None
+
     def fail(stage: str, detail: Dict[str, Any] | str) -> Dict[str, Any]:
         """
         统一封装工作流失败返回，并尝试把访谈状态写回失败态。
@@ -426,12 +846,31 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         返回:
             标准化的失败响应字典，包含 success=False、stage 和 detail。
         """
+        recoverable = isinstance(detail, dict) and bool(detail.get("recoverable"))
         try:
-            DbAccess.update_interview_status(interview_id, 3)
+            if not recoverable:
+                DbAccess.update_interview_status(interview_id, 3)
+        except Exception:
+            pass
+        try:
+            if project_id is not None:
+                now = _now()
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="waiting_asr" if recoverable else "failed",
+                    stage="asr_polling" if recoverable and stage == "transcribe" else "failed",
+                    error_stage=stage,
+                    error_message=(detail.get("message") if isinstance(detail, dict) else str(detail)),
+                    error_traceback=(detail.get("traceback") if isinstance(detail, dict) else None),
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=now + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                )
         except Exception:
             pass
         _workflow_log(interview_id, stage, f"failed detail={detail}")
-        return {"success": False, "stage": stage, "detail": detail}
+        return {"success": False, "stage": stage, "detail": detail, "recoverable": recoverable}
 
     try:
         _workflow_log(interview_id, "run_workflow", "start")
@@ -455,6 +894,24 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             "load_project_context",
             f"done length={len(project_context) if isinstance(project_context, str) else 'n/a'}",
         )
+        try:
+            DbAccess.upsert_workflow_job(
+                project_id=int(project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="running",
+                stage="created",
+                started_at=_now(),
+                lease_owner=_workflow_owner(),
+                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json={
+                    "interview_id": interview_id,
+                    "project_id": int(project_id),
+                    "project_context_loaded": True,
+                },
+            )
+        except Exception as e:
+            _workflow_log(interview_id, "job_init", f"warning failed to init job record error={e}")
         interview_term_hints = load_term_hints_from_state(interview_id=interview_id)
         correction_rules = load_correction_rules_from_state(interview_id=interview_id)
         core_problem = interview_row.get("core_problem")
@@ -504,7 +961,7 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         _workflow_log(interview_id, "upload", f"done object_key={object_key}")
 
         # 2. ASR
-        tr = step_transcribe(audio_url, interview_id=interview_id)
+        tr = step_transcribe(audio_url, interview_id=interview_id, project_id=int(project_id), object_key=object_key)
         if not tr.get("success"):
             return fail("transcribe", tr)
         asr_result = tr["asr_result"]
@@ -599,6 +1056,16 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
             kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
 
         try:
+            DbAccess.upsert_workflow_job(
+                project_id=int(project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="done",
+                stage="done",
+                finished_at=_now(),
+                lease_owner=_workflow_owner(),
+                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+            )
             DbAccess.update_interview_status(interview_id, 2)
         except Exception:
             pass
