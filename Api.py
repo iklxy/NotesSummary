@@ -102,7 +102,7 @@ def _submit_transcribe_job(interview_id: int) -> Dict[str, Any]:
 
 def _resume_pending_transcribe_jobs() -> None:
     """
-    服务启动时恢复仍停留在 ASR 阶段的工作流任务。
+    服务启动时恢复仍停留在可恢复阶段的工作流任务。
     """
     try:
         jobs = DbAccess.list_recoverable_workflow_jobs()
@@ -111,7 +111,7 @@ def _resume_pending_transcribe_jobs() -> None:
         return
 
     if not jobs:
-        log_interview("TRANSCRIBE", None, "startup recovery scan found no pending ASR jobs")
+        log_interview("TRANSCRIBE", None, "startup recovery scan found no pending workflow jobs")
         return
 
     for job in jobs:
@@ -132,7 +132,7 @@ def _resume_pending_transcribe_jobs() -> None:
 @app.on_event("startup")
 def _on_startup() -> None:
     """
-    FastAPI 启动后恢复未完成的 ASR 任务。
+    FastAPI 启动后恢复未完成的工作流任务。
     """
     _resume_pending_transcribe_jobs()
 

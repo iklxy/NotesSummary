@@ -990,6 +990,36 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         interview_context = ec["interview_context"]
         _workflow_log(interview_id, "extract_interview_context", "done")
 
+        try:
+            current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
+            retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
+            poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
+            current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
+            DbAccess.upsert_workflow_job(
+                project_id=int(project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="running",
+                stage="cleaning",
+                object_key=object_key,
+                audio_url=audio_url,
+                volc_task_id=current_task_id,
+                retry_count=retry_count,
+                poll_count=poll_count,
+                lease_owner=_workflow_owner(),
+                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json={
+                    "interview_id": interview_id,
+                    "project_id": int(project_id),
+                    "stage": "cleaning",
+                    "object_key": object_key,
+                    "audio_url": audio_url,
+                    "note": "cleaning started",
+                },
+            )
+        except Exception as e:
+            _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaning stage error={e}")
+
         # 5. LLM 纠错 + 再纠错 + 清洗
         cl = step_clean_with_llm(
             file_content_json,
@@ -1002,6 +1032,37 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         if not cl.get("success"):
             return fail("correct_fallback", cl)
         cleaned_json = cl["cleaned_json"]
+        try:
+            current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
+            retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
+            poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
+            current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
+            DbAccess.upsert_workflow_job(
+                project_id=int(project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="running",
+                stage="cleaning",
+                object_key=object_key,
+                audio_url=audio_url,
+                volc_task_id=current_task_id,
+                retry_count=retry_count,
+                poll_count=poll_count,
+                cleaned_json=cleaned_json,
+                lease_owner=_workflow_owner(),
+                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json={
+                    "interview_id": interview_id,
+                    "project_id": int(project_id),
+                    "stage": "cleaning",
+                    "object_key": object_key,
+                    "audio_url": audio_url,
+                    "note": "cleaning done",
+                    "cleaned_json_len": len(cleaned_json) if isinstance(cleaned_json, str) else None,
+                },
+            )
+        except Exception as e:
+            _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaned json error={e}")
         _workflow_log(interview_id, "correct_fallback", "done")
 
         # 6. 写 summary

@@ -762,7 +762,7 @@ class DbAccess:
             满足恢复条件的任务列表。
         """
         status_list = list(statuses or ("queued", "running", "waiting_asr", "recovering"))
-        stage_list = list(stages or ("created", "audio_ready", "asr_submitting", "asr_polling"))
+        stage_list = list(stages or ("created", "audio_ready", "asr_submitting", "asr_polling", "asr_done", "cleaning"))
         if not status_list or not stage_list:
             return []
 
