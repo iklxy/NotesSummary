@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+SummaryNotes 后端数据库访问层。
+"""
+
 import json
 import os
 from typing import Any, Optional
@@ -427,6 +434,16 @@ def update_project_guide(
     """
 
     def _text_or_none(value: Any) -> Optional[str]:
+        """
+        _text_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         text = str(value).strip()
@@ -548,6 +565,16 @@ def _normalize_object_type(value: Any) -> Optional[str]:
 
 
 def _json_loads_or_none(value: Any) -> Any:
+    """
+    _json_loads_or_none 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return None
     if isinstance(value, (dict, list)):
@@ -930,6 +957,19 @@ def insert_project_role(
     role_type: str,
     detail_schema_json: Any,
 ) -> int:
+    """
+    insert_project_role 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        role_name: role_name 的输入值。
+        role_type: role_type 的输入值。
+        detail_schema_json: detail_schema_json 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     sql = """
         INSERT INTO bh_project_role
             (project_id, role_name, role_type, detail_schema_json)
@@ -962,6 +1002,18 @@ def fetch_project_role_by_id(
     project_id: int | None = None,
     created_by_user_id: int | None = None,
 ) -> dict | None:
+    """
+    fetch_project_role_by_id 函数。
+
+    参数:
+        role_id: role_id 的输入值。
+        project_id: project_id 的输入值。
+        created_by_user_id: created_by_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     sql = """
         SELECT
             r.id,
@@ -994,6 +1046,18 @@ def fetch_project_role_by_name(
     role_name: str,
     created_by_user_id: int | None = None,
 ) -> dict | None:
+    """
+    fetch_project_role_by_name 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        role_name: role_name 的输入值。
+        created_by_user_id: created_by_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     sql = """
         SELECT
             r.id,
@@ -1025,6 +1089,17 @@ def fetch_project_roles_by_project(
     project_id: int,
     created_by_user_id: int | None = None,
 ) -> list[dict]:
+    """
+    fetch_project_roles_by_project 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        created_by_user_id: created_by_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     sql = """
         SELECT
             r.id,
@@ -1055,6 +1130,17 @@ def ensure_project_builtin_roles(
     project_id: int,
     created_by_user_id: int | None = None,
 ) -> list[dict]:
+    """
+    ensure_project_builtin_roles 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        created_by_user_id: created_by_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     existing = fetch_project_roles_by_project(project_id, created_by_user_id)
     by_type = {
         normalize_role_type(row.get("role_type")): row
@@ -1613,6 +1699,16 @@ def insert_key_bq_rows_for_interview(
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):
@@ -1709,6 +1805,16 @@ def replace_key_bq_rows_for_interview(
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):
@@ -1821,6 +1927,16 @@ def update_interview_kbq_note_json(
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):
@@ -1917,6 +2033,16 @@ def update_interview_minutes_json(
         更新后的记录字典；若没有记录则会尝试插入并返回新记录。
     """
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):
@@ -2466,6 +2592,16 @@ def upsert_ca_table(
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):
@@ -2568,6 +2704,16 @@ def upsert_interview_minutes(
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
+        """
+        _json_or_none 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if value is None:
             return None
         if isinstance(value, (dict, list)):

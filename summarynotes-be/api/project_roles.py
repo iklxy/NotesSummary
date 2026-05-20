@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+项目角色相关接口。
+"""
+
 from __future__ import annotations
 
 import json
@@ -30,6 +37,16 @@ DEFAULT_PROJECT_ROLE_FIELDS: Dict[str, List[Dict[str, Any]]] = {
 
 
 def normalize_role_type(raw_value: Any) -> Optional[str]:
+    """
+    normalize_role_type 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if raw_value is None:
         return None
     text = str(raw_value).strip().lower()
@@ -43,6 +60,16 @@ def normalize_role_type(raw_value: Any) -> Optional[str]:
 
 
 def build_default_role_name(role_type: str | None) -> str:
+    """
+    build_default_role_name 函数。
+
+    参数:
+        role_type: role_type 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized = normalize_role_type(role_type)
     if normalized is None:
         return "角色"
@@ -53,6 +80,17 @@ def normalize_detail_schema_fields(
     raw_value: Any = None,
     role_type: str | None = None,
 ) -> List[Dict[str, Any]]:
+    """
+    normalize_detail_schema_fields 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+        role_type: role_type 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized_role_type = normalize_role_type(role_type)
     default_fields = DEFAULT_PROJECT_ROLE_FIELDS.get(normalized_role_type or "", [])
 
@@ -107,5 +145,15 @@ def normalize_detail_schema_fields(
 
 
 def build_default_role_detail_schema(role_type: str | None) -> List[Dict[str, Any]]:
+    """
+    build_default_role_detail_schema 函数。
+
+    参数:
+        role_type: role_type 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized_role_type = normalize_role_type(role_type)
     return [dict(item) for item in DEFAULT_PROJECT_ROLE_FIELDS.get(normalized_role_type or "", [])]

@@ -332,6 +332,16 @@ def step_transcribe(
             retry_count += 1
 
         def _persist_task_submitted(task_id: str) -> None:
+            """
+            _persist_task_submitted 函数。
+
+            参数:
+                task_id: task_id 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             nonlocal current_task_id
             if interview_id is None or current_project_id is None:
                 return
@@ -368,6 +378,16 @@ def step_transcribe(
             )
 
         def _persist_poll_state(response: Dict[str, Any]) -> None:
+            """
+            _persist_poll_state 函数。
+
+            参数:
+                response: response 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if interview_id is None or current_project_id is None:
                 return
             response_payload = response.get("resp", {}) if isinstance(response, dict) else {}
@@ -1143,6 +1163,17 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         kbq_warning = None
 
         def _persist_post_clean_stage(stage: str, checkpoint: Dict[str, Any] | None = None) -> None:
+            """
+            _persist_post_clean_stage 函数。
+
+            参数:
+                stage: stage 的输入值。
+                checkpoint: checkpoint 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if project_id is None:
                 return
             current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)

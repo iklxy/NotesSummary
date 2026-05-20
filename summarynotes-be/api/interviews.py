@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+访谈相关接口。
+"""
+
 from pathlib import Path
 import mimetypes
 import shutil
@@ -303,6 +310,16 @@ def _render_minutes_payload_text(payload: Dict[str, Any]) -> str:
     lines: List[str] = []
 
     def _normalize_fragment(value: Any) -> str:
+        """
+        _normalize_fragment 函数。
+
+        参数:
+            value: value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         text = str(value or "").strip()
         if not text:
             return ""
@@ -416,6 +433,16 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
     """
 
     def _normalize_dimensions(raw_value: Any) -> List[Dict[str, Any]]:
+        """
+        _normalize_dimensions 函数。
+
+        参数:
+            raw_value: raw_value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if not isinstance(raw_value, list):
             return []
         normalized: List[Dict[str, Any]] = []
@@ -436,6 +463,16 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
         return normalized
 
     def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        _normalize_dimension_bundle 函数。
+
+        参数:
+            raw_value: raw_value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if not isinstance(raw_value, dict):
             return {"user_demension": [], "llm_demension": [], "demension": []}
 

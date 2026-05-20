@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+问题意图相关接口。
+"""
+
 from typing import Dict, List
 
 from fastapi import APIRouter

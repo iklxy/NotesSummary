@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+项目管理相关接口。
+"""
+
 from pathlib import Path
 from datetime import datetime
 import json
@@ -409,6 +416,16 @@ def _safe_load_json_array(value: Any) -> list[Any]:
 
 
 def _safe_load_guide_files(value: Any) -> list[dict[str, Any]]:
+    """
+    _safe_load_guide_files 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if value is None:
@@ -435,6 +452,16 @@ def _safe_load_guide_files(value: Any) -> list[dict[str, Any]]:
 
 
 def _safe_load_detail_schema(value: Any) -> list[dict[str, Any]]:
+    """
+    _safe_load_detail_schema 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if value is None:
@@ -461,6 +488,16 @@ def _safe_load_detail_schema(value: Any) -> list[dict[str, Any]]:
 
 
 def _normalize_guide_file_name(file_name: str) -> str:
+    """
+    _normalize_guide_file_name 函数。
+
+    参数:
+        file_name: file_name 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     cleaned_name = Path(str(file_name or "")).name.strip()
     if not cleaned_name:
         return "guide"
@@ -475,6 +512,16 @@ def _normalize_guide_file_name(file_name: str) -> str:
 
 
 def _detect_guide_file_type(file_name: str) -> str:
+    """
+    _detect_guide_file_type 函数。
+
+    参数:
+        file_name: file_name 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     suffix = Path(str(file_name or "")).suffix.lower().lstrip(".")
     if suffix in {"pdf", "docx", "md", "xlsx"}:
         return suffix
@@ -482,6 +529,16 @@ def _detect_guide_file_type(file_name: str) -> str:
 
 
 def _build_guide_display_name(file_names: list[str]) -> str:
+    """
+    _build_guide_display_name 函数。
+
+    参数:
+        file_names: file_names 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not file_names:
         return "项目指南"
     if len(file_names) == 1:
@@ -490,6 +547,16 @@ def _build_guide_display_name(file_names: list[str]) -> str:
 
 
 def _normalize_questionnaire_row(row: dict) -> dict:
+    """
+    _normalize_questionnaire_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return {
         **row,
         "id": int(row["id"]),
@@ -505,6 +572,16 @@ def _normalize_questionnaire_row(row: dict) -> dict:
 
 
 def _normalize_role_row(row: dict) -> dict:
+    """
+    _normalize_role_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return {
         **row,
         "id": int(row["id"]),
@@ -516,6 +593,16 @@ def _normalize_role_row(row: dict) -> dict:
 
 
 def _normalize_project_row(row: dict) -> dict:
+    """
+    _normalize_project_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized = dict(row)
     if normalized.get("id") is not None:
         normalized["id"] = int(normalized["id"])
@@ -532,6 +619,16 @@ def _normalize_project_row(row: dict) -> dict:
 
 
 def _normalize_interview_row(row: dict) -> dict:
+    """
+    _normalize_interview_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized = dict(row)
     if normalized.get("questionnaire_id") is not None:
         normalized["questionnaire_id"] = int(normalized["questionnaire_id"])

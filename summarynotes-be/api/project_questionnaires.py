@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+项目问卷相关接口。
+"""
+
 from __future__ import annotations
 
 import json
@@ -37,6 +44,16 @@ class QuestionnaireHotwordReviewRequest(BaseModel):
 
 
 def _normalize_object_type(raw_value: Any) -> Optional[str]:
+    """
+    _normalize_object_type 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if raw_value is None:
         return None
     text = str(raw_value).strip().lower()
@@ -48,16 +65,45 @@ def _normalize_object_type(raw_value: Any) -> Optional[str]:
 
 
 def _parse_detail_schema_json(raw_value: Any, role_type: Optional[str] = None) -> list[dict[str, Any]]:
+    """
+    _parse_detail_schema_json 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+        role_type: role_type 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return normalize_detail_schema_fields(raw_value, role_type)
 
 
 def _get_data_root() -> Path:
+    """
+    _get_data_root 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     api_dir = Path(__file__).resolve().parent
     project_root = api_dir.parent.parent
     return project_root / "data"
 
 
 def _get_owned_project_or_404(project_id: int, current_user_id: int) -> Dict[str, Any]:
+    """
+    _get_owned_project_or_404 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     project = fetch_project_by_id(project_id, current_user_id)
     if not project:
         raise HTTPException(status_code=404, detail="project not found")
@@ -65,10 +111,31 @@ def _get_owned_project_or_404(project_id: int, current_user_id: int) -> Dict[str
 
 
 def _get_questionnaire_dir(project_id: int, questionnaire_id: int) -> Path:
+    """
+    _get_questionnaire_dir 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        questionnaire_id: questionnaire_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return _get_data_root() / f"project_{project_id}" / "question" / f"questionnaire_{questionnaire_id}"
 
 
 def _normalize_text_list(items: List[str]) -> List[str]:
+    """
+    _normalize_text_list 函数。
+
+    参数:
+        items: items 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     seen: set[str] = set()
     result: List[str] = []
     for item in items:
@@ -81,6 +148,16 @@ def _normalize_text_list(items: List[str]) -> List[str]:
 
 
 def _parse_hotwords(raw_value: Any) -> List[str]:
+    """
+    _parse_hotwords 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if raw_value is None:
         return []
     if isinstance(raw_value, list):
@@ -107,16 +184,48 @@ def _parse_hotwords(raw_value: Any) -> List[str]:
 
 
 def _read_text_file(path: Path) -> str:
+    """
+    _read_text_file 函数。
+
+    参数:
+        path: path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
 
 
 def _write_json_file(path: Path, payload: Any) -> None:
+    """
+    _write_json_file 函数。
+
+    参数:
+        path: path 的输入值。
+        payload: payload 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _save_uploaded_docx_file(target_dir: Path, upload_file: UploadFile) -> Path:
+    """
+    _save_uploaded_docx_file 函数。
+
+    参数:
+        target_dir: target_dir 的输入值。
+        upload_file: upload_file 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     filename = upload_file.filename or ""
     if not filename:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
@@ -138,6 +247,17 @@ def _save_uploaded_docx_file(target_dir: Path, upload_file: UploadFile) -> Path:
 
 
 def _rename_questionnaire_outputs(target_dir: Path, source_docx: Path) -> tuple[Path, Path]:
+    """
+    _rename_questionnaire_outputs 函数。
+
+    参数:
+        target_dir: target_dir 的输入值。
+        source_docx: source_docx 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     source_md = target_dir / f"{source_docx.stem}.md"
     source_json = target_dir / f"{source_docx.stem}.json"
     target_md = target_dir / "questionnaire.md"
@@ -162,6 +282,18 @@ def _build_candidates_payload(
     questionnaire_id: int,
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """
+    _build_candidates_payload 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        questionnaire_id: questionnaire_id 的输入值。
+        candidates: candidates 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return {
         "project_id": project_id,
         "questionnaire_id": questionnaire_id,
@@ -171,6 +303,16 @@ def _build_candidates_payload(
 
 
 def _to_response_row(row: dict | None) -> dict | None:
+    """
+    _to_response_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not row:
         return None
     hotwords = _parse_hotwords(row.get("hotwords"))
@@ -210,6 +352,24 @@ async def create_questionnaire(
     object_type: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
+    """
+    create_questionnaire 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+        name: name 的输入值。
+        role_id: role_id 的输入值。
+        role_name: role_name 的输入值。
+        role_type: role_type 的输入值。
+        detail_schema_json: detail_schema_json 的输入值。
+        object_type: object_type 的输入值。
+        file: file 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     project_row = _get_owned_project_or_404(project_id, current_user_id)
     ensure_project_builtin_roles(project_id, current_user_id)
     clean_name = name.strip() or Path(file.filename or "questionnaire").stem
@@ -332,6 +492,17 @@ def list_questionnaires(
     project_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> list[Dict[str, Any]]:
+    """
+    list_questionnaires 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     _get_owned_project_or_404(project_id, current_user_id)
     rows = fetch_questionnaires_by_project(project_id, current_user_id)
     return [_to_response_row(row) or {} for row in rows]
@@ -343,6 +514,18 @@ def get_questionnaire(
     questionnaire_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    get_questionnaire 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        questionnaire_id: questionnaire_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_questionnaire_by_id(questionnaire_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="questionnaire not found")
@@ -369,6 +552,19 @@ def update_questionnaire_hotwords(
     payload: QuestionnaireHotwordReviewRequest,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    update_questionnaire_hotwords 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        questionnaire_id: questionnaire_id 的输入值。
+        payload: payload 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_questionnaire_by_id(questionnaire_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="questionnaire not found")
@@ -406,6 +602,18 @@ def remove_questionnaire(
     questionnaire_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    remove_questionnaire 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        questionnaire_id: questionnaire_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_questionnaire_by_id(questionnaire_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="questionnaire not found")

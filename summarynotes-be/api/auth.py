@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+认证相关接口。
+"""
+
 from fastapi import APIRouter, Cookie, HTTPException, Response
 
 from db import fetch_user_by_id, fetch_user_by_username

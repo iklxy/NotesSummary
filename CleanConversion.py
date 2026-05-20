@@ -161,6 +161,17 @@ def _run_segment_stage(
         return str(request_item.get(input_text_field) or "")
 
     def _process_one(idx: int, seg: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
+        """
+        _process_one 函数。
+
+        参数:
+            idx: idx 的输入值。
+            seg: seg 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         seg_id = seg.get("id")
         speaker_id = str(seg.get("speaker_id", ""))
         log_interview("CLEAN", interview_id, f"[{stage_name}] 开始处理第 {idx}/{total} 段, id={seg_id}, speaker_id={speaker_id}")

@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+访谈详情字段接口。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict

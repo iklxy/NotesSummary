@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+访谈详情字段定义与归一化工具。
+"""
+
 from __future__ import annotations
 
 import json
@@ -33,6 +40,16 @@ LEGACY_INTERVIEW_DETAIL_FIELD_ALIASES: Dict[str, str] = {
 
 
 def _normalize_text(value: Any) -> Optional[str]:
+    """
+    _normalize_text 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return None
     text = str(value).strip()
@@ -40,6 +57,16 @@ def _normalize_text(value: Any) -> Optional[str]:
 
 
 def _normalize_number(value: Any) -> Optional[int]:
+    """
+    _normalize_number 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return None
     if isinstance(value, bool):
@@ -56,6 +83,16 @@ def _normalize_number(value: Any) -> Optional[int]:
 
 
 def _normalize_hospital_decile(value: Any) -> Optional[int]:
+    """
+    _normalize_hospital_decile 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     number = _normalize_number(value)
     if number is None:
         return None
@@ -67,6 +104,16 @@ def _normalize_hospital_decile(value: Any) -> Optional[int]:
 
 
 def _normalize_scalar(value: Any) -> Any:
+    """
+    _normalize_scalar 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return None
     if isinstance(value, bool):

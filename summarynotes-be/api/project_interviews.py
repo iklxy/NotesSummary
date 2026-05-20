@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+项目访谈相关接口。
+"""
+
 import json
 import os
 import shutil
@@ -310,6 +317,16 @@ def _normalize_dimensions(raw_dimensions: Any) -> list[Dict[str, Any]]:
 
 
 def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, list[Dict[str, Any]]]:
+    """
+    _normalize_dimension_bundle 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not isinstance(raw_value, dict):
         return {"user_demension": [], "llm_demension": [], "demension": []}
 
@@ -449,6 +466,23 @@ def _normalize_detail_form_payload(
     hospital_decile: Optional[str],
     hospital_city: Optional[str],
 ) -> Dict[str, Any]:
+    """
+    _normalize_detail_form_payload 函数。
+
+    参数:
+        detail_json: detail_json 的输入值。
+        doctor_level: doctor_level 的输入值。
+        doctor_title: doctor_title 的输入值。
+        city: city 的输入值。
+        hospital: hospital 的输入值。
+        department: department 的输入值。
+        hospital_decile: hospital_decile 的输入值。
+        hospital_city: hospital_city 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     city_fallback = city if city is not None and str(city).strip() else hospital_city
     hospital_city_fallback = hospital_city if hospital_city is not None and str(hospital_city).strip() else city
     legacy_values = {

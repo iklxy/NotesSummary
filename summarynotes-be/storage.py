@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+对象存储辅助函数。
+"""
+
 import os
 import time
 

@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+健康检查接口。
+"""
+
 from fastapi import APIRouter
 
 

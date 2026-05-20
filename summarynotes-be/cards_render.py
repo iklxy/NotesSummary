@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+卡片渲染工具。
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,14 +20,38 @@ CARD_RENDER_DPI_RATIO = 9525
 
 
 def _project_root() -> Path:
+    """
+    _project_root 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     return Path(__file__).resolve().parent.parent
 
 
 def _frontend_root() -> Path:
+    """
+    _frontend_root 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     return _project_root() / "summarynotes-fe"
 
 
 def _load_json_like(value: Any) -> Any:
+    """
+    _load_json_like 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if isinstance(value, (dict, list)):
         return value
     if value is None:
@@ -37,12 +68,32 @@ def _load_json_like(value: Any) -> Any:
 
 
 def _normalize_text(value: Any) -> str:
+    """
+    _normalize_text 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return ""
     return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def _extract_tags(card: Dict[str, Any]) -> List[str]:
+    """
+    _extract_tags 函数。
+
+    参数:
+        card: card 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     candidates = [
         card.get("final_json"),
         card.get("generated_json"),
@@ -60,6 +111,16 @@ def _extract_tags(card: Dict[str, Any]) -> List[str]:
 
 
 def _resolve_card_payload(card: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    _resolve_card_payload 函数。
+
+    参数:
+        card: card 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     payload = _load_json_like(card.get("final_json"))
     if not isinstance(payload, dict):
         payload = _load_json_like(card.get("generated_json"))
@@ -82,6 +143,17 @@ def _resolve_card_payload(card: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _split_text_to_lines(text: str, max_chars: int) -> List[str]:
+    """
+    _split_text_to_lines 函数。
+
+    参数:
+        text: text 的输入值。
+        max_chars: max_chars 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not text:
         return []
     result: List[str] = []
@@ -118,12 +190,33 @@ def _split_text_to_lines(text: str, max_chars: int) -> List[str]:
 
 
 def _estimate_tag_width(tag: str) -> int:
+    """
+    _estimate_tag_width 函数。
+
+    参数:
+        tag: tag 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     base = 56
     text_len = len(tag)
     return min(220, base + text_len * 14)
 
 
 def _build_card_svg(card: Dict[str, Any], width: int = CARD_RENDER_WIDTH) -> Tuple[str, int]:
+    """
+    _build_card_svg 函数。
+
+    参数:
+        card: card 的输入值。
+        width: width 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     payload = _resolve_card_payload(card)
     title = payload["title"]
     summary = payload["summary"]

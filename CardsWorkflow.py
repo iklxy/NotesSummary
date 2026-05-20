@@ -32,14 +32,42 @@ DEFAULT_MINUTES_TXT_NAME = "minutes.txt"
 
 
 def _get_data_root() -> Path:
+    """
+    _get_data_root 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     return ROOT_DIR / "data"
 
 
 def _get_interview_backup_dir(project_id: int, interview_id: int) -> Path:
+    """
+    _get_interview_backup_dir 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        interview_id: interview_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return _get_data_root() / f"project_{project_id}" / f"interview_{interview_id}"
 
 
 def _build_project_context_block(project_context: Optional[str]) -> str:
+    """
+    _build_project_context_block 函数。
+
+    参数:
+        project_context: project_context 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not project_context:
         return ""
     cleaned = str(project_context).strip()
@@ -49,6 +77,16 @@ def _build_project_context_block(project_context: Optional[str]) -> str:
 
 
 def _build_interview_context_block(interview: Dict[str, Any] | None) -> str:
+    """
+    _build_interview_context_block 函数。
+
+    参数:
+        interview: interview 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not isinstance(interview, dict):
         return ""
     lines: List[str] = ["【访谈背景】"]
@@ -73,6 +111,16 @@ def _build_interview_context_block(interview: Dict[str, Any] | None) -> str:
 
 
 def _normalize_json_payload(value: Any) -> Any:
+    """
+    _normalize_json_payload 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if isinstance(value, (dict, list)):
         return value
     if value is None:
@@ -87,6 +135,17 @@ def _normalize_json_payload(value: Any) -> Any:
 
 
 def _load_minutes_payload_from_files(project_id: int, interview_id: int) -> Dict[str, Any] | None:
+    """
+    _load_minutes_payload_from_files 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        interview_id: interview_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     backup_dir = _get_interview_backup_dir(project_id, interview_id)
     if not backup_dir.exists():
         return None
@@ -112,6 +171,16 @@ def _load_minutes_payload_from_files(project_id: int, interview_id: int) -> Dict
 
 
 def _render_minutes_text(minutes_payload: Dict[str, Any]) -> str:
+    """
+    _render_minutes_text 函数。
+
+    参数:
+        minutes_payload: minutes_payload 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     raw_minutes_text = str(minutes_payload.get("minutes_text") or minutes_payload.get("raw_minutes_text") or "").strip()
     if raw_minutes_text:
         return raw_minutes_text
@@ -162,6 +231,17 @@ def _render_minutes_text(minutes_payload: Dict[str, Any]) -> str:
 
 
 def _fetch_minutes_payload(interview_id: int, project_id: int) -> Dict[str, Any] | None:
+    """
+    _fetch_minutes_payload 函数。
+
+    参数:
+        interview_id: interview_id 的输入值。
+        project_id: project_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = DbAccess.fetch_interview_minutes_by_interview(interview_id)
     if row:
         minutes_json = _normalize_json_payload(row.get("minutes_json"))
@@ -183,6 +263,19 @@ def _upsert_cards_parent(
     status: str,
     error_message: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    _upsert_cards_parent 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        interview_id: interview_id 的输入值。
+        status: status 的输入值。
+        error_message: error_message 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     sql = """
         INSERT INTO bh_project_interview_cards
             (project_id, project_interview_id, status, error_message)
@@ -228,6 +321,19 @@ def _replace_cards_items(
     project_interview_id: int,
     cards: List[Dict[str, Any]],
 ) -> int:
+    """
+    _replace_cards_items 函数。
+
+    参数:
+        cards_id: cards_id 的输入值。
+        project_id: project_id 的输入值。
+        project_interview_id: project_interview_id 的输入值。
+        cards: cards 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     delete_sql = """
         DELETE FROM bh_project_interview_cards_items
         WHERE cards_id = %s
@@ -309,12 +415,33 @@ def _replace_cards_items(
 
 
 def _normalize_text(value: Any) -> str:
+    """
+    _normalize_text 函数。
+
+    参数:
+        value: value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if value is None:
         return ""
     return str(value).strip()
 
 
 def _trim_text(text: str, limit: int) -> str:
+    """
+    _trim_text 函数。
+
+    参数:
+        text: text 的输入值。
+        limit: limit 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     cleaned = _normalize_text(text)
     if not cleaned:
         return ""
@@ -324,6 +451,16 @@ def _trim_text(text: str, limit: int) -> str:
 
 
 def _collect_points_from_section(section: Dict[str, Any]) -> List[str]:
+    """
+    _collect_points_from_section 函数。
+
+    参数:
+        section: section 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     points: List[str] = []
     section_summary = _normalize_text(section.get("summary") or section.get("content"))
     if section_summary:

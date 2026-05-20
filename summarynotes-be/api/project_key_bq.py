@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+项目 Key BQ 相关接口。
+"""
+
 from __future__ import annotations
 
 import json
@@ -40,6 +47,17 @@ class ProjectKeyBqSingletonRequest(BaseModel):
 
 
 def _get_owned_project_or_404(project_id: int, current_user_id: int) -> Dict[str, Any]:
+    """
+    _get_owned_project_or_404 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     project = fetch_project_by_id(project_id, current_user_id)
     if not project:
         raise HTTPException(status_code=404, detail="project not found")
@@ -47,6 +65,16 @@ def _get_owned_project_or_404(project_id: int, current_user_id: int) -> Dict[str
 
 
 def _normalize_dimensions(raw_dimensions: Any) -> List[dict[str, Any]]:
+    """
+    _normalize_dimensions 函数。
+
+    参数:
+        raw_dimensions: raw_dimensions 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     result: List[dict[str, Any]] = []
     if not isinstance(raw_dimensions, list):
         return result
@@ -68,6 +96,16 @@ def _normalize_dimensions(raw_dimensions: Any) -> List[dict[str, Any]]:
 
 
 def _normalize_key_bq_items(raw_items: Any) -> List[dict[str, Any]]:
+    """
+    _normalize_key_bq_items 函数。
+
+    参数:
+        raw_items: raw_items 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     result: List[dict[str, Any]] = []
     if not isinstance(raw_items, list):
         return result
@@ -115,6 +153,16 @@ def _normalize_key_bq_items(raw_items: Any) -> List[dict[str, Any]]:
 
 
 def _normalize_key_bq_json(raw_value: Any) -> str:
+    """
+    _normalize_key_bq_json 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if raw_value is None:
         raise HTTPException(status_code=400, detail="key_bq_json is required")
 
@@ -161,6 +209,16 @@ def _normalize_key_bq_json(raw_value: Any) -> str:
 
 
 def _parse_key_bq_json(raw_value: Any) -> dict[str, Any]:
+    """
+    _parse_key_bq_json 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if raw_value is None:
         return {"key_bq_list": []}
     if isinstance(raw_value, dict):
@@ -178,6 +236,16 @@ def _parse_key_bq_json(raw_value: Any) -> dict[str, Any]:
 
 
 def _to_response_row(row: dict | None) -> dict | None:
+    """
+    _to_response_row 函数。
+
+    参数:
+        row: row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not row:
         return None
     return {
@@ -192,6 +260,16 @@ def _to_response_row(row: dict | None) -> dict | None:
 
 
 def _to_singleton_response(project_row: dict | None) -> dict:
+    """
+    _to_singleton_response 函数。
+
+    参数:
+        project_row: project_row 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not project_row:
         raise HTTPException(status_code=404, detail="project not found")
     return {
@@ -208,6 +286,18 @@ def create_key_bq(
     payload: ProjectKeyBqCreateRequest,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    create_key_bq 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        payload: payload 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     _get_owned_project_or_404(project_id, current_user_id)
     clean_name = payload.name.strip()
     if not clean_name:
@@ -234,6 +324,17 @@ def get_current_key_bq(
     project_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    get_current_key_bq 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     project = _get_owned_project_or_404(project_id, current_user_id)
     return _to_singleton_response(project)
 
@@ -244,6 +345,18 @@ def update_current_key_bq(
     payload: ProjectKeyBqSingletonRequest,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    update_current_key_bq 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        payload: payload 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     _get_owned_project_or_404(project_id, current_user_id)
     normalized_json = _normalize_key_bq_json(payload.key_bq_json)
     upsert_project_key_bq(project_id, normalized_json)
@@ -258,6 +371,17 @@ def list_key_bq(
     project_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> list[Dict[str, Any]]:
+    """
+    list_key_bq 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     _get_owned_project_or_404(project_id, current_user_id)
     rows = fetch_key_bq_by_project(project_id, current_user_id)
     return [_to_response_row(row) or {} for row in rows]
@@ -269,6 +393,18 @@ def get_key_bq(
     key_bq_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    get_key_bq 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        key_bq_id: key_bq_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_key_bq_by_id(key_bq_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="key bq not found")
@@ -285,6 +421,19 @@ def update_key_bq_item(
     payload: ProjectKeyBqUpdateRequest,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    update_key_bq_item 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        key_bq_id: key_bq_id 的输入值。
+        payload: payload 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_key_bq_by_id(key_bq_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="key bq not found")
@@ -320,6 +469,18 @@ def remove_key_bq_item(
     key_bq_id: int,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
+    """
+    remove_key_bq_item 函数。
+
+    参数:
+        project_id: project_id 的输入值。
+        key_bq_id: key_bq_id 的输入值。
+        current_user_id: current_user_id 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     row = fetch_key_bq_by_id(key_bq_id, project_id, current_user_id)
     if not row:
         raise HTTPException(status_code=404, detail="key bq not found")

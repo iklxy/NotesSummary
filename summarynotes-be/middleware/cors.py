@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+CORS 中间件配置。
+"""
+
 import os
 import socket
 import subprocess

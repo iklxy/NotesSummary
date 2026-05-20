@@ -273,6 +273,16 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
         可直接写入 `bh_project_interview_key_bq` 的 key BQ 明细列表。
     """
     def _normalize_dimensions(raw_dimensions: Any) -> List[Dict[str, Any]]:
+        """
+        _normalize_dimensions 函数。
+
+        参数:
+            raw_dimensions: raw_dimensions 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if not isinstance(raw_dimensions, list):
             return []
         normalized: List[Dict[str, Any]] = []
@@ -293,6 +303,16 @@ def _extract_key_bq_items(core_problem: Any) -> List[Dict[str, Any]]:
         return normalized
 
     def _normalize_dimension_bundle(raw_value: Any) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        _normalize_dimension_bundle 函数。
+
+        参数:
+            raw_value: raw_value 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         if not isinstance(raw_value, dict):
             return {"user_demension": [], "llm_demension": [], "demension": []}
 

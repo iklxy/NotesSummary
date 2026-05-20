@@ -1,3 +1,10 @@
+"""
+@Date: 2026-05-20
+@Author: lixinyang
+
+认证相关 schema。
+"""
+
 from typing import Optional
 
 from pydantic import BaseModel

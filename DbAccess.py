@@ -930,6 +930,16 @@ class DbAccess:
         """
 
         def _json_or_none(value: Any) -> Optional[str]:
+            """
+            _json_or_none 函数。
+
+            参数:
+                value: value 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if value is None:
                 return None
             if isinstance(value, (dict, list)):
@@ -1016,6 +1026,16 @@ class DbAccess:
         """
 
         def _json_or_none(value: Any) -> Optional[str]:
+            """
+            _json_or_none 函数。
+
+            参数:
+                value: value 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if value is None:
                 return None
             if isinstance(value, (dict, list)):
@@ -1123,6 +1143,16 @@ class DbAccess:
         """
 
         def _json_or_none(value: Any) -> Optional[str]:
+            """
+            _json_or_none 函数。
+
+            参数:
+                value: value 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if value is None:
                 return None
             if isinstance(value, (dict, list)):
@@ -1237,6 +1267,16 @@ class DbAccess:
         """
 
         def _json_or_none(value: Any) -> Optional[str]:
+            """
+            _json_or_none 函数。
+
+            参数:
+                value: value 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             if value is None:
                 return None
             if isinstance(value, (dict, list)):

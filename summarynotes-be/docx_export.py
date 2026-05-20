@@ -495,6 +495,13 @@ def _append_markdown_text(
     buffer: List[str] = []
 
     def flush_buffer() -> None:
+        """
+        flush_buffer 函数。
+
+        返回:
+            见函数返回值。
+        """
+
         if not buffer:
             return
         joined = " ".join(part.strip() for part in buffer if part.strip()).strip()

@@ -37,10 +37,27 @@ _CORE_PROBLEM_MAX_CHARS = 400
 
 
 def _get_data_root() -> Path:
+    """
+    _get_data_root 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     return Path(__file__).resolve().parent.parent / "data"
 
 
 def _resolve_guide_path(raw_path: str | None) -> Optional[Path]:
+    """
+    _resolve_guide_path 函数。
+
+    参数:
+        raw_path: raw_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     text = str(raw_path or "").strip()
     if not text:
         return None
@@ -51,6 +68,17 @@ def _resolve_guide_path(raw_path: str | None) -> Optional[Path]:
 
 
 def _load_guide_files_manifest(raw_value: Any, manifest_path: Path | None = None) -> List[Dict[str, Any]]:
+    """
+    _load_guide_files_manifest 函数。
+
+    参数:
+        raw_value: raw_value 的输入值。
+        manifest_path: manifest_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if isinstance(raw_value, list):
         files = [item for item in raw_value if isinstance(item, dict)]
         if files:
@@ -76,6 +104,17 @@ def _load_guide_files_manifest(raw_value: Any, manifest_path: Path | None = None
 
 
 def _normalize_guide_file_item(item: Dict[str, Any], fallback_index: int) -> Dict[str, Any]:
+    """
+    _normalize_guide_file_item 函数。
+
+    参数:
+        item: item 的输入值。
+        fallback_index: fallback_index 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     index = int(item.get("index") or fallback_index)
     original_name = str(item.get("original_name") or item.get("guide_file_name") or f"guide_{index}").strip()
     stored_path = str(item.get("stored_path") or item.get("guide_file_path") or "").strip()
@@ -98,6 +137,16 @@ def _normalize_guide_file_item(item: Dict[str, Any], fallback_index: int) -> Dic
 
 
 def _normalize_guide_files(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    _normalize_guide_files 函数。
+
+    参数:
+        items: items 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized: List[Dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
         normalized.append(_normalize_guide_file_item(item, index))
@@ -106,6 +155,16 @@ def _normalize_guide_files(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _build_guide_display_name(file_names: List[str]) -> str:
+    """
+    _build_guide_display_name 函数。
+
+    参数:
+        file_names: file_names 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not file_names:
         return "项目指南"
     if len(file_names) == 1:
@@ -114,14 +173,45 @@ def _build_guide_display_name(file_names: List[str]) -> str:
 
 
 def _compact_text_for_summary(text: str) -> str:
+    """
+    _compact_text_for_summary 函数。
+
+    参数:
+        text: text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return _normalize_text(text)
 
 
 def _normalize_text(text: str) -> str:
+    """
+    _normalize_text 函数。
+
+    参数:
+        text: text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def _split_text_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
+    """
+    _split_text_chunks 函数。
+
+    参数:
+        text: text 的输入值。
+        max_chars: max_chars 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized = _normalize_text(text)
     if not normalized:
         return []
@@ -135,6 +225,13 @@ def _split_text_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str
     buffer_length = 0
 
     def flush() -> None:
+        """
+        flush 函数。
+
+        返回:
+            见函数返回值。
+        """
+
         nonlocal buffer_length
         if not buffer:
             return
@@ -162,6 +259,17 @@ def _split_text_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str
 
 
 def _build_guide_chunk_prompt(chunk_index: int, total_chunks: int) -> tuple[str, str]:
+    """
+    _build_guide_chunk_prompt 函数。
+
+    参数:
+        chunk_index: chunk_index 的输入值。
+        total_chunks: total_chunks 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     system_prompt = (
         "你是一名专业的项目指南分析助手，擅长把 PDF 指南内容提炼成可供后续访谈和智能纪要使用的项目背景资料。"
     )
@@ -181,6 +289,16 @@ def _build_guide_chunk_prompt(chunk_index: int, total_chunks: int) -> tuple[str,
 
 
 def _build_guide_summary_prompt(chunk_count: int) -> tuple[str, str]:
+    """
+    _build_guide_summary_prompt 函数。
+
+    参数:
+        chunk_count: chunk_count 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     system_prompt = (
         "你是一名专业的项目指南学习总结助手，擅长把多段指南提炼成面向后续访谈和智能纪要的项目背景总结。"
     )
@@ -200,6 +318,18 @@ def _build_guide_summary_prompt(chunk_count: int) -> tuple[str, str]:
 
 
 def _build_core_problem_prompt(project_name: str, keywords: str, summary_text: str) -> tuple[str, str]:
+    """
+    _build_core_problem_prompt 函数。
+
+    参数:
+        project_name: project_name 的输入值。
+        keywords: keywords 的输入值。
+        summary_text: summary_text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     system_prompt = (
         "你是一名严谨的医疗项目背景摘要助手，擅长把项目指南学习总结压缩成可直接写入项目表的核心问题描述。"
     )
@@ -226,10 +356,30 @@ def _build_core_problem_prompt(project_name: str, keywords: str, summary_text: s
 
 
 def _compact_text(text: str) -> str:
+    """
+    _compact_text 函数。
+
+    参数:
+        text: text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return re.sub(r"\s+", " ", _normalize_text(text)).strip()
 
 
 def _normalize_core_problem_text(text: str) -> str:
+    """
+    _normalize_core_problem_text 函数。
+
+    参数:
+        text: text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     compact = _compact_text(text)
     if not compact:
         return ""
@@ -239,10 +389,32 @@ def _normalize_core_problem_text(text: str) -> str:
 
 
 def _fallback_core_problem(summary_text: str) -> str:
+    """
+    _fallback_core_problem 函数。
+
+    参数:
+        summary_text: summary_text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     return _normalize_core_problem_text(summary_text)
 
 
 def _generate_core_problem_from_summary(summary_text: str, project_name: str, keywords: str) -> str:
+    """
+    _generate_core_problem_from_summary 函数。
+
+    参数:
+        summary_text: summary_text 的输入值。
+        project_name: project_name 的输入值。
+        keywords: keywords 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     provider, model_name = _build_provider()
     system_prompt, user_prompt = _build_core_problem_prompt(
         project_name=project_name,
@@ -261,6 +433,13 @@ def _generate_core_problem_from_summary(summary_text: str, project_name: str, ke
 
 
 def _build_provider() -> tuple[Any, str]:
+    """
+    _build_provider 函数。
+
+    返回:
+        见函数返回值。
+    """
+
     provider_name = (config.NOTES_LLM_PROVIDER or config.LLM_PROVIDER or "openai").strip().lower() or "openai"
     api_key = config.NOTES_LLM_API_KEY or config.LLM_API_KEY
     base_url = config.NOTES_LLM_BASE_URL or config.LLM_BASE_URL
@@ -278,6 +457,20 @@ def _ocr_page_text(
     page_index: int,
     total_pages: int,
 ) -> str:
+    """
+    _ocr_page_text 函数。
+
+    参数:
+        provider: provider 的输入值。
+        model_name: model_name 的输入值。
+        page_image_bytes: page_image_bytes 的输入值。
+        page_index: page_index 的输入值。
+        total_pages: total_pages 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     system_prompt = (
         "你是一名严格的 OCR 识别助手，只负责把图片中的可见文字逐字转写出来，不要总结、不要解释、不要改写。"
     )
@@ -303,11 +496,31 @@ def _ocr_page_text(
 
 
 def _render_page_to_png(page: Any) -> bytes:
+    """
+    _render_page_to_png 函数。
+
+    参数:
+        page: page 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)  # type: ignore[attr-defined]
     return pixmap.tobytes("png")
 
 
 def _extract_docx_text(docx_path: Path) -> str:
+    """
+    _extract_docx_text 函数。
+
+    参数:
+        docx_path: docx_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not zipfile.is_zipfile(docx_path):
         raise RuntimeError("docx file is not a valid zip archive")
 
@@ -335,6 +548,16 @@ def _extract_docx_text(docx_path: Path) -> str:
 
 
 def _extract_markdown_text(md_path: Path) -> str:
+    """
+    _extract_markdown_text 函数。
+
+    参数:
+        md_path: md_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     try:
         return _normalize_text(md_path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -342,6 +565,16 @@ def _extract_markdown_text(md_path: Path) -> str:
 
 
 def _xlsx_column_index(cell_ref: str) -> int:
+    """
+    _xlsx_column_index 函数。
+
+    参数:
+        cell_ref: cell_ref 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     match = re.match(r"^([A-Za-z]+)", str(cell_ref or "").strip())
     if not match:
         return 0
@@ -354,6 +587,16 @@ def _xlsx_column_index(cell_ref: str) -> int:
 
 
 def _extract_xlsx_shared_strings(doc_zip: zipfile.ZipFile) -> List[str]:
+    """
+    _extract_xlsx_shared_strings 函数。
+
+    参数:
+        doc_zip: doc_zip 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     try:
         shared_strings_xml = doc_zip.read("xl/sharedStrings.xml")
     except KeyError:
@@ -379,6 +622,16 @@ def _extract_xlsx_shared_strings(doc_zip: zipfile.ZipFile) -> List[str]:
 
 
 def _extract_xlsx_sheet_entries(doc_zip: zipfile.ZipFile) -> List[tuple[str, str]]:
+    """
+    _extract_xlsx_sheet_entries 函数。
+
+    参数:
+        doc_zip: doc_zip 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     workbook_namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     rel_namespace = "{http://schemas.openxmlformats.org/package/2006/relationships}"
     entries: List[tuple[str, str]] = []
@@ -419,6 +672,17 @@ def _extract_xlsx_cell_value(
     cell: ET.Element,
     shared_strings: List[str],
 ) -> str:
+    """
+    _extract_xlsx_cell_value 函数。
+
+    参数:
+        cell: cell 的输入值。
+        shared_strings: shared_strings 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     cell_type = str(cell.get("t") or "").strip().lower()
     value_node = cell.find(f"{namespace}v")
@@ -459,6 +723,19 @@ def _extract_xlsx_sheet_text(
     sheet_name: str,
     shared_strings: List[str],
 ) -> str:
+    """
+    _extract_xlsx_sheet_text 函数。
+
+    参数:
+        doc_zip: doc_zip 的输入值。
+        sheet_path: sheet_path 的输入值。
+        sheet_name: sheet_name 的输入值。
+        shared_strings: shared_strings 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     try:
         sheet_xml = doc_zip.read(sheet_path)
     except KeyError as exc:
@@ -503,6 +780,16 @@ def _extract_xlsx_sheet_text(
 
 
 def _extract_xlsx_text(xlsx_path: Path) -> tuple[str, Dict[str, Any]]:
+    """
+    _extract_xlsx_text 函数。
+
+    参数:
+        xlsx_path: xlsx_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if not zipfile.is_zipfile(xlsx_path):
         raise RuntimeError("xlsx file is not a valid zip archive")
 
@@ -527,6 +814,17 @@ def _extract_xlsx_text(xlsx_path: Path) -> tuple[str, Dict[str, Any]]:
 
 
 def _extract_guide_text_by_type(file_path: Path, file_type: str) -> tuple[str, Dict[str, Any]]:
+    """
+    _extract_guide_text_by_type 函数。
+
+    参数:
+        file_path: file_path 的输入值。
+        file_type: file_type 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     normalized_type = str(file_type or "").strip().lower()
     if normalized_type == "pdf":
         extracted_text, ocr_pages = _extract_pdf_text(file_path)
@@ -541,6 +839,16 @@ def _extract_guide_text_by_type(file_path: Path, file_type: str) -> tuple[str, D
 
 
 def _extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
+    """
+    _extract_pdf_text 函数。
+
+    参数:
+        pdf_path: pdf_path 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     if fitz is None:
         raise RuntimeError("pymupdf 未安装，无法解析 PDF 指南")
 
@@ -571,6 +879,16 @@ def _extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
 
 
 def _summarize_chunks(chunk_summaries: Sequence[str]) -> str:
+    """
+    _summarize_chunks 函数。
+
+    参数:
+        chunk_summaries: chunk_summaries 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     provider, model_name = _build_provider()
     if not chunk_summaries:
         return ""
@@ -596,6 +914,16 @@ def _summarize_chunks(chunk_summaries: Sequence[str]) -> str:
 
 
 def _build_final_summary(extracted_text: str) -> str:
+    """
+    _build_final_summary 函数。
+
+    参数:
+        extracted_text: extracted_text 的输入值。
+
+    返回:
+        见函数返回值。
+    """
+
     chunks = _split_text_chunks(extracted_text)
     if not chunks:
         return ""
@@ -672,6 +1000,20 @@ def process_project_guide(project_id: int) -> None:
         error_message: str | None = None,
         generated_at: str | None = None,
     ) -> None:
+        """
+        _persist_manifest 函数。
+
+        参数:
+            status: status 的输入值。
+            extracted_text: extracted_text 的输入值。
+            summary_text: summary_text 的输入值。
+            error_message: error_message 的输入值。
+            generated_at: generated_at 的输入值。
+
+        返回:
+            见函数返回值。
+        """
+
         display_names = [item.get("original_name") or f"guide_{idx}" for idx, item in enumerate(guide_files, start=1)]
         guide_file_name = _build_guide_display_name([str(name) for name in display_names])
         file_type = "mixed" if len(guide_files) > 1 else str(guide_files[0].get("file_type") or "pdf")
@@ -710,6 +1052,16 @@ def process_project_guide(project_id: int) -> None:
         max_workers = min(4, len(guide_files)) or 1
 
         def _process_single_file(item: Dict[str, Any]) -> Dict[str, Any]:
+            """
+            _process_single_file 函数。
+
+            参数:
+                item: item 的输入值。
+
+            返回:
+                见函数返回值。
+            """
+
             file_path = _resolve_guide_path(item.get("stored_path"))
             if file_path is None or not file_path.exists():
                 raise RuntimeError("guide file not found")

@@ -251,6 +251,13 @@ def _build_minutes_segments_from_text(minutes_text: str) -> List[Dict[str, Any]]
     buffer: List[str] = []
 
     def flush_buffer() -> None:
+        """
+        flush_buffer 函数。
+
+        返回:
+            见函数返回值。
+        """
+
         if not buffer:
             return
         content = "\n".join(buffer).strip()
