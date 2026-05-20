@@ -667,8 +667,12 @@ export default function OverallNotesClient({ interviewId }: Props) {
       </Content>
       {data?.cards ? (
         <div className="summarynotes-card-export-stage" aria-hidden="true">
-          <div className="summarynotes-card-export-shell">
-            <OverallNotesCardsSection items={data.cards.items} containerId={OVERALL_NOTES_CARD_EXPORT_ID} />
+        <div className="summarynotes-card-export-shell">
+            <OverallNotesCardsSection
+              items={data.cards.items}
+              containerId={OVERALL_NOTES_CARD_EXPORT_ID}
+              exportMode
+            />
           </div>
         </div>
       ) : null}

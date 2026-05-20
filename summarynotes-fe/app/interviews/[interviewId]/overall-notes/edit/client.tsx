@@ -683,7 +683,11 @@ export default function OverallNotesEditClient({ interviewId }: Props) {
       </Content>
       <div className="summarynotes-card-export-stage" aria-hidden="true">
         <div className="summarynotes-card-export-shell">
-          <OverallNotesCardsSection items={exportCardItems} containerId={OVERALL_NOTES_CARD_EXPORT_ID} />
+          <OverallNotesCardsSection
+            items={exportCardItems}
+            containerId={OVERALL_NOTES_CARD_EXPORT_ID}
+            exportMode
+          />
         </div>
       </div>
     </Layout>

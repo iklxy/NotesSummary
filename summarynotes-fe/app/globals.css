@@ -332,6 +332,46 @@ body {
   background: transparent;
 }
 
+.summarynotes-card-export-mode .summarynotes-card-title {
+  font-size: 28px !important;
+  line-height: 1.22 !important;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-overview .summarynotes-card-title {
+  font-size: 32px !important;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-overview .summarynotes-card-overview-summary {
+  font-size: 21px !important;
+  line-height: 2.05 !important;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-point-text {
+  font-size: 21px !important;
+  line-height: 1.82 !important;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-tag {
+  font-size: 15px !important;
+  line-height: 1.4 !important;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-shell {
+  padding: 26px 24px 22px 30px;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-body {
+  gap: 18px;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-header {
+  gap: 14px;
+}
+
+.summarynotes-card-export-mode .summarynotes-card-points {
+  gap: 14px;
+}
+
 @media (max-width: 1360px) {
   .summarynotes-cards-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -215,11 +215,12 @@ function getCardTags(card: InterviewCardItem): string[] {
 interface Props {
   items: InterviewCardItem[];
   containerId?: string;
+  exportMode?: boolean;
 }
 
-export default function OverallNotesCardsSection({ items, containerId }: Props) {
+export default function OverallNotesCardsSection({ items, containerId, exportMode = false }: Props) {
   const grid = (
-    <div className="summarynotes-cards-grid">
+    <div className={`summarynotes-cards-grid${exportMode ? " summarynotes-card-export-mode" : ""}`}>
       {items.length > 0 ? (
         items.map((card, index) => {
           const theme = getCardTheme(index);
