@@ -6,6 +6,7 @@ import type {
   Project,
   ProjectDetail,
   ProjectCaTableResponse,
+  ProjectCaTablesResponse,
 } from "./types";
 
 interface CreateProjectPayload {
@@ -97,8 +98,13 @@ export function deleteProject(projectId: number): Promise<DeleteProjectResponse>
   });
 }
 
-export function getProjectCaTable(projectId: number): Promise<ProjectCaTableResponse> {
-  return request<ProjectCaTableResponse>(`/api/projects/${projectId}/ca-table`);
+export function getProjectCaTable(projectId: number, questionnaireId?: number): Promise<ProjectCaTableResponse> {
+  const query = questionnaireId && questionnaireId > 0 ? `?questionnaire_id=${questionnaireId}` : "";
+  return request<ProjectCaTableResponse>(`/api/projects/${projectId}/ca-table${query}`);
+}
+
+export function getProjectCaTables(projectId: number): Promise<ProjectCaTablesResponse> {
+  return request<ProjectCaTablesResponse>(`/api/projects/${projectId}/ca-tables`);
 }
 
 export function generateProjectCaTable(
@@ -106,6 +112,16 @@ export function generateProjectCaTable(
   payload: GenerateProjectCaTableRequest,
 ): Promise<GenerateProjectCaTableResponse> {
   return request<GenerateProjectCaTableResponse>(`/api/projects/${projectId}/ca-table/generate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function saveProjectCaFramework(
+  projectId: number,
+  payload: Record<string, unknown>,
+): Promise<GenerateProjectCaTableResponse> {
+  return request<GenerateProjectCaTableResponse>(`/api/projects/${projectId}/ca-table/framework`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

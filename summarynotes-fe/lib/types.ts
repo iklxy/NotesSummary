@@ -609,6 +609,61 @@ export interface ProjectCaInterviewItem {
   name: string;
   interview_date?: string | null;
   meta?: ProjectCaInterviewMeta | Record<string, string | number | null> | null;
+  hidden?: boolean | null;
+}
+
+export interface ProjectCaColumn {
+  column_id: string;
+  order: number;
+  question_text: string;
+  display_text?: string | null;
+  hidden?: boolean | null;
+  question_uid?: string | null;
+  interview_id?: number | null;
+  name?: string | null;
+  interview_date?: string | null;
+  meta?: ProjectCaInterviewMeta | Record<string, string | number | null> | null;
+}
+
+export interface ProjectCaCell {
+  value: string;
+  locked?: boolean | null;
+  source?: string | null;
+}
+
+export interface ProjectCaRow {
+  interview_id: number;
+  name: string;
+  interview_date?: string | null;
+  meta?: ProjectCaInterviewMeta | Record<string, string | number | null> | null;
+  hidden?: boolean | null;
+  question_uid?: string | null;
+  question_text?: string | null;
+  display_text?: string | null;
+  order?: number | null;
+}
+
+export interface ProjectCaSnapshot {
+  project_id: number;
+  questionnaire_id?: number | null;
+  project_name?: string | null;
+  questionnaire_name?: string | null;
+  selected_interview_ids?: number[];
+  interviews?: ProjectCaInterviewItem[];
+  rows?: ProjectCaRow[];
+  columns?: ProjectCaColumn[];
+  cells?: Record<string, Record<string, ProjectCaCell | string>>;
+  column_meta_fields?: string[];
+  column_meta_field_labels?: Record<string, string>;
+  status?: string | null;
+  generated_at?: string | null;
+  framework_generated_at?: string | null;
+  final_generated_at?: string | null;
+  reviewed_at?: string | null;
+  error_message?: string | null;
+  project_context?: Record<string, unknown> | null;
+  questionnaire_json?: Record<string, unknown> | null;
+  questionnaire_document?: Record<string, unknown> | null;
 }
 
 export interface ProjectCaSubPoint {
@@ -627,40 +682,82 @@ export interface ProjectCaDimension {
 
 export interface ProjectCaJson {
   project_id: number;
+  questionnaire_id?: number | null;
   project_name?: string | null;
+  questionnaire_name?: string | null;
   column_meta_fields?: string[];
   column_meta_field_labels?: Record<string, string>;
   selected_interview_ids?: number[];
-  interviews: ProjectCaInterviewItem[];
-  dimensions: ProjectCaDimension[];
+  interviews?: ProjectCaInterviewItem[];
+  rows?: ProjectCaRow[];
+  columns?: ProjectCaColumn[];
+  cells?: Record<string, Record<string, ProjectCaCell | string>>;
+  framework_json?: ProjectCaSnapshot | null;
+  final_json?: ProjectCaSnapshot | null;
+  framework_status?: string | null;
+  final_status?: string | null;
   status?: string | null;
   generated_at?: string | null;
+  framework_generated_at?: string | null;
+  final_generated_at?: string | null;
+  reviewed_at?: string | null;
   error_message?: string | null;
   project_context?: Record<string, unknown> | null;
+  questionnaire_json?: Record<string, unknown> | null;
+  questionnaire_document?: Record<string, unknown> | null;
+  dimensions?: ProjectCaDimension[];
 }
 
 export interface ProjectCaTableResponse {
   success: boolean;
   project_id: number;
   project_name?: string | null;
+  questionnaire_id?: number | null;
   ca_json?: ProjectCaJson | null;
 }
 
+export interface ProjectCaTableItem {
+  project_id: number;
+  questionnaire_id?: number | null;
+  ca_json?: ProjectCaJson | null;
+  framework_status?: string | null;
+  final_status?: string | null;
+  updated_at?: string | null;
+  generated_at?: string | null;
+  reviewed_at?: string | null;
+}
+
+export interface ProjectCaTablesResponse {
+  success: boolean;
+  project_id: number;
+  project_name?: string | null;
+  items: ProjectCaTableItem[];
+}
+
 export interface GenerateProjectCaTableRequest {
+  questionnaire_id: number;
   interview_ids: number[];
   column_meta_fields: string[];
+  mode?: "framework" | "final" | string;
+  framework_json?: ProjectCaJson | null;
 }
 
 export interface GenerateProjectCaTableResponse {
   success: boolean;
   project_id: number;
+  questionnaire_id?: number | null;
+  mode?: string | null;
   generated_at?: string | null;
+  framework_generated_at?: string | null;
+  final_generated_at?: string | null;
   column_meta_fields?: string[] | null;
   interview_count?: number | null;
   dimension_count?: number | null;
   requested_interview_ids?: number[] | null;
   skipped_interview_ids?: number[] | null;
   ca_json?: ProjectCaJson | null;
+  framework_json?: ProjectCaJson | null;
+  final_json?: ProjectCaJson | null;
   ca_json_path?: string | null;
   message?: string | null;
   stage?: string | null;

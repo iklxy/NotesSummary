@@ -18,6 +18,7 @@ from ModelNotes import (
     generate_overall_interview_note,
     repair_notes_json,
 )
+from ModelCA import generate_ca_cells_for_question
 from ModelTranscript import (
     apply_correction_fallback_batch,
     build_correction_rules_block,
@@ -741,6 +742,34 @@ class ModelClient:
             dimension_summary=dimension_summary,
             sub_point_title=sub_point_title,
             sub_point_summary=sub_point_summary,
+            interview_blocks=interview_blocks or [],
+        )
+
+    @classmethod
+    def generate_ca_cells_for_question(
+        cls,
+        project_context: Optional[str] = None,
+        questionnaire_title: str = "",
+        question_uid: str = "",
+        question_order: int = 0,
+        question_text: str = "",
+        interview_blocks: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于某一个问卷问题为所有访谈生成单元格内容。
+        """
+        return generate_ca_cells_for_question(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=130000,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            questionnaire_title=questionnaire_title,
+            question_uid=question_uid,
+            question_order=question_order,
+            question_text=question_text,
             interview_blocks=interview_blocks or [],
         )
 

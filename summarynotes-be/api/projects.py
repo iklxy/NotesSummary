@@ -28,6 +28,7 @@ from db import (
     fetch_interview_by_id,
     fetch_interviews_by_project,
     fetch_ca_table_by_project,
+    fetch_ca_tables_by_project,
     fetch_project_by_id,
     fetch_project_stats,
     fetch_projects,
@@ -655,30 +656,38 @@ def _get_ca_data_root() -> Path:
     return project_root / "data"
 
 
-def _get_ca_cache_path(project_id: int) -> Path:
+def _get_ca_cache_path(project_id: int, questionnaire_id: int | None = None) -> Path:
     """
     获取项目级 CA 缓存文件路径。
 
     参数:
         project_id: 项目 ID。
+        questionnaire_id: 可选问卷 ID。
 
     返回:
-        `data/project_{project_id}/ca_table.json`
+        `data/project_{project_id}/ca/questionnaire_{questionnaire_id}.json` 或旧路径。
     """
+    if questionnaire_id is not None:
+        return _get_ca_data_root() / f"project_{project_id}" / "ca" / f"questionnaire_{questionnaire_id}.json"
     return _get_ca_data_root() / f"project_{project_id}" / "ca_table.json"
 
 
-def _load_ca_payload_from_files(project_id: int) -> tuple[Dict[str, Any] | None, Path | None]:
+def _load_ca_payload_from_files(
+    project_id: int,
+    questionnaire_id: int | None = None,
+) -> tuple[Dict[str, Any] | None, Path | None]:
     """
     从本地缓存中读取 CA JSON。
 
     参数:
         project_id: 项目 ID。
+        questionnaire_id: 可选问卷 ID。
 
     返回:
         (payload, source_path)；没有有效文件则返回 (None, None)。
     """
     candidate_paths = [
+        _get_ca_cache_path(project_id, questionnaire_id),
         _get_ca_cache_path(project_id),
     ]
     for path in candidate_paths:
@@ -691,6 +700,45 @@ def _load_ca_payload_from_files(project_id: int) -> tuple[Dict[str, Any] | None,
         if isinstance(payload, dict):
             return payload, path
     return None, None
+
+
+def _hydrate_ca_payload_from_row(row: dict | None, project_name: str | None = None) -> Dict[str, Any] | None:
+    """
+    将数据库 CA 行规范化为前后端可直接使用的 JSON。
+    """
+    if not row:
+        return None
+    active_payload = _safe_load_json_text(row.get("ca_json"))
+    framework_payload = _safe_load_json_text(row.get("framework_json"))
+    final_payload = _safe_load_json_text(row.get("final_json"))
+    if active_payload is None:
+        active_payload = final_payload or framework_payload
+    if not isinstance(active_payload, dict):
+        return None
+
+    payload = dict(active_payload)
+    payload.setdefault("project_id", row.get("project_id"))
+    payload.setdefault("project_name", project_name)
+    if row.get("questionnaire_id") is not None:
+        payload["questionnaire_id"] = int(row["questionnaire_id"])
+    if framework_payload is not None:
+        payload["framework_json"] = framework_payload
+    elif isinstance(payload.get("framework_json"), dict):
+        payload["framework_json"] = payload.get("framework_json")
+    if final_payload is not None:
+        payload["final_json"] = final_payload
+    elif isinstance(payload.get("final_json"), dict):
+        payload["final_json"] = payload.get("final_json")
+
+    payload["framework_status"] = row.get("framework_status") or payload.get("framework_status") or "draft"
+    payload["final_status"] = row.get("final_status") or payload.get("final_status") or "pending"
+    payload["status"] = payload.get("final_status") or payload.get("framework_status") or row.get("status") or "pending"
+    payload["error_message"] = row.get("error_message") or payload.get("error_message")
+    payload["generated_at"] = row.get("generated_at") or payload.get("generated_at")
+    payload["framework_generated_at"] = row.get("framework_generated_at") or payload.get("framework_generated_at")
+    payload["final_generated_at"] = row.get("final_generated_at") or payload.get("final_generated_at")
+    payload["reviewed_at"] = row.get("reviewed_at") or payload.get("reviewed_at")
+    return payload
 
 
 def _build_download_content_disposition(filename: str) -> str:
@@ -913,6 +961,7 @@ def get_project_detail(
 @router.get("/{project_id}/ca-table", response_model=Dict[str, Any])
 def get_project_ca_table(
     project_id: int,
+    questionnaire_id: int | None = None,
     current_user_id: int = Depends(require_current_user_id),
 ) -> Dict[str, Any]:
     """
@@ -922,22 +971,29 @@ def get_project_ca_table(
         包含 ca_json 的响应字典；若数据库未命中则尝试从本地缓存恢复。
     """
     project = _get_owned_project_or_404(project_id, current_user_id)
-    row = fetch_ca_table_by_project(project_id)
-    ca_json = None
-    if row:
-        ca_json = _safe_load_json_text(row.get("ca_json"))
+    row = fetch_ca_table_by_project(project_id, questionnaire_id)
+    ca_json = _hydrate_ca_payload_from_row(row, project.get("name")) if row else None
 
     if ca_json is None:
-        fallback_payload, fallback_path = _load_ca_payload_from_files(project_id)
+        fallback_payload, fallback_path = _load_ca_payload_from_files(project_id, questionnaire_id)
         if fallback_payload is not None:
             ca_json = fallback_payload
+            fallback_framework_json = fallback_payload.get("framework_json") or fallback_payload
+            fallback_final_json = fallback_payload.get("final_json") if isinstance(fallback_payload.get("final_json"), dict) else None
             try:
                 upsert_ca_table(
                     project_id=project_id,
+                    questionnaire_id=questionnaire_id,
                     ca_json=fallback_payload,
-                    status=str(fallback_payload.get("status") or "done"),
+                    framework_json=fallback_framework_json,
+                    final_json=fallback_final_json,
+                    framework_status=str(fallback_payload.get("framework_status") or fallback_payload.get("status") or "reviewed"),
+                    final_status=str(fallback_payload.get("final_status") or ("done" if fallback_final_json is not None else "pending")),
                     error_message=fallback_payload.get("error_message"),
                     generated_at=fallback_payload.get("generated_at"),
+                    framework_generated_at=fallback_payload.get("framework_generated_at"),
+                    final_generated_at=fallback_payload.get("final_generated_at"),
+                    reviewed_at=fallback_payload.get("reviewed_at"),
                 )
             except Exception:
                 pass
@@ -946,7 +1002,41 @@ def get_project_ca_table(
         "success": True,
         "project_id": project_id,
         "project_name": project.get("name"),
+        "questionnaire_id": questionnaire_id,
         "ca_json": ca_json,
+    }
+
+
+@router.get("/{project_id}/ca-tables", response_model=Dict[str, Any])
+def list_project_ca_tables(
+    project_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    查询项目下全部 CA 表结果。
+    """
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    rows = fetch_ca_tables_by_project(project_id)
+    items: list[Dict[str, Any]] = []
+    for row in rows:
+        payload = _hydrate_ca_payload_from_row(row, project.get("name"))
+        items.append(
+            {
+                "project_id": project_id,
+                "questionnaire_id": row.get("questionnaire_id"),
+                "ca_json": payload,
+                "framework_status": row.get("framework_status"),
+                "final_status": row.get("final_status"),
+                "updated_at": row.get("updated_at"),
+                "generated_at": row.get("generated_at"),
+                "reviewed_at": row.get("reviewed_at"),
+            }
+        )
+    return {
+        "success": True,
+        "project_id": project_id,
+        "project_name": project.get("name"),
+        "items": items,
     }
 
 
@@ -962,16 +1052,23 @@ def generate_project_ca_table(
     参数:
         project_id: 项目 ID。
         payload: 可选请求体，支持:
+            - questionnaire_id: 当前 DG 的问卷 ID
             - interview_ids: 当前选择的访谈 ID 列表
             - column_meta_fields: 列元数据字段列表
+            - mode: framework / final
     """
     _get_owned_project_or_404(project_id, current_user_id)
     body = payload or {}
     url = f"{_get_internal_base()}/internal/projects/{project_id}/generate-ca-table"
+    questionnaire_id = body.get("questionnaire_id")
     request_payload = {
+        "questionnaire_id": questionnaire_id,
         "interview_ids": body.get("interview_ids") or [],
         "column_meta_fields": body.get("column_meta_fields") or [],
+        "mode": body.get("mode") or "framework",
     }
+    if isinstance(body.get("framework_json"), dict):
+        request_payload["framework_json"] = body.get("framework_json")
     log_project("CA", project_id, f"BFF request CA generation start request_payload={request_payload}")
     try:
         resp = requests.post(url, json=request_payload, timeout=3600)
@@ -995,6 +1092,71 @@ def generate_project_ca_table(
         raise HTTPException(status_code=500, detail=f"parse generate ca table response failed: {e}")
 
 
+@router.post("/{project_id}/ca-table/framework", response_model=Dict[str, Any])
+def save_project_ca_framework(
+    project_id: int,
+    payload: Dict[str, Any] | None = Body(default=None),
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    保存人工 review 后的 CA 框架。
+    """
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    body = payload or {}
+    questionnaire_id = body.get("questionnaire_id")
+    framework_json = body.get("framework_json")
+    if questionnaire_id is None:
+        raise HTTPException(status_code=400, detail="questionnaire_id is required")
+    if not isinstance(framework_json, dict):
+        raise HTTPException(status_code=400, detail="framework_json is required")
+    existing_row = fetch_ca_table_by_project(project_id, int(questionnaire_id))
+    existing_payload = _hydrate_ca_payload_from_row(existing_row, project.get("name")) if existing_row else None
+    existing_final_json = existing_payload.get("final_json") if isinstance(existing_payload, dict) else None
+    existing_final_status = existing_payload.get("final_status") if isinstance(existing_payload, dict) else None
+
+    try:
+        upsert_ca_table(
+            project_id=project_id,
+            questionnaire_id=int(questionnaire_id),
+            ca_json=framework_json,
+            framework_json=framework_json,
+            final_json=body.get("final_json") if isinstance(body.get("final_json"), dict) else existing_final_json,
+            framework_status=str(body.get("framework_status") or "reviewed"),
+            final_status=str(body.get("final_status") or existing_final_status or ("done" if existing_final_json is not None else "pending")),
+            error_message=body.get("error_message"),
+            generated_at=body.get("generated_at"),
+            framework_generated_at=body.get("framework_generated_at") or body.get("generated_at"),
+            final_generated_at=body.get("final_generated_at"),
+            reviewed_at=body.get("reviewed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save ca framework failed: {e}")
+
+    cache_path = _get_ca_cache_path(project_id, int(questionnaire_id))
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_payload = {
+        **framework_json,
+        "project_id": project_id,
+        "project_name": project.get("name"),
+        "questionnaire_id": int(questionnaire_id),
+        "framework_json": framework_json,
+        "final_json": body.get("final_json") if isinstance(body.get("final_json"), dict) else existing_final_json,
+        "framework_status": str(body.get("framework_status") or "reviewed"),
+        "final_status": str(body.get("final_status") or existing_final_status or ("done" if existing_final_json is not None else "pending")),
+        "generated_at": body.get("generated_at"),
+        "framework_generated_at": body.get("framework_generated_at") or body.get("generated_at"),
+        "final_generated_at": body.get("final_generated_at"),
+        "reviewed_at": body.get("reviewed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cache_path.write_text(json.dumps(cache_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "success": True,
+        "project_id": project_id,
+        "questionnaire_id": int(questionnaire_id),
+        "framework_json": framework_json,
+    }
+
+
 @router.post("/{project_id}/ca-table/export-xlsx")
 def export_project_ca_table_xlsx(
     project_id: int,
@@ -1009,13 +1171,14 @@ def export_project_ca_table_xlsx(
     project = _get_owned_project_or_404(project_id, current_user_id)
     log_project("CA", project_id, "CA Excel export start")
     body = payload or {}
+    questionnaire_id = body.get("questionnaire_id")
     ca_json = body.get("ca_json") if isinstance(body, dict) else None
     if not isinstance(ca_json, dict):
-        row = fetch_ca_table_by_project(project_id)
+        row = fetch_ca_table_by_project(project_id, int(questionnaire_id) if questionnaire_id is not None else None)
         if row:
-            ca_json = _safe_load_json_text(row.get("ca_json"))
+            ca_json = _hydrate_ca_payload_from_row(row, project.get("name"))
     if not isinstance(ca_json, dict):
-        fallback_payload, _ = _load_ca_payload_from_files(project_id)
+        fallback_payload, _ = _load_ca_payload_from_files(project_id, int(questionnaire_id) if questionnaire_id is not None else None)
         if fallback_payload is not None:
             ca_json = fallback_payload
     if not isinstance(ca_json, dict):
@@ -1023,12 +1186,21 @@ def export_project_ca_table_xlsx(
         raise HTTPException(status_code=404, detail="ca table not found")
 
     try:
+        framework_json = ca_json.get("framework_json") if isinstance(ca_json.get("framework_json"), dict) else ca_json
+        final_json = ca_json.get("final_json") if isinstance(ca_json.get("final_json"), dict) else None
         upsert_ca_table(
             project_id=project_id,
+            questionnaire_id=int(questionnaire_id) if questionnaire_id is not None else ca_json.get("questionnaire_id"),
             ca_json=ca_json,
-            status=str(ca_json.get("status") or "done"),
+            framework_json=framework_json,
+            final_json=final_json,
+            framework_status=str(ca_json.get("framework_status") or ca_json.get("status") or "reviewed"),
+            final_status=str(ca_json.get("final_status") or ("done" if final_json is not None else "pending")),
             error_message=ca_json.get("error_message"),
             generated_at=ca_json.get("generated_at"),
+            framework_generated_at=ca_json.get("framework_generated_at") or ca_json.get("generated_at"),
+            final_generated_at=ca_json.get("final_generated_at"),
+            reviewed_at=ca_json.get("reviewed_at"),
         )
     except Exception as e:
         log_project("CA", project_id, f"CA Excel database backfill failed error={e}")

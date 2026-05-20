@@ -94,15 +94,25 @@ DROP TABLE IF EXISTS `bh_project_ca_table`;
 CREATE TABLE `bh_project_ca_table` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `project_id` bigint unsigned NOT NULL COMMENT '项目ID',
-  `ca_json` longtext COMMENT 'CA表结构化JSON',
-  `status` varchar(32) NOT NULL DEFAULT 'done' COMMENT '状态：done/failed/pending',
+  `questionnaire_id` bigint unsigned DEFAULT NULL COMMENT '关联 bh_project_questionnaire.id',
+  `ca_json` longtext COMMENT '当前活跃CA JSON',
+  `framework_json` longtext COMMENT 'CA框架JSON',
+  `final_json` longtext COMMENT 'CA最终JSON',
+  `framework_status` varchar(32) NOT NULL DEFAULT 'draft' COMMENT '框架状态：draft/reviewing/reviewed',
+  `final_status` varchar(32) NOT NULL DEFAULT 'pending' COMMENT '最终状态：pending/generating/done/failed',
   `error_message` text COMMENT '错误信息',
   `generated_at` datetime DEFAULT NULL COMMENT '最近一次成功生成时间',
+  `framework_generated_at` datetime DEFAULT NULL COMMENT '框架最近生成时间',
+  `final_generated_at` datetime DEFAULT NULL COMMENT '最终内容最近生成时间',
+  `reviewed_at` datetime DEFAULT NULL COMMENT '框架审核确认时间',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_bh_project_ca_table_project_id` (`project_id`),
-  KEY `idx_bh_project_ca_table_status` (`status`)
+  UNIQUE KEY `uk_bh_project_ca_table_project_questionnaire` (`project_id`,`questionnaire_id`),
+  KEY `idx_bh_project_ca_table_questionnaire_id` (`questionnaire_id`),
+  KEY `idx_bh_project_ca_table_framework_status` (`framework_status`),
+  KEY `idx_bh_project_ca_table_final_status` (`final_status`),
+  CONSTRAINT `fk_bh_project_ca_table_questionnaire` FOREIGN KEY (`questionnaire_id`) REFERENCES `bh_project_questionnaire` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='项目CA表';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `bh_project_fewshot_sample`;
@@ -485,4 +495,3 @@ CREATE TABLE `bh_user` (
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-

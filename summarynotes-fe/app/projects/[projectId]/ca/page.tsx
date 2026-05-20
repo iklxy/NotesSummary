@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import CaProjectClient from "./client";
+import CaOverviewClient from "./overview-client";
 
 interface Props {
   params: Promise<{
@@ -16,5 +16,5 @@ export default async function CaProjectPage({ params }: Props) {
   if (!cookieStore.get("bh_user_id")?.value) {
     redirect(`/login?next=/projects/${safeId}/ca`);
   }
-  return <CaProjectClient projectId={safeId} />;
+  return <CaOverviewClient projectId={safeId} />;
 }

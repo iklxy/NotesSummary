@@ -7,6 +7,7 @@ SummaryNotes 后端数据库访问层。
 
 import json
 import os
+from datetime import datetime
 from typing import Any, Optional
 
 import dotenv
@@ -31,6 +32,30 @@ def _json_or_none(value: Any) -> Optional[str]:
         return json.dumps(value, ensure_ascii=False)
     text = str(value).strip()
     return text or None
+
+
+def _normalize_mysql_datetime(value: Any) -> Optional[str]:
+    """
+    将 ISO8601 / datetime 字符串归一化为 MySQL DATETIME 可接受的格式。
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized_text = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized_text)
+    except ValueError:
+        return text
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_connection() -> pymysql.connections.Connection:
@@ -2566,6 +2591,14 @@ def upsert_ca_table(
     status: str = "done",
     error_message: Optional[str] = None,
     generated_at: Optional[str] = None,
+    questionnaire_id: Optional[int] = None,
+    framework_json: Any = None,
+    final_json: Any = None,
+    framework_status: Optional[str] = None,
+    final_status: Optional[str] = None,
+    framework_generated_at: Optional[str] = None,
+    final_generated_at: Optional[str] = None,
+    reviewed_at: Optional[str] = None,
 ) -> int:
     """
     将项目 CA 结果写入 `bh_project_ca_table`。
@@ -2582,13 +2615,20 @@ def upsert_ca_table(
     """
     sql = """
         INSERT INTO bh_project_ca_table
-            (project_id, ca_json, status, error_message, generated_at)
-        VALUES (%s, %s, %s, %s, %s)
+            (project_id, questionnaire_id, ca_json, framework_json, final_json, framework_status, final_status, error_message, generated_at, framework_generated_at, final_generated_at, reviewed_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            questionnaire_id = VALUES(questionnaire_id),
             ca_json = VALUES(ca_json),
-            status = VALUES(status),
+            framework_json = VALUES(framework_json),
+            final_json = VALUES(final_json),
+            framework_status = VALUES(framework_status),
+            final_status = VALUES(final_status),
             error_message = VALUES(error_message),
-            generated_at = VALUES(generated_at)
+            generated_at = VALUES(generated_at),
+            framework_generated_at = VALUES(framework_generated_at),
+            final_generated_at = VALUES(final_generated_at),
+            reviewed_at = VALUES(reviewed_at)
     """
 
     def _json_or_none(value: Any) -> Optional[str]:
@@ -2609,6 +2649,14 @@ def upsert_ca_table(
         text = str(value).strip()
         return text or None
 
+    def _datetime_or_none(value: Any) -> Optional[str]:
+        return _normalize_mysql_datetime(value)
+
+    active_json = ca_json if ca_json is not None else framework_json if framework_json is not None else final_json
+    effective_framework_json = framework_json if framework_json is not None else active_json
+    effective_final_json = final_json
+    effective_framework_status = framework_status or ("reviewed" if effective_framework_json is not None else "draft")
+    effective_final_status = final_status or ("done" if effective_final_json is not None else "pending")
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -2616,10 +2664,17 @@ def upsert_ca_table(
                 sql,
                 (
                     project_id,
-                    _json_or_none(ca_json),
-                    str(status or "done"),
+                    questionnaire_id,
+                    _json_or_none(active_json),
+                    _json_or_none(effective_framework_json),
+                    _json_or_none(effective_final_json),
+                    str(effective_framework_status or "draft"),
+                    str(effective_final_status or "done"),
                     error_message,
-                    generated_at,
+                    _datetime_or_none(generated_at),
+                    _datetime_or_none(framework_generated_at),
+                    _datetime_or_none(final_generated_at),
+                    _datetime_or_none(reviewed_at),
                 ),
             )
             rowcount = cursor.rowcount
@@ -2632,12 +2687,13 @@ def upsert_ca_table(
         conn.close()
 
 
-def fetch_ca_table_by_project(project_id: int) -> dict | None:
+def fetch_ca_table_by_project(project_id: int, questionnaire_id: int | None = None) -> dict | None:
     """
     查询项目级 CA 表记录。
 
     参数:
         project_id: 项目主键 ID。
+        questionnaire_id: 可选问卷 ID。
 
     返回:
         若存在则返回单条 CA 记录字典，否则返回 `None`。
@@ -2646,24 +2702,70 @@ def fetch_ca_table_by_project(project_id: int) -> dict | None:
         SELECT
             id,
             project_id,
+            questionnaire_id,
             ca_json,
-            status,
+            framework_json,
+            final_json,
+            framework_status,
+            final_status,
             error_message,
             generated_at,
+            framework_generated_at,
+            final_generated_at,
+            reviewed_at,
             created_at,
             updated_at
         FROM bh_project_ca_table
         WHERE project_id = %s
-        LIMIT 1
+    """
+    params: list[Any] = [project_id]
+    if questionnaire_id is not None:
+        sql += " AND questionnaire_id = %s"
+        params.append(questionnaire_id)
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT 1"
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row
+
+
+def fetch_ca_tables_by_project(project_id: int) -> list[dict]:
+    """
+    查询项目下全部 CA 表记录。
+    """
+    sql = """
+        SELECT
+            id,
+            project_id,
+            questionnaire_id,
+            ca_json,
+            framework_json,
+            final_json,
+            framework_status,
+            final_status,
+            error_message,
+            generated_at,
+            framework_generated_at,
+            final_generated_at,
+            reviewed_at,
+            created_at,
+            updated_at
+        FROM bh_project_ca_table
+        WHERE project_id = %s
+        ORDER BY updated_at DESC, id DESC
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(sql, (project_id,))
-            row = cursor.fetchone()
+            rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
-    return row
+    return rows
 
 
 def upsert_interview_minutes(

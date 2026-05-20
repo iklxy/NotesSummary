@@ -504,23 +504,31 @@ def api_generate_ca_table(
 
     参数:
         project_id: 项目主键 ID。
-        payload: 可选请求体，支持 interview_ids 与 column_meta_fields。
+        payload: 可选请求体，支持 questionnaire_id / interview_ids / column_meta_fields / mode / framework_json。
     """
     body = payload or {}
+    questionnaire_id = body.get("questionnaire_id")
     interview_ids = body.get("interview_ids") or []
     column_meta_fields = body.get("column_meta_fields") or []
+    mode = body.get("mode") or "framework"
+    framework_json = body.get("framework_json")
     log_project(
         "CA",
         project_id,
         "CA table generation start "
+        f"questionnaire_id={questionnaire_id} "
         f"interview_ids={interview_ids} "
-        f"column_meta_fields={column_meta_fields}",
+        f"column_meta_fields={column_meta_fields} "
+        f"mode={mode}",
     )
     try:
         result = generate_ca_table_for_project(
             project_id=project_id,
             interview_ids=[int(item) for item in interview_ids if item is not None],
             column_meta_fields=[str(item) for item in column_meta_fields if str(item).strip()],
+            questionnaire_id=int(questionnaire_id) if questionnaire_id is not None else None,
+            mode=str(mode or "framework"),
+            framework_json=framework_json if isinstance(framework_json, dict) else None,
         )
         if isinstance(result, dict):
             if result.get("success"):

@@ -165,6 +165,36 @@ def parse_ca_cells_response(content: str, interview_ids: List[int]) -> Dict[str,
     return payload
 
 
+def _normalize_ca_column_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, str]:
+    """
+    归一化按问题列返回的单元格映射。
+    """
+    cells: Dict[str, str] = {str(i): "/" for i in interview_ids}
+    if isinstance(raw_cells, dict):
+        for key, value in raw_cells.items():
+            interview_key = str(key)
+            if interview_key not in cells:
+                continue
+            if isinstance(value, dict):
+                text = str(value.get("value") or value.get("text") or "").strip()
+            else:
+                text = str(value or "").strip()
+            cells[interview_key] = text or "/"
+    return cells
+
+
+def parse_ca_column_cells_response(content: str, interview_ids: List[int]) -> Dict[str, Any]:
+    """
+    解析按问题列生成的单元格结果。
+    """
+    payload = _parse_json_response(content)
+    if not isinstance(payload, dict):
+        payload = {"cells": _normalize_ca_column_cells(None, interview_ids), "llm_raw_output": content}
+    payload["cells"] = _normalize_ca_column_cells(payload.get("cells"), interview_ids)
+    payload.setdefault("llm_raw_output", content)
+    return payload
+
+
 def generate_ca_dimensions(
     generate_fn: Callable[[str, str], str],
     project_context_block: str,
@@ -333,4 +363,72 @@ def generate_ca_cells_for_sub_point(
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_cells_response(raw_output, interview_ids)
+    return payload
+
+
+def generate_ca_cells_for_question(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    questionnaire_title: str,
+    question_uid: str,
+    question_order: int,
+    question_text: str,
+    interview_blocks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    为某一个问卷叶子问题批量生成各访谈单元格内容。
+    """
+    if not interview_blocks:
+        return {"cells": {}}
+
+    interview_lines: List[str] = []
+    interview_ids: List[int] = []
+    for item in interview_blocks:
+        interview_id = int(item.get("interview_id") or 0)
+        interview_ids.append(interview_id)
+        name = str(item.get("name") or f"访谈 {interview_id}").strip()
+        meta = item.get("meta") or {}
+        segments = item.get("segments") or []
+        segment_lines: List[str] = []
+        if isinstance(segments, list):
+            for seg_index, seg in enumerate(segments, start=1):
+                if not isinstance(seg, dict):
+                    continue
+                sid = seg.get("summary_id", "")
+                speaker = seg.get("speaker", "")
+                text = str(seg.get("text") or "").replace("\n", " ").strip()
+                score = seg.get("score", 0.0)
+                if not text:
+                    continue
+                segment_lines.append(f"[{seg_index}] summary_id={sid} speaker={speaker} score={float(score or 0.0):.4f}\n{text}")
+        if not segment_lines:
+            segment_lines.append("（当前没有检索到相关片段）")
+        meta_text = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else str(meta or "")
+        interview_lines.append(
+            f"【访谈 {interview_id} | {name}】\n【访谈元数据】\n{meta_text}\n\n【相关片段】\n"
+            + "\n\n".join(segment_lines)
+        )
+
+    system_prompt = (
+        "你是专业的医疗咨询行业对比分析专家。"
+        "你的任务是针对同一个问卷问题，基于每个访谈对应的检索片段，分别输出各访谈的单元格内容。"
+        "必须输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"【问卷名称】\n{questionnaire_title}\n\n"
+        f"【问题编号】\n{question_order}\n\n"
+        f"【问题 ID】\n{question_uid}\n\n"
+        f"【问题正文】\n{question_text}\n\n"
+        + "\n\n".join(interview_lines)
+        + "\n\n"
+        "要求：\n"
+        "1. 只基于对应访谈的片段总结，不要跨访谈串用信息。\n"
+        "2. 如果该访谈没有相关内容，请填写 \"/\"。\n"
+        "3. 如果信息明显不足但能看出该访谈有相关讨论，请用最简短的自然语言总结。\n"
+        "4. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "5. 输出结构必须是 {\"cells\": {\"35\": \"...\", \"40\": \"/\"}} 这种映射。\n"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    payload = parse_ca_column_cells_response(raw_output, interview_ids)
     return payload

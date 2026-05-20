@@ -4,6 +4,7 @@
 
 import json
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 import pymysql
@@ -55,6 +56,30 @@ class DbAccess:
         if not path.is_absolute():
             path = cls._get_data_root() / path
         return path
+
+    @staticmethod
+    def _normalize_mysql_datetime(value: Any) -> Optional[str]:
+        """
+        将 ISO8601 / datetime 字符串归一化为 MySQL DATETIME 可接受的格式。
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        normalized_text = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(normalized_text)
+        except ValueError:
+            return text
+
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def _format_summary_timestamp(seg: Dict[str, Any]) -> str:
@@ -947,6 +972,9 @@ class DbAccess:
             text = str(value).strip()
             return text or None
 
+        def _datetime_or_none(value: Any) -> Optional[str]:
+            return DbAccess._normalize_mysql_datetime(value)
+
         conn = cls.get_connection()
         written = 0
         try:
@@ -1241,6 +1269,14 @@ class DbAccess:
         status: str = "done",
         error_message: Optional[str] = None,
         generated_at: Optional[str] = None,
+        questionnaire_id: Optional[int] = None,
+        framework_json: Any = None,
+        final_json: Any = None,
+        framework_status: Optional[str] = None,
+        final_status: Optional[str] = None,
+        framework_generated_at: Optional[str] = None,
+        final_generated_at: Optional[str] = None,
+        reviewed_at: Optional[str] = None,
     ) -> int:
         """
         将项目级 CA 结果写入 `bh_project_ca_table`。
@@ -1251,19 +1287,34 @@ class DbAccess:
             status: 记录状态，默认 `done`。
             error_message: 可选错误说明。
             generated_at: 可选生成时间字符串；为空时写入 NULL。
+            questionnaire_id: 关联的问卷 ID。
+            framework_json: CA 框架 JSON。
+            final_json: CA 最终 JSON。
+            framework_status: 框架状态。
+            final_status: 最终状态。
+            framework_generated_at: 框架生成时间。
+            final_generated_at: 最终生成时间。
+            reviewed_at: 人工确认时间。
 
         返回:
             `cursor.rowcount`。
         """
         sql = """
             INSERT INTO bh_project_ca_table
-                (project_id, ca_json, status, error_message, generated_at)
-            VALUES (%s, %s, %s, %s, %s)
+                (project_id, questionnaire_id, ca_json, framework_json, final_json, framework_status, final_status, error_message, generated_at, framework_generated_at, final_generated_at, reviewed_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
+                questionnaire_id = VALUES(questionnaire_id),
                 ca_json = VALUES(ca_json),
-                status = VALUES(status),
+                framework_json = VALUES(framework_json),
+                final_json = VALUES(final_json),
+                framework_status = VALUES(framework_status),
+                final_status = VALUES(final_status),
                 error_message = VALUES(error_message),
-                generated_at = VALUES(generated_at)
+                generated_at = VALUES(generated_at),
+                framework_generated_at = VALUES(framework_generated_at),
+                final_generated_at = VALUES(final_generated_at),
+                reviewed_at = VALUES(reviewed_at)
         """
 
         def _json_or_none(value: Any) -> Optional[str]:
@@ -1284,6 +1335,14 @@ class DbAccess:
             text = str(value).strip()
             return text or None
 
+        def _datetime_or_none(value: Any) -> Optional[str]:
+            return DbAccess._normalize_mysql_datetime(value)
+
+        active_json = ca_json if ca_json is not None else framework_json if framework_json is not None else final_json
+        effective_framework_json = framework_json if framework_json is not None else active_json
+        effective_final_json = final_json
+        effective_framework_status = framework_status or ("reviewed" if effective_framework_json is not None else "draft")
+        effective_final_status = final_status or ("done" if effective_final_json is not None else "pending")
         conn = cls.get_connection()
         try:
             with conn.cursor() as cursor:
@@ -1291,10 +1350,17 @@ class DbAccess:
                     sql,
                     (
                         project_id,
-                        _json_or_none(ca_json),
-                        str(status or "done"),
+                        questionnaire_id,
+                        _json_or_none(active_json),
+                        _json_or_none(effective_framework_json),
+                        _json_or_none(effective_final_json),
+                        str(effective_framework_status or "draft"),
+                        str(effective_final_status or "done"),
                         error_message,
-                        generated_at,
+                        _datetime_or_none(generated_at),
+                        _datetime_or_none(framework_generated_at),
+                        _datetime_or_none(final_generated_at),
+                        _datetime_or_none(reviewed_at),
                     ),
                 )
                 rowcount = cursor.rowcount
@@ -1307,12 +1373,17 @@ class DbAccess:
             conn.close()
 
     @classmethod
-    def fetch_ca_table_by_project(cls, project_id: int) -> Optional[Dict[str, Any]]:
+    def fetch_ca_table_by_project(
+        cls,
+        project_id: int,
+        questionnaire_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         查询项目级 CA 表记录。
 
         参数:
             project_id: 项目主键 ID。
+            questionnaire_id: 可选问卷 ID。
 
         返回:
             若存在则返回单条 CA 记录字典，否则返回 `None`。
@@ -1321,17 +1392,56 @@ class DbAccess:
             SELECT
                 id,
                 project_id,
+                questionnaire_id,
                 ca_json,
-                status,
+                framework_json,
+                final_json,
+                framework_status,
+                final_status,
                 error_message,
                 generated_at,
+                framework_generated_at,
+                final_generated_at,
+                reviewed_at,
                 created_at,
                 updated_at
             FROM bh_project_ca_table
             WHERE project_id = %s
-            LIMIT 1
         """
-        return cls._fetch_one(sql, (project_id,))
+        params: list[Any] = [project_id]
+        if questionnaire_id is not None:
+            sql += " AND questionnaire_id = %s"
+            params.append(questionnaire_id)
+        sql += " ORDER BY updated_at DESC, id DESC LIMIT 1"
+        return cls._fetch_one(sql, tuple(params))
+
+    @classmethod
+    def fetch_ca_tables_by_project(cls, project_id: int) -> List[Dict[str, Any]]:
+        """
+        查询项目下全部 CA 表记录。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                questionnaire_id,
+                ca_json,
+                framework_json,
+                final_json,
+                framework_status,
+                final_status,
+                error_message,
+                generated_at,
+                framework_generated_at,
+                final_generated_at,
+                reviewed_at,
+                created_at,
+                updated_at
+            FROM bh_project_ca_table
+            WHERE project_id = %s
+            ORDER BY updated_at DESC, id DESC
+        """
+        return cls._fetch_all(sql, (project_id,))
 
     # ------------------------------------------------------------------
     # Summary 落库
