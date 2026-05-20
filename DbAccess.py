@@ -762,7 +762,23 @@ class DbAccess:
             满足恢复条件的任务列表。
         """
         status_list = list(statuses or ("queued", "running", "waiting_asr", "recovering"))
-        stage_list = list(stages or ("created", "audio_ready", "asr_submitting", "asr_polling", "asr_done", "cleaning"))
+        stage_list = list(
+            stages
+            or (
+                "created",
+                "audio_ready",
+                "asr_submitting",
+                "asr_polling",
+                "asr_done",
+                "cleaning",
+                "cleaned",
+                "summary_written",
+                "overall_note_written",
+                "minutes_written",
+                "cards_written",
+                "kbq_written",
+            )
+        )
         if not status_list or not stage_list:
             return []
 
@@ -1168,6 +1184,26 @@ class DbAccess:
         return cls._fetch_one(sql, (interview_id,))
 
     @classmethod
+    def fetch_interview_cards_by_interview(cls, interview_id: int) -> Optional[Dict[str, Any]]:
+        """
+        查询某个访谈下的全文模块卡片父记录。
+        """
+        sql = """
+            SELECT
+                id,
+                project_id,
+                project_interview_id,
+                status,
+                error_message,
+                created_at,
+                updated_at
+            FROM bh_project_interview_cards
+            WHERE project_interview_id = %s
+            LIMIT 1
+        """
+        return cls._fetch_one(sql, (interview_id,))
+
+    @classmethod
     def upsert_ca_table(
         cls,
         project_id: int,
@@ -1316,6 +1352,17 @@ class DbAccess:
             conn.close()
 
         return inserted
+
+    @classmethod
+    def delete_interview_summary_by_interview(cls, interview_id: int) -> int:
+        """
+        删除某个访谈下的 summary 明细。
+        """
+        sql = """
+            DELETE FROM bh_project_interview_summary
+            WHERE project_interview_id = %s
+        """
+        return cls._execute_write(sql, (interview_id,))
 
     # ------------------------------------------------------------------
     # Notes 落库

@@ -14,6 +14,7 @@ from VolcengineConversion import run_asr
 from CleanConversion import clean_file_content_json
 from Model import ModelClient
 from Hotword import load_correction_rules_from_state, load_term_hints_from_state, merge_term_hints
+from CardsWorkflow import generate_cards_for_interview
 from QuestionnaireHotword import load_reviewed_questionnaire_hotwords
 from DbAccess import DbAccess
 from InterviewLogger import log_interview
@@ -26,6 +27,21 @@ from config import config
 WORKFLOW_JOB_TYPE = "transcription"
 WORKFLOW_LEASE_SECONDS = 45 * 60
 WORKFLOW_ASR_TASK_EXPIRES_HOURS = 24
+WORKFLOW_STAGE_ORDER = {
+    "created": 0,
+    "audio_ready": 1,
+    "asr_submitting": 2,
+    "asr_polling": 3,
+    "asr_done": 4,
+    "cleaning": 5,
+    "cleaned": 6,
+    "summary_written": 7,
+    "overall_note_written": 8,
+    "minutes_written": 9,
+    "cards_written": 10,
+    "kbq_written": 11,
+    "done": 12,
+}
 
 
 def _workflow_owner() -> str:
@@ -57,6 +73,20 @@ def _parse_json_maybe(value: Any) -> Any:
         except Exception:
             return value
     return value
+
+
+def _json_text(value: Any) -> str:
+    """
+    将 JSON/对象/字符串统一转成可写入后续流程的文本。
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
 
 
 def _build_asr_checkpoint(
@@ -95,6 +125,15 @@ def _task_expires_at(submitted_at: datetime) -> datetime:
     按当前约定生成 ASR 任务的可恢复截止时间。
     """
     return submitted_at + timedelta(hours=WORKFLOW_ASR_TASK_EXPIRES_HOURS)
+
+
+def _workflow_stage_rank(stage: str | None) -> int:
+    """
+    将工作流阶段映射为可比较的顺序值。
+    """
+    if not stage:
+        return 0
+    return WORKFLOW_STAGE_ORDER.get(str(stage), 0)
 
 
 def _workflow_log(interview_id: int | None, stage: str, message: str) -> None:
@@ -679,6 +718,10 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
         speakers = obj.get("result", {}).get("speakers") or []
         if not speakers:
             return {"success": False, "message": "no speakers in cleaned json"}
+        try:
+            DbAccess.delete_interview_summary_by_interview(interview_id)
+        except Exception as e:
+            _workflow_log(interview_id, "write_summary", f"warning failed to clear old summary rows error={e}")
         for seg in speakers:
             if not isinstance(seg, dict):
                 continue
@@ -990,131 +1033,357 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
         interview_context = ec["interview_context"]
         _workflow_log(interview_id, "extract_interview_context", "done")
 
-        try:
-            current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
-            retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
-            poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
-            current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
-            DbAccess.upsert_workflow_job(
-                project_id=int(project_id),
-                interview_id=interview_id,
-                workflow_type=WORKFLOW_JOB_TYPE,
-                status="running",
-                stage="cleaning",
-                object_key=object_key,
-                audio_url=audio_url,
-                volc_task_id=current_task_id,
-                retry_count=retry_count,
-                poll_count=poll_count,
-                lease_owner=_workflow_owner(),
-                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
-                checkpoint_json={
-                    "interview_id": interview_id,
-                    "project_id": int(project_id),
-                    "stage": "cleaning",
-                    "object_key": object_key,
-                    "audio_url": audio_url,
-                    "note": "cleaning started",
-                },
-            )
-        except Exception as e:
-            _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaning stage error={e}")
+        current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
+        retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
+        poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
+        current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
+        cached_cleaned_json = _json_text(current_job.get("cleaned_json")) if current_job else ""
+        cleaned_json = cached_cleaned_json.strip() if isinstance(cached_cleaned_json, str) else ""
 
-        # 5. LLM 纠错 + 再纠错 + 清洗
-        cl = step_clean_with_llm(
-            file_content_json,
-            project_context=project_context,
-            interview_context=interview_context,
-            term_hints=term_hints,
-            correction_rules=correction_rules,
-            interview_id=interview_id,
-        )
-        if not cl.get("success"):
-            return fail("correct_fallback", cl)
-        cleaned_json = cl["cleaned_json"]
-        try:
-            current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
-            retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
-            poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
-            current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
-            DbAccess.upsert_workflow_job(
-                project_id=int(project_id),
-                interview_id=interview_id,
-                workflow_type=WORKFLOW_JOB_TYPE,
-                status="running",
-                stage="cleaning",
-                object_key=object_key,
-                audio_url=audio_url,
-                volc_task_id=current_task_id,
-                retry_count=retry_count,
-                poll_count=poll_count,
-                cleaned_json=cleaned_json,
-                lease_owner=_workflow_owner(),
-                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
-                checkpoint_json={
-                    "interview_id": interview_id,
-                    "project_id": int(project_id),
-                    "stage": "cleaning",
-                    "object_key": object_key,
-                    "audio_url": audio_url,
-                    "note": "cleaning done",
-                    "cleaned_json_len": len(cleaned_json) if isinstance(cleaned_json, str) else None,
-                },
-            )
-        except Exception as e:
-            _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaned json error={e}")
-        _workflow_log(interview_id, "correct_fallback", "done")
-
-        # 6. 写 summary
-        ws = step_write_summary(interview_id, cleaned_json)
-        if not ws.get("success"):
-            return fail("write_summary", ws)
-        _workflow_log(interview_id, "write_summary", f"done inserted={ws.get('inserted', 0)}")
-
-        overall_note_result = step_generate_overall_note(
-            interview_id=interview_id,
-            cleaned_json=cleaned_json,
-            project_context=project_context,
-            interview_context=interview_context,
-            core_problem=core_problem,
-        )
-        overall_note_warning = None
-        if not overall_note_result.get("success"):
-            overall_note_warning = overall_note_result.get("message") or "generate overall note failed"
-            _workflow_log(interview_id, "generate_overall_note", f"warning detail={overall_note_result}")
+        if cleaned_json:
+            try:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="cleaned",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    volc_task_id=current_task_id,
+                    retry_count=retry_count,
+                    poll_count=poll_count,
+                    cleaned_json=cleaned_json,
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                    checkpoint_json={
+                        "interview_id": interview_id,
+                        "project_id": int(project_id),
+                        "stage": "cleaned",
+                        "object_key": object_key,
+                        "audio_url": audio_url,
+                        "note": "cleaned json reused",
+                        "cleaned_json_len": len(cleaned_json),
+                    },
+                )
+            except Exception as e:
+                _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaned reuse stage error={e}")
+            _workflow_log(interview_id, "clean_with_llm", f"reuse cached cleaned_json stage={current_job.get('stage') if current_job else None}")
         else:
-            _workflow_log(interview_id, "generate_overall_note", "done")
+            try:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="cleaning",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    volc_task_id=current_task_id,
+                    retry_count=retry_count,
+                    poll_count=poll_count,
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                    checkpoint_json={
+                        "interview_id": interview_id,
+                        "project_id": int(project_id),
+                        "stage": "cleaning",
+                        "object_key": object_key,
+                        "audio_url": audio_url,
+                        "note": "cleaning started",
+                    },
+                )
+            except Exception as e:
+                _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaning stage error={e}")
 
-        minutes_result = generate_minutes_for_interview(
-            interview_id,
-            project_context=project_context,
-            top_k=8,
-        )
-        minutes_warning = None
-        if not minutes_result.get("success"):
-            minutes_warning = minutes_result.get("message") or "generate minutes failed"
-            _workflow_log(interview_id, "generate_minutes", f"warning detail={minutes_result}")
-        else:
-            _workflow_log(
-                interview_id,
-                "generate_minutes",
-                f"done minutes_chars={minutes_result.get('minutes_chars', 0)} inserted={minutes_result.get('inserted', 0)}",
-            )
-        cards_warning = None
-        if minutes_result.get("cards_success") is False:
-            cards_warning = minutes_result.get("cards_message") or "generate cards failed"
-            _workflow_log(interview_id, "generate_cards", f"warning detail={minutes_result}")
-
-        kbq_result = {"success": False, "message": "kbq skipped because smart minutes generation failed", "inserted": 0}
-        if minutes_result.get("success"):
-            kbq_result = run_kbq_notes_generation_for_interview(
-                interview_id,
+            # 5. LLM 纠错 + 再纠错 + 清洗
+            cl = step_clean_with_llm(
+                file_content_json,
                 project_context=project_context,
                 interview_context=interview_context,
+                term_hints=term_hints,
+                correction_rules=correction_rules,
+                interview_id=interview_id,
             )
+            if not cl.get("success"):
+                return fail("correct_fallback", cl)
+            cleaned_json = cl["cleaned_json"]
+            try:
+                DbAccess.upsert_workflow_job(
+                    project_id=int(project_id),
+                    interview_id=interview_id,
+                    workflow_type=WORKFLOW_JOB_TYPE,
+                    status="running",
+                    stage="cleaned",
+                    object_key=object_key,
+                    audio_url=audio_url,
+                    volc_task_id=current_task_id,
+                    retry_count=retry_count,
+                    poll_count=poll_count,
+                    cleaned_json=cleaned_json,
+                    lease_owner=_workflow_owner(),
+                    lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                    checkpoint_json={
+                        "interview_id": interview_id,
+                        "project_id": int(project_id),
+                        "stage": "cleaned",
+                        "object_key": object_key,
+                        "audio_url": audio_url,
+                        "note": "cleaning done",
+                        "cleaned_json_len": len(cleaned_json) if isinstance(cleaned_json, str) else None,
+                    },
+                )
+            except Exception as e:
+                _workflow_log(interview_id, "clean_with_llm", f"warning failed to persist cleaned json error={e}")
+        _workflow_log(interview_id, "correct_fallback", "done")
+
+        overall_note_warning = None
+        minutes_warning = None
+        cards_warning = None
         kbq_warning = None
-        if not kbq_result.get("success"):
-            kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
+
+        def _persist_post_clean_stage(stage: str, checkpoint: Dict[str, Any] | None = None) -> None:
+            if project_id is None:
+                return
+            current_job = DbAccess.get_workflow_job_by_interview(interview_id, WORKFLOW_JOB_TYPE)
+            retry_count = int(current_job.get("retry_count") or 0) if current_job else 0
+            poll_count = int(current_job.get("poll_count") or 0) if current_job else 0
+            current_task_id = str(current_job.get("volc_task_id") or "") if current_job else ""
+            DbAccess.upsert_workflow_job(
+                project_id=int(project_id),
+                interview_id=interview_id,
+                workflow_type=WORKFLOW_JOB_TYPE,
+                status="running",
+                stage=stage,
+                object_key=object_key,
+                audio_url=audio_url,
+                volc_task_id=current_task_id,
+                retry_count=retry_count,
+                poll_count=poll_count,
+                lease_owner=_workflow_owner(),
+                lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
+                checkpoint_json=checkpoint or {
+                    "interview_id": interview_id,
+                    "project_id": int(project_id),
+                    "stage": stage,
+                    "object_key": object_key,
+                    "audio_url": audio_url,
+                },
+            )
+
+        cleaned_obj = _parse_json_maybe(cleaned_json)
+        cleaned_speakers = []
+        if isinstance(cleaned_obj, dict):
+            cleaned_speakers = (cleaned_obj.get("result") or {}).get("speakers") or []
+        expected_summary_rows = 0
+        if isinstance(cleaned_speakers, list):
+            for seg in cleaned_speakers:
+                if not isinstance(seg, dict):
+                    continue
+                final_text = str(seg.get("speaker_content_clean") or "").strip()
+                if not final_text:
+                    final_text = str(seg.get("speaker_content_corrected") or "").strip()
+                if not final_text:
+                    final_text = str(seg.get("text") or "").strip()
+                if not final_text:
+                    final_text = str(seg.get("speaker_content") or "").strip()
+                if final_text:
+                    expected_summary_rows += 1
+
+        summary_rows = DbAccess.fetch_interview_summary(interview_id)
+        if len(summary_rows) != expected_summary_rows:
+            ws = step_write_summary(interview_id, cleaned_json)
+            if not ws.get("success"):
+                return fail("write_summary", ws)
+            _workflow_log(interview_id, "write_summary", f"done inserted={ws.get('inserted', 0)}")
+        else:
+            ws = {"success": True, "inserted": len(summary_rows), "skipped": True}
+            _workflow_log(interview_id, "write_summary", f"skipped existing_rows={len(summary_rows)}")
+        try:
+            _persist_post_clean_stage(
+                "summary_written",
+                {
+                    "interview_id": interview_id,
+                    "project_id": int(project_id),
+                    "stage": "summary_written",
+                    "object_key": object_key,
+                    "audio_url": audio_url,
+                    "summary_rows": ws.get("inserted", 0),
+                },
+            )
+        except Exception as e:
+            _workflow_log(interview_id, "write_summary", f"warning failed to persist summary stage error={e}")
+
+        interview_row_after_clean = DbAccess.get_interview_by_id(interview_id)
+        note_content = str(interview_row_after_clean.get("note_content") or "").strip() if interview_row_after_clean else ""
+        if not note_content:
+            overall_note_result = step_generate_overall_note(
+                interview_id=interview_id,
+                cleaned_json=cleaned_json,
+                project_context=project_context,
+                interview_context=interview_context,
+                core_problem=core_problem,
+            )
+            if not overall_note_result.get("success"):
+                overall_note_warning = overall_note_result.get("message") or "generate overall note failed"
+                _workflow_log(interview_id, "generate_overall_note", f"warning detail={overall_note_result}")
+            else:
+                _workflow_log(interview_id, "generate_overall_note", "done")
+                try:
+                    _persist_post_clean_stage(
+                        "overall_note_written",
+                        {
+                            "interview_id": interview_id,
+                            "project_id": int(project_id),
+                            "stage": "overall_note_written",
+                            "object_key": object_key,
+                            "audio_url": audio_url,
+                            "note": "overall note written",
+                        },
+                    )
+                except Exception as e:
+                    _workflow_log(interview_id, "generate_overall_note", f"warning failed to persist note stage error={e}")
+        else:
+            overall_note_result = {"success": True, "skipped": True}
+            _workflow_log(interview_id, "generate_overall_note", "skipped existing note_content")
+
+        minutes_row = DbAccess.fetch_interview_minutes_by_interview(interview_id)
+        minutes_done = bool(minutes_row and str(minutes_row.get("status") or "").lower() == "done")
+        if not minutes_done:
+            minutes_result = generate_minutes_for_interview(
+                interview_id,
+                project_context=project_context,
+                top_k=8,
+            )
+            if not minutes_result.get("success"):
+                minutes_warning = minutes_result.get("message") or "generate minutes failed"
+                _workflow_log(interview_id, "generate_minutes", f"warning detail={minutes_result}")
+            else:
+                _workflow_log(
+                    interview_id,
+                    "generate_minutes",
+                    f"done minutes_chars={minutes_result.get('minutes_chars', 0)} inserted={minutes_result.get('inserted', 0)}",
+                )
+                try:
+                    _persist_post_clean_stage(
+                        "minutes_written",
+                        {
+                            "interview_id": interview_id,
+                            "project_id": int(project_id),
+                            "stage": "minutes_written",
+                            "object_key": object_key,
+                            "audio_url": audio_url,
+                            "note": "minutes written",
+                        },
+                    )
+                except Exception as e:
+                    _workflow_log(interview_id, "generate_minutes", f"warning failed to persist minutes stage error={e}")
+        else:
+            minutes_result = {
+                "success": True,
+                "inserted": 0,
+                "minutes_chars": 0,
+                "cards_success": True,
+                "cards_message": None,
+                "skipped": True,
+            }
+            _workflow_log(interview_id, "generate_minutes", "skipped existing minutes")
+            try:
+                _persist_post_clean_stage(
+                    "minutes_written",
+                    {
+                        "interview_id": interview_id,
+                        "project_id": int(project_id),
+                        "stage": "minutes_written",
+                        "object_key": object_key,
+                        "audio_url": audio_url,
+                        "note": "minutes already existed",
+                    },
+                )
+            except Exception as e:
+                _workflow_log(interview_id, "generate_minutes", f"warning failed to sync minutes stage error={e}")
+
+        cards_row = DbAccess.fetch_interview_cards_by_interview(interview_id)
+        cards_done = bool(cards_row and str(cards_row.get("status") or "").lower() == "done")
+        if not cards_done:
+            try:
+                cards_result = generate_cards_for_interview(
+                    interview_id,
+                    project_context=project_context,
+                )
+            except Exception as cards_exc:
+                cards_result = {
+                    "success": False,
+                    "generated": 0,
+                    "inserted": 0,
+                    "message": f"generate cards failed: {cards_exc}",
+                }
+                _workflow_log(interview_id, "generate_cards", f"warning detail={cards_result}")
+            if cards_result.get("success"):
+                _workflow_log(
+                    interview_id,
+                    "generate_cards",
+                    f"done cards={cards_result.get('inserted', 0)}",
+                )
+                try:
+                    _persist_post_clean_stage(
+                        "cards_written",
+                        {
+                            "interview_id": interview_id,
+                            "project_id": int(project_id),
+                            "stage": "cards_written",
+                            "object_key": object_key,
+                            "audio_url": audio_url,
+                            "note": "cards written",
+                        },
+                    )
+                except Exception as e:
+                    _workflow_log(interview_id, "generate_cards", f"warning failed to persist cards stage error={e}")
+            else:
+                cards_warning = cards_result.get("message") or "generate cards failed"
+                _workflow_log(interview_id, "generate_cards", f"warning detail={cards_result}")
+        else:
+            cards_result = {"success": True, "generated": 0, "inserted": 0, "skipped": True}
+            _workflow_log(interview_id, "generate_cards", "skipped existing cards")
+
+        kbq_rows = DbAccess.fetch_key_bq_rows_by_interview(interview_id)
+        kbq_done = bool(kbq_rows) and all(str(row.get("status") or "").lower() == "done" for row in kbq_rows)
+        if not kbq_done:
+            if minutes_done or minutes_result.get("success"):
+                kbq_result = run_kbq_notes_generation_for_interview(
+                    interview_id,
+                    project_context=project_context,
+                    interview_context=interview_context,
+                )
+                if not kbq_result.get("success"):
+                    kbq_warning = kbq_result.get("message") or "generate kbq notes failed"
+                else:
+                    _workflow_log(
+                        interview_id,
+                        "generate_kbq",
+                        f"done generated={kbq_result.get('generated', 0)} inserted={kbq_result.get('inserted', 0)}",
+                    )
+                    try:
+                        _persist_post_clean_stage(
+                            "kbq_written",
+                            {
+                                "interview_id": interview_id,
+                                "project_id": int(project_id),
+                                "stage": "kbq_written",
+                                "object_key": object_key,
+                                "audio_url": audio_url,
+                                "note": "kbq written",
+                            },
+                        )
+                    except Exception as e:
+                        _workflow_log(interview_id, "generate_kbq", f"warning failed to persist kbq stage error={e}")
+            else:
+                kbq_result = {"success": False, "message": "kbq skipped because minutes generation failed", "inserted": 0}
+                kbq_warning = kbq_result.get("message")
+                _workflow_log(interview_id, "generate_kbq", f"warning detail={kbq_result}")
+        else:
+            kbq_result = {"success": True, "generated": 0, "inserted": len(kbq_rows), "skipped": True}
+            _workflow_log(interview_id, "generate_kbq", "skipped existing kbq rows")
 
         try:
             DbAccess.upsert_workflow_job(
@@ -1123,6 +1392,8 @@ def run_workflow(interview_id: int) -> Dict[str, Any]:
                 workflow_type=WORKFLOW_JOB_TYPE,
                 status="done",
                 stage="done",
+                object_key=object_key,
+                audio_url=audio_url,
                 finished_at=_now(),
                 lease_owner=_workflow_owner(),
                 lease_expires_at=_now() + timedelta(seconds=WORKFLOW_LEASE_SECONDS),
