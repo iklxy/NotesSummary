@@ -9,6 +9,7 @@ SummaryNotes 后端 BFF 入口。
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -25,10 +26,14 @@ from api.project_key_bq import router as project_key_bq_router
 from api.project_interviews import router as project_interviews_router
 from api.interview_detail_fields import router as interview_detail_fields_router
 from api.question_intents import router as question_intents_router
+from db import list_recoverable_project_guides
+from guide_workflow import process_project_guide
+from InterviewLogger import log_project
 from middleware.cors import setup_cors
 
 
 app = FastAPI()
+GUIDE_RECOVERY_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="guide-recovery")
 
 setup_cors(app)
 
@@ -40,6 +45,43 @@ app.include_router(interview_detail_fields_router)
 app.include_router(question_intents_router)
 app.include_router(interviews_router)
 app.include_router(auth_router)
+
+
+def _resume_pending_project_guides() -> None:
+    """
+    服务启动时恢复尚未完成的指南学习任务。
+    """
+    try:
+        guides = list_recoverable_project_guides()
+    except Exception as exc:
+        log_project("GUIDE", None, f"startup recovery scan failed: {exc}")
+        return
+
+    if not guides:
+        log_project("GUIDE", None, "startup recovery scan found no pending guide jobs")
+        return
+
+    for guide in guides:
+        project_id = guide.get("project_id")
+        if project_id is None:
+            continue
+        try:
+            GUIDE_RECOVERY_EXECUTOR.submit(process_project_guide, int(project_id))
+            log_project(
+                "GUIDE",
+                int(project_id),
+                f"startup recovery queued guide_status={guide.get('guide_status')}",
+            )
+        except Exception as exc:
+            log_project("GUIDE", int(project_id), f"startup recovery queue failed: {exc}")
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """
+    FastAPI 启动后恢复未完成的指南学习任务。
+    """
+    _resume_pending_project_guides()
 
 
 if __name__ == "__main__":

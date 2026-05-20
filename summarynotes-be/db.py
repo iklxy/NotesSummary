@@ -493,6 +493,34 @@ def fetch_project_guide_by_project_id(project_id: int) -> dict | None:
     return row
 
 
+def list_recoverable_project_guides() -> list[dict]:
+    """
+    查询所有尚未完成的项目指南任务。
+
+    返回:
+        仍在处理中、但尚未完成的项目指南记录列表。
+    """
+    sql = """
+        SELECT
+            p.id AS project_id,
+            g.status AS guide_status,
+            g.error_message AS guide_error_message,
+            g.updated_at AS guide_updated_at
+        FROM bh_project_guide g
+        INNER JOIN bh_project p ON p.id = g.project_id
+        WHERE LOWER(g.status) IN ('queued', 'extracting', 'summarizing')
+        ORDER BY g.updated_at ASC, g.id ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows: list[dict] = cursor.fetchall()
+    finally:
+        conn.close()
+    return rows
+
+
 def _json_or_none(value: Any) -> Optional[str]:
     """
     将任意值归一化为 JSON 字符串或空值。
