@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
 from Model import ModelClient
-from ModelCA import generate_ca_cells_for_question
 from NotesMarkdownBuilder import build_interview_full_notes_markdown, build_project_full_notes_markdowns
 from MinutesWorkflow import _score_segment, _tokenize_for_search
 from ProjectContext import load_project_context_by_id
@@ -314,6 +313,7 @@ def _build_ca_framework(
     questionnaire_document: Dict[str, Any],
     interview_rows: List[Dict[str, Any]],
     selected_fields: List[str],
+    project_context: Any = None,
 ) -> Dict[str, Any]:
     """
     将问卷叶子问题和访谈行拼成 CA 框架。
@@ -324,6 +324,26 @@ def _build_ca_framework(
         str(item["key"]): str(item["label"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS if str(item["key"]) in selected_fields
     }
     questionnaire_name = str(questionnaire_row.get("name") or f"questionnaire_{questionnaire_row.get('id')}").strip()
+    simplified_question_map: Dict[str, str] = {}
+    if flat_questions:
+        try:
+            simplification_payload = ModelClient.generate_ca_question_display_texts(
+                project_context=project_context,
+                questionnaire_title=questionnaire_name,
+                questions=flat_questions,
+            )
+            for item in simplification_payload.get("questions") or []:
+                if not isinstance(item, dict):
+                    continue
+                uid = str(item.get("uid") or "").strip()
+                display_text = str(item.get("display_text") or "").strip()
+                if uid and display_text:
+                    simplified_question_map[uid] = display_text
+        except Exception as exc:
+            log(
+                f"CA question simplification failed questionnaire_id={questionnaire_row.get('id')} error={exc}",
+                project_id=project_id,
+            )
 
     rows: List[Dict[str, Any]] = []
     selected_interview_ids: List[int] = []
@@ -349,7 +369,7 @@ def _build_ca_framework(
         if not column_id:
             continue
         question_text = str(item.get("text") or "").strip()
-        display_text = question_text
+        display_text = simplified_question_map.get(column_id) or question_text
         order = int(item.get("order") or len(columns) + 1)
         columns.append(
             {
@@ -565,6 +585,7 @@ def generate_ca_table_for_project(
             questionnaire_document=questionnaire_document,
             interview_rows=interview_rows,
             selected_fields=selected_fields,
+            project_context=project_context,
         )
         framework_payload["project_context"] = project_context if isinstance(project_context, dict) else None
         framework_payload["questionnaire_id"] = resolved_questionnaire_id
@@ -714,7 +735,7 @@ def generate_ca_table_for_project(
         column_id = str(column.get("column_id") or "").strip()
         if not column_id:
             continue
-        question_text = str(column.get("display_text") or column.get("question_text") or "").strip()
+        question_text = str(column.get("question_text") or column.get("display_text") or "").strip()
         question_uid = str(column.get("question_uid") or column_id).strip()
         question_order = int(column.get("order") or 0)
         log(

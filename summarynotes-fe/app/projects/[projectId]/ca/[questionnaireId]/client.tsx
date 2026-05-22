@@ -112,7 +112,7 @@ function getQuestionKey(item: ProjectCaColumn, fallbackIndex: number): string {
 }
 
 function getQuestionLabel(item: ProjectCaColumn): string {
-  return String(item.display_text || item.question_text || item.question_uid || item.column_id || "").trim();
+  return String(item.display_text ?? item.question_text ?? item.question_uid ?? item.column_id ?? "").trim();
 }
 
 function getInterviewMetaValue(item: ProjectCaInterviewItem, key: string): string {
@@ -212,11 +212,15 @@ function normalizeSnapshot(
     .filter((item): item is ProjectCaColumn => Boolean(item))
     .map((item, index) => {
       const questionUid = getQuestionKey(item, index);
+      const displayText =
+        item.display_text !== undefined && item.display_text !== null
+          ? String(item.display_text)
+          : String(item.question_text || "");
       return {
         column_id: String(item.column_id || questionUid),
         order: Number.isFinite(Number(item.order)) ? Number(item.order) : index + 1,
         question_text: String(item.question_text || "").trim(),
-        display_text: String(item.display_text || item.question_text || "").trim(),
+        display_text: displayText.trim(),
         hidden: Boolean(item.hidden),
         question_uid: questionUid,
         interview_id: item.interview_id ?? null,
@@ -858,7 +862,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         title: "字段 / 问题",
         dataIndex: "label",
         fixed: "left" as const,
-        width: 320,
+        width: 350,
         render: (_: unknown, row: MatrixRow) => {
           if (row.kind === "section") {
             return {
@@ -870,20 +874,21 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             return <Text className="font-medium text-slate-700">{row.label}</Text>;
           }
           return (
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
-              <Space align="center" size={8} wrap>
-                <Input
-                  value={row.column.display_text || row.column.question_text || ""}
-                  style={{ minWidth: 220, flex: 1 }}
+            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Space align="start" size={8} wrap style={{ width: "100%" }}>
+                <Input.TextArea
+                  value={row.column.display_text ?? row.column.question_text ?? ""}
+                  title={row.column.question_text || ""}
+                  autoSize={{ minRows: 1, maxRows: 2 }}
+                  style={{ width: 500, minHeight: 40, resize: "none" }}
                   onChange={(event) =>
                     updateQuestionRow(row.questionUid, {
-                      question_text: event.target.value,
                       display_text: event.target.value,
                     })
                   }
                 />
               </Space>
-              <Space align="center" size={8} wrap>
+              <Space align="center" size={8} wrap style={{ width: "100%" }}>
                 <Checkbox
                   checked={row.hidden}
                   onChange={(event) => updateQuestionRow(row.questionUid, { hidden: event.target.checked })}

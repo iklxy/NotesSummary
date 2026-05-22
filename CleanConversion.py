@@ -219,9 +219,16 @@ def _run_segment_stage(
         corrected_text = str(seg.get("speaker_content_corrected", raw_text) or raw_text)
         final_text = _resolve_output_text(stage_row, request_item)
 
-        confidence = _normalize_confidence(stage_row.get("confidence"))
-        if confidence is None:
+        if model_method_name == "correct_transcript_batch":
+            confidence = _normalize_confidence(stage_row.get("confidence"))
+            if confidence is None:
+                confidence = _normalize_confidence(seg.get("confidence"))
+        elif model_method_name in {"apply_correction_fallback_batch", "clean_transcript_batch"}:
             confidence = _normalize_confidence(seg.get("confidence"))
+        else:
+            confidence = _normalize_confidence(stage_row.get("confidence"))
+            if confidence is None:
+                confidence = _normalize_confidence(seg.get("confidence"))
         if confidence is None:
             confidence = 0.0
 
@@ -521,9 +528,9 @@ def clean_file_content_json(
         merged["speaker_content_clean"] = clean_text
         merged["term_corrections"] = corrected.get("term_corrections", [])
         merged["uncertain_terms"] = corrected.get("uncertain_terms", [])
-        merged["confidence"] = _normalize_confidence(cleaned.get("confidence"))
+        merged["confidence"] = _normalize_confidence(corrected.get("confidence"))
         if merged["confidence"] is None:
-            merged["confidence"] = _normalize_confidence(corrected.get("confidence"))
+            merged["confidence"] = _normalize_confidence(cleaned.get("confidence"))
         if merged["confidence"] is None:
             merged["confidence"] = 0.0
         enriched.append(merged)

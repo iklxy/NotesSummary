@@ -229,6 +229,7 @@ def merge_transcript_output(
     output_records: List[Dict[str, Any]],
     output_text_field: str,
     preserve_raw_fields: bool = False,
+    preserve_input_confidence: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     将模型输出与原始输入按 uid 合并。
@@ -266,9 +267,12 @@ def merge_transcript_output(
         }
         if preserve_raw_fields:
             merged_item["speaker_content"] = str(original.get("text") or original.get("speaker_content") or "")
-        confidence = coerce_confidence(candidate.get("confidence"))
-        if confidence is None:
+        if preserve_input_confidence:
             confidence = coerce_confidence(original.get("confidence"))
+        else:
+            confidence = coerce_confidence(candidate.get("confidence"))
+            if confidence is None:
+                confidence = coerce_confidence(original.get("confidence"))
         merged_item["confidence"] = confidence if confidence is not None else 0.0
 
         output_text = candidate.get(output_text_field)
@@ -338,7 +342,9 @@ def correct_transcript_batch(
         "7. 药物名、基因位点、检测名、抗体克隆号、公司名优先按行业通用写法统一。\n"
         "8. 如果全文上下文能明确支持某个纠错结果，可以据此修正待校正文段中的同音错词。\n"
         "9. 绝不输出解释、分析、备注或修正原因。\n"
-        "10. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n\n"
+        "10. JSON字段中的confidence表示你对这一条summary纠错操作的置信度。\n"
+        "11. 如果校正的文档中出现你不确定且不会修改的专业词汇，将confidence设为0.5。\n"
+        "12. 若你确定本次修改是正确的，则将confidence设置为1.0.\n\n"
         "特别注意：\n"
         "- 药物名要区分通用名和商品名，例如：帕博利珠单抗 / 可瑞达，奥希替尼 / 泰瑞沙。\n"
         "- 基因和突变位点必须保持标准写法，例如：EGFR exon 19 del、T790M、ALK fusion。\n"
@@ -379,7 +385,11 @@ def correct_transcript_batch(
             }
             for item in normalized
         ]
-    merged = merge_transcript_output(normalized, output_records, output_text_field="corrected_text")
+    merged = merge_transcript_output(
+        normalized,
+        output_records,
+        output_text_field="corrected_text",
+    )
     for item in merged:
         item["corrected_text"] = item.get("corrected_text") or item.get("text", "")
         item["text"] = item["corrected_text"]
@@ -451,8 +461,7 @@ def apply_correction_fallback_batch(
         "5. 保留所有数字、单位、时间、剂量、百分比、分数、缩写格式。\n"
         "6. 药物名、基因位点、检测名、抗体克隆号、公司名优先按行业通用写法统一。\n"
         "7. 如果上下文与兜底规则都无法明确支持修改，直接保留原文。\n"
-        "8. 绝不输出解释、分析、备注或修正原因。\n"
-        "9. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n\n"
+        "8. 绝不输出解释、分析、备注或修正原因。\n\n"
         "输出要求：\n"
         "- 只输出合法 JSON。\n"
         "- 不要输出 markdown。\n"
@@ -461,7 +470,7 @@ def apply_correction_fallback_batch(
         "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
         '      "start_time": 12340,\n      "end_time": 15800,\n      "corrected_text": "兜底纠错后的正文",\n'
-        '      "confidence": 0.95,\n      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
+        '      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
         "【主纠错结果】\n"
         f"{transcript_block}\n\n"
         "请仅返回合法 JSON。"
@@ -487,7 +496,12 @@ def apply_correction_fallback_batch(
             }
             for item in normalized
         ]
-    merged = merge_transcript_output(normalized, output_records, output_text_field="corrected_text")
+    merged = merge_transcript_output(
+        normalized,
+        output_records,
+        output_text_field="corrected_text",
+        preserve_input_confidence=True,
+    )
     for item in merged:
         item["corrected_text"] = item.get("corrected_text") or item.get("text", "")
         item["text"] = item["corrected_text"]
@@ -542,7 +556,6 @@ def clean_transcript_batch(
         "6. 可以删除明显的口头禅、重复词、无意义停顿词，但不能删除有实际语义作用的连接词。\n"
         "7. 对于不确定是否应删除的内容，优先保留。\n"
         "8. 只输出清洗后的正文，不要输出解释、备注、分析。\n\n"
-        "9. JSON字段中的confidence表示你对这一条清洗结果准确率的置信度。\n"
         "输出要求：\n"
         "- 只输出合法 JSON。\n"
         "- 不要输出 markdown。\n"
@@ -550,8 +563,7 @@ def clean_transcript_batch(
         "- 不要输出前缀、标题、解释。\n"
         "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
-        '      "start_time": 12340,\n      "end_time": 15800,\n      "clean_text": "清洗后的正文",\n'
-        '      "confidence": 0.95\n    }\n  ]\n}\n\n'
+        '      "start_time": 12340,\n      "end_time": 15800,\n      "clean_text": "清洗后的正文"\n    }\n  ]\n}\n\n'
         "【待清洗文本】\n"
         f"{transcript_block}\n\n"
         "请仅返回合法 JSON。"
@@ -578,7 +590,12 @@ def clean_transcript_batch(
             }
             for item in normalized
         ]
-    merged = merge_transcript_output(normalized, output_records, output_text_field="clean_text")
+    merged = merge_transcript_output(
+        normalized,
+        output_records,
+        output_text_field="clean_text",
+        preserve_input_confidence=True,
+    )
     for idx, item in enumerate(merged):
         source = transcript[idx] if idx < len(transcript) and isinstance(transcript[idx], dict) else {}
         item["corrected_text"] = normalized[idx].get("text", "") if idx < len(normalized) else ""
@@ -586,8 +603,9 @@ def clean_transcript_batch(
             item["corrections"] = source.get("corrections", [])
         if not item.get("uncertain_terms"):
             item["uncertain_terms"] = source.get("uncertain_terms", [])
-        if item.get("confidence") is None:
-            item["confidence"] = source.get("confidence")
+        item["confidence"] = coerce_confidence(source.get("confidence"))
+        if item["confidence"] is None:
+            item["confidence"] = coerce_confidence(normalized[idx].get("confidence")) if idx < len(normalized) else None
         if item.get("confidence") is None:
             item["confidence"] = 0.0
         item["clean_text"] = item.get("clean_text") or item.get("text", "")

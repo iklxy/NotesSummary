@@ -195,6 +195,67 @@ def parse_ca_column_cells_response(content: str, interview_ids: List[int]) -> Di
     return payload
 
 
+def _normalize_ca_question_display_texts(
+    raw_questions: Any,
+    fallback_questions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    规范化模型返回的精简问题列表。
+    """
+    display_by_uid: Dict[str, str] = {}
+    if isinstance(raw_questions, list):
+        for item in raw_questions:
+            if not isinstance(item, dict):
+                continue
+            uid = str(item.get("uid") or item.get("question_uid") or item.get("column_id") or "").strip()
+            if not uid:
+                continue
+            display_text = str(
+                item.get("display_text")
+                or item.get("simplified_text")
+                or item.get("question_text")
+                or item.get("text")
+                or ""
+            ).strip()
+            if display_text:
+                display_by_uid[uid] = display_text
+
+    normalized: List[Dict[str, Any]] = []
+    for index, question in enumerate(fallback_questions, start=1):
+        if not isinstance(question, dict):
+            continue
+        uid = str(question.get("uid") or question.get("question_uid") or question.get("column_id") or "").strip()
+        if not uid:
+            uid = f"q{index:04d}"
+        original_text = str(question.get("text") or question.get("question_text") or "").strip()
+        display_text = display_by_uid.get(uid) or original_text
+        normalized.append(
+            {
+                "uid": uid,
+                "order": int(question.get("order") or index),
+                "question_text": original_text,
+                "display_text": display_text or original_text,
+                "title": str(question.get("title") or "").strip(),
+            }
+        )
+    return normalized
+
+
+def parse_ca_question_display_texts_response(
+    content: str,
+    fallback_questions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    解析 CA 问题精简结果。
+    """
+    payload = _parse_json_response(content)
+    if not isinstance(payload, dict):
+        payload = {"questions": [], "llm_raw_output": content}
+    payload["questions"] = _normalize_ca_question_display_texts(payload.get("questions"), fallback_questions)
+    payload.setdefault("llm_raw_output", content)
+    return payload
+
+
 def generate_ca_dimensions(
     generate_fn: Callable[[str, str], str],
     project_context_block: str,
@@ -432,3 +493,64 @@ def generate_ca_cells_for_question(
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_column_cells_response(raw_output, interview_ids)
     return payload
+
+
+def generate_ca_question_display_texts(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    questionnaire_title: str,
+    questions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    为一组问卷问题生成精简后的展示文案。
+    """
+    if not questions:
+        return {"questions": []}
+
+    question_lines: List[str] = []
+    for index, question in enumerate(questions, start=1):
+        if not isinstance(question, dict):
+            continue
+        uid = str(question.get("uid") or question.get("question_uid") or question.get("column_id") or "").strip()
+        order = int(question.get("order") or index)
+        title = str(question.get("title") or "").strip()
+        question_text = str(question.get("text") or question.get("question_text") or "").strip()
+        question_lines.append(
+            f"[{order}] uid={uid}\n"
+            f"标题：{title or '（无）'}\n"
+            f"原问题：{question_text or '（空）'}"
+        )
+
+    system_prompt = (
+        "你是专业的医疗咨询问卷文案精简专家。"
+        "你的任务是把问卷中的每一条原问题压缩成更短、更适合在 CA 矩阵中展示的精简版问题。"
+        "必须输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"【问卷名称】\n{questionnaire_title}\n\n"
+        "请将下面的每条原问题改写为更短的展示版本，但必须保持原意不变。\n\n"
+        "严格要求：\n"
+        "1. 只能做压缩表达，不得改变语义。\n"
+        "2. 不得新增问题，不得合并问题，不得拆分问题。\n"
+        "3. 不得删掉限定词、对象、时间范围、条件、比较对象等关键信息。\n"
+        "4. 优先保留问句语气，尽量简洁自然。\n"
+        "5. 如果某条问题无法安全精简，直接返回原问题。\n"
+        "6. 必须保留 uid 对应关系，输出顺序应与输入一致。\n"
+        "7. 只输出 JSON，不要输出解释、不要输出 markdown。\n\n"
+        "输出结构必须是：\n"
+        "{\n"
+        '  "questions": [\n'
+        "    {\n"
+        '      "uid": "d1_0001",\n'
+        '      "display_text": "精简后的展示问题"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "【待精简问题】\n"
+        + "\n\n".join(question_lines)
+        + "\n\n"
+        "请仅返回合法 JSON。"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    return parse_ca_question_display_texts_response(raw_output, questions)
