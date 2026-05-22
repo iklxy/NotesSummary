@@ -502,7 +502,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       rows.push({
         key: `question-${questionUid}`,
         kind: "question",
-        label: `${column.order ? `${column.order}. ` : ""}${getQuestionLabel(column)}`,
+        label: getQuestionLabel(column),
         questionUid,
         order: Number(column.order) || index + 1,
         hidden: Boolean(column.hidden),
@@ -873,33 +873,17 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               <Space align="center" size={8} wrap>
                 <Input
-                  type="number"
-                  min={1}
-                  value={row.order}
-                  style={{ width: 88 }}
-                  onChange={(event) =>
-                    updateQuestionRow(row.questionUid, {
-                      order: Number(event.target.value),
-                    })
-                  }
-                />
-                <Input
-                  value={row.column.question_text || ""}
-                  style={{ minWidth: 180, flex: 1 }}
+                  value={row.column.display_text || row.column.question_text || ""}
+                  style={{ minWidth: 220, flex: 1 }}
                   onChange={(event) =>
                     updateQuestionRow(row.questionUid, {
                       question_text: event.target.value,
-                      display_text: row.column.display_text || event.target.value,
+                      display_text: event.target.value,
                     })
                   }
                 />
               </Space>
               <Space align="center" size={8} wrap>
-                <Input
-                  value={row.column.display_text || ""}
-                  style={{ minWidth: 220, flex: 1 }}
-                  onChange={(event) => updateQuestionRow(row.questionUid, { display_text: event.target.value })}
-                />
                 <Checkbox
                   checked={row.hidden}
                   onChange={(event) => updateQuestionRow(row.questionUid, { hidden: event.target.checked })}
