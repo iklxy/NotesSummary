@@ -38,6 +38,7 @@ import BrandHero from "../../../components/BrandHero";
 import MarkdownContent from "../../../components/MarkdownContent";
 import QuestionnaireHotwordReviewModal from "../../../components/QuestionnaireHotwordReviewModal";
 import { createInterview } from "../../../lib/interviewsApi";
+import { deleteInterview } from "../../../lib/interviewsApi";
 import {
   createProjectQuestionnaire,
   deleteProjectQuestionnaire,
@@ -561,6 +562,7 @@ export default function ProjectDetailClient({ projectId }: Props) {
 
   const [interviewModalOpen, setInterviewModalOpen] = useState(false);
   const [interviewSaving, setInterviewSaving] = useState(false);
+  const [interviewDeletingId, setInterviewDeletingId] = useState<number | null>(null);
   const [interviewForm] = Form.useForm<InterviewFormValues>();
   const [interviewDetailFieldsDraft, setInterviewDetailFieldsDraft] = useState<InterviewDetailFieldDraft[]>([]);
   const [interviewDetailModalOpen, setInterviewDetailModalOpen] = useState(false);
@@ -1055,6 +1057,28 @@ export default function ProjectDetailClient({ projectId }: Props) {
     }
   };
 
+  const handleInterviewDelete = (item: { id: number; name?: string | null }) => {
+    Modal.confirm({
+      title: "确认删除访谈",
+      content: `确定要删除访谈「${item.name || item.id}」吗？删除后会同时清理关联数据，且无法恢复。`,
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          setInterviewDeletingId(item.id);
+          await deleteInterview(item.id);
+          message.success("访谈已删除");
+          await loadProjectDetail({ silent: true });
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "删除访谈失败");
+        } finally {
+          setInterviewDeletingId((prev) => (prev === item.id ? null : prev));
+        }
+      },
+    });
+  };
+
   const projectCounts = projectDetail?.counts ?? {
     questionnaire_count: questionnaires.length,
     key_bq_count: getKeyBqCount(projectKeyBq),
@@ -1438,6 +1462,15 @@ export default function ProjectDetailClient({ projectId }: Props) {
                               onClick={() => router.push(`/interviews/${item.id}/processing`)}
                             >
                               处理页
+                            </Button>,
+                            <Button
+                              key="delete"
+                              type="link"
+                              danger
+                              loading={interviewDeletingId === item.id}
+                              onClick={() => handleInterviewDelete(item)}
+                            >
+                              删除
                             </Button>,
                           ]}
                         >
