@@ -70,6 +70,8 @@ interface Props {
   interviewId: number;
 }
 
+const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
 interface FewshotEvidenceDraft {
   uid: string;
   summary_id: string;
@@ -217,9 +219,11 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [summary, setSummary] = useState<InterviewSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryReloadToken, setSummaryReloadToken] = useState(0);
   const projectId = summary?.project_id ?? null;
   const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
   const [draftSummaryText, setDraftSummaryText] = useState("");
+  const [draftSummaryOriginalText, setDraftSummaryOriginalText] = useState("");
   const [savingSummaryId, setSavingSummaryId] = useState<number | null>(null);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
@@ -289,7 +293,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     } else {
       setSummaryError("无效的访谈 ID");
     }
-  }, [interviewIdNum]);
+  }, [interviewIdNum, summaryReloadToken]);
 
   useEffect(() => {
     setAudioDuration(0);
@@ -452,6 +456,29 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       }
     }
     return map;
+  }, [summary]);
+
+  const lowConfidenceSummaryItems = useMemo(() => {
+    const items = summary?.items ?? [];
+    return items
+      .map((item) => ({
+        item,
+        confidence:
+          typeof item.confidence === "number"
+            ? item.confidence
+            : item.confidence != null && Number.isFinite(Number(item.confidence))
+              ? Number(item.confidence)
+              : null,
+      }))
+      .filter((entry): entry is { item: InterviewSummaryItem; confidence: number } => {
+        return entry.confidence !== null && entry.confidence < LOW_CONFIDENCE_THRESHOLD;
+      })
+      .sort((a, b) => {
+        if (a.confidence !== b.confidence) {
+          return a.confidence - b.confidence;
+        }
+        return a.item.id - b.item.id;
+      });
   }, [summary]);
 
   const audioUrl = useMemo(() => getInterviewAudioUrl(interviewIdNum), [interviewIdNum]);
@@ -648,6 +675,10 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     await seekAudioToMs(range.startMs, true);
   };
 
+  const reloadSummary = () => {
+    setSummaryReloadToken((value) => value + 1);
+  };
+
   const handleAudioToggle = async () => {
     const audio = audioRef.current;
     if (!audio) {
@@ -762,11 +793,13 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const beginEditSummary = (summaryId: number, text: string) => {
     setEditingSummaryId(summaryId);
     setDraftSummaryText(text);
+    setDraftSummaryOriginalText(text);
   };
 
   const cancelEditSummary = () => {
     setEditingSummaryId(null);
     setDraftSummaryText("");
+    setDraftSummaryOriginalText("");
   };
 
   const saveSummary = async (summaryId: number) => {
@@ -777,7 +810,12 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     }
     try {
       setSavingSummaryId(summaryId);
-      const result = await updateInterviewSummary(interviewIdNum, summaryId, trimmed);
+      const result = await updateInterviewSummary(
+        interviewIdNum,
+        summaryId,
+        trimmed,
+        draftSummaryOriginalText,
+      );
       setSummary((prev) => {
         if (!prev) {
           return prev;
@@ -785,7 +823,13 @@ export default function InterviewDetailClient({ interviewId }: Props) {
         return {
           ...prev,
           items: prev.items.map((item) =>
-            item.id === summaryId ? { ...item, text: trimmed } : item,
+            item.id === summaryId
+              ? {
+                  ...item,
+                  ...(result.summary || {}),
+                  text: trimmed,
+                }
+              : item,
           ),
         };
       });
@@ -797,8 +841,14 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       } else {
         message.success("已保存");
       }
+      setSummaryReloadToken((value) => value + 1);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "保存 summary 失败");
+      const errorMessage = e instanceof Error ? e.message : "保存 summary 失败";
+      if (errorMessage.includes("409")) {
+        message.error("该条 trans 已被修改，请刷新后重试");
+      } else {
+        message.error(errorMessage);
+      }
     } finally {
       setSavingSummaryId(null);
     }
@@ -1144,6 +1194,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
             <Button onClick={() => router.push(`/interviews/${interviewIdNum}/trans`)}>
               全文 trans
             </Button>
+            <Button onClick={reloadSummary}>刷新原文</Button>
           </Space>
         }
       />
@@ -1155,14 +1206,136 @@ export default function InterviewDetailClient({ interviewId }: Props) {
             padding: "24px 24px 40px",
           }}
         >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr)",
-              gap: 24,
-              alignItems: "start",
-            }}
-          >
+          <div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-[360px_minmax(0,1fr)]">
+            <Card
+              style={{
+                borderRadius: 24,
+                boxShadow: "0 16px 48px -30px rgba(15,23,42,0.28)",
+                height: "calc(100vh - 96px)",
+              }}
+              bodyStyle={{
+                height: "100%",
+                padding: 20,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 16 }}>
+                <div>
+                  <Title level={4} style={{ marginBottom: 4 }}>
+                    低置信度 trans
+                  </Title>
+                  <Text type="secondary">
+                    优先处理模型不够确定的段落；点击条目可跳转原文和音频。
+                  </Text>
+                </div>
+                <Tag color="orange">阈值 &lt; {LOW_CONFIDENCE_THRESHOLD.toFixed(2)}</Tag>
+              </Space>
+              {summaryLoading ? (
+                <Spin />
+              ) : summaryError ? (
+                <Alert type="error" message={summaryError} />
+              ) : (
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 16,
+                  }}
+                >
+                  {lowConfidenceSummaryItems.length > 0 ? (
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflowY: "auto",
+                        paddingRight: 8,
+                      }}
+                    >
+                      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                        {lowConfidenceSummaryItems.map(({ item, confidence }) => {
+                          const speaker = (item.speaker || "").trim() || "未知角色";
+                          const side = speakerSideMap[speaker] || "left";
+                          const timestamp = item.timestamp || "";
+                          const text = item.text || "";
+                          const isActive = activeSummaryId === item.id;
+                          return (
+                            <div
+                              key={item.id}
+                              style={{ cursor: "pointer" }}
+                              onClick={() => {
+                                void handleSummaryClick(item);
+                              }}
+                            >
+                              <Card
+                                size="small"
+                                style={{
+                                  borderRadius: 16,
+                                  backgroundColor: isActive ? "#eff6ff" : "#ffffff",
+                                  border: isActive
+                                    ? "1px solid rgba(37,99,235,0.35)"
+                                    : "1px solid #e2e8f0",
+                                  boxShadow: isActive
+                                    ? "0 12px 32px -18px rgba(37,99,235,0.55)"
+                                    : "0 8px 24px -18px rgba(15,23,42,0.22)",
+                                }}
+                              >
+                                <Space
+                                  style={{ width: "100%", justifyContent: "space-between" }}
+                                  align="start"
+                                >
+                                  <Space size={8} wrap>
+                                    <Tag color={side === "left" ? "blue" : "cyan"}>{getSideLabel(side)}</Tag>
+                                    {timestamp ? (
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        {formatAudioTimestampRange(timestamp)}
+                                      </Text>
+                                    ) : (
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        无时间戳
+                                      </Text>
+                                    )}
+                                  </Space>
+                                  <Tag color={confidence < 0.4 ? "red" : "orange"}>
+                                    {confidence.toFixed(2)}
+                                  </Tag>
+                                </Space>
+                                <Paragraph
+                                  ellipsis={{ rows: 3, expandable: false }}
+                                  style={{ marginBottom: 0, marginTop: 8 }}
+                                >
+                                  {text || "（空文本）"}
+                                </Paragraph>
+                                <Space style={{ marginTop: 8 }}>
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    style={{ padding: 0, height: "auto" }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      beginEditSummary(item.id, text);
+                                      scrollToSummary(String(item.id));
+                                    }}
+                                  >
+                                    编辑
+                                  </Button>
+                                </Space>
+                              </Card>
+                            </div>
+                          );
+                        })}
+                      </Space>
+                    </div>
+                  ) : (
+                    <Text type="secondary">暂无低置信度 trans。</Text>
+                  )}
+                </div>
+              )}
+            </Card>
+
             <Card
               style={{
                 borderRadius: 24,

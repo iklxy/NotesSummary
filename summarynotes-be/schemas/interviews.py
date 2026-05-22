@@ -444,6 +444,7 @@ class InterviewSummaryItem(BaseModel):
     timestamp: Optional[str] = None
     speaker: Optional[str] = None
     text: Optional[str] = None
+    confidence: Optional[float] = None
 
 
 class InterviewSummaryResponse(BaseModel):
@@ -505,6 +506,7 @@ class SummaryUpdateRequest(BaseModel):
     更新单条 summary 的请求体。
     """
     text: str
+    original_text: Optional[str] = None
 
 
 class SummaryUpdateResponse(BaseModel):

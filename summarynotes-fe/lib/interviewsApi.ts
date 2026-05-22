@@ -270,6 +270,7 @@ export interface InterviewSummaryItem {
   timestamp?: string | null;
   speaker?: string | null;
   text?: string | null;
+  confidence?: number | null;
 }
 
 export interface InterviewSummaryResponse {
@@ -285,6 +286,11 @@ export interface UpdateSummaryResponse {
   reindex_indexed?: number | null;
   reindex_warning?: string | null;
   corrections_inserted?: number | null;
+}
+
+export interface UpdateSummaryRequest {
+  text: string;
+  original_text?: string | null;
 }
 
 export async function createInterview(
@@ -423,9 +429,13 @@ export function updateInterviewSummary(
   interviewId: number,
   summaryId: number,
   text: string,
+  originalText?: string | null,
 ): Promise<UpdateSummaryResponse> {
   return request<UpdateSummaryResponse>(`/api/interviews/${interviewId}/summary/${summaryId}`, {
     method: "PATCH",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      text,
+      original_text: originalText ?? null,
+    } as UpdateSummaryRequest),
   });
 }

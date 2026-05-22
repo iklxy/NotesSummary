@@ -138,6 +138,7 @@ export default function TransClient({ interviewId }: Props) {
                     const speakerLabel = speakerLabelMap.get(speaker) || speaker;
                     const timestamp = item.timestamp || "";
                     const text = item.text || "";
+                    const confidence = typeof item.confidence === "number" ? item.confidence : null;
                     return (
                       <Card key={item.id} size="small" style={{ borderRadius: 16 }}>
                         <Space direction="vertical" size="small" style={{ width: "100%" }}>
@@ -147,6 +148,11 @@ export default function TransClient({ interviewId }: Props) {
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 {formatAudioTimestampRange(timestamp)}
                               </Text>
+                            ) : null}
+                            {confidence !== null ? (
+                              <Tag color={confidence < 0.7 ? "orange" : "green"}>
+                                confidence {confidence.toFixed(2)}
+                              </Tag>
                             ) : null}
                           </Space>
                           <Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>

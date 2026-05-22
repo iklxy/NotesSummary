@@ -157,6 +157,7 @@ export interface InterviewSummaryItem {
   timestamp?: string | null;
   speaker?: string | null;
   text?: string | null;
+  confidence?: number | null;
 }
 
 export interface InterviewSummaryResponse {

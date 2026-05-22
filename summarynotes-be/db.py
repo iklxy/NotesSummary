@@ -3362,6 +3362,14 @@ def fetch_fewshot_samples_by_interview(project_interview_id: int) -> list[dict]:
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
+    for row in rows:
+        confidence = row.get("confidence")
+        if confidence is None or isinstance(confidence, bool):
+            continue
+        try:
+            row["confidence"] = float(confidence)
+        except (TypeError, ValueError):
+            row["confidence"] = None
     return rows
 
 
@@ -3552,6 +3560,7 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
             - timestamp
             - speaker
             - text
+            - confidence
     """
     sql = """
         SELECT
@@ -3559,7 +3568,8 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
             project_interview_id,
             timestamp,
             speaker,
-            text
+            text,
+            confidence
         FROM bh_project_interview_summary
         WHERE project_interview_id = %s
         ORDER BY id ASC
@@ -3571,6 +3581,14 @@ def fetch_interview_summary(project_interview_id: int) -> list[dict]:
             rows: list[dict] = cursor.fetchall()
     finally:
         conn.close()
+    for row in rows:
+        confidence = row.get("confidence")
+        if confidence is None or isinstance(confidence, bool):
+            continue
+        try:
+            row["confidence"] = float(confidence)
+        except (TypeError, ValueError):
+            row["confidence"] = None
     return rows
 
 
@@ -3591,7 +3609,8 @@ def fetch_interview_summary_by_id(summary_id: int, project_interview_id: int) ->
             project_interview_id,
             timestamp,
             speaker,
-            text
+            text,
+            confidence
         FROM bh_project_interview_summary
         WHERE id = %s AND project_interview_id = %s
         LIMIT 1
@@ -3603,6 +3622,13 @@ def fetch_interview_summary_by_id(summary_id: int, project_interview_id: int) ->
             row = cursor.fetchone()
     finally:
         conn.close()
+    if row is not None:
+        confidence = row.get("confidence")
+        if confidence is not None and not isinstance(confidence, bool):
+            try:
+                row["confidence"] = float(confidence)
+            except (TypeError, ValueError):
+                row["confidence"] = None
     return row
 
 
@@ -3635,7 +3661,8 @@ def update_interview_summary_text_with_corrections(
                     project_interview_id,
                     timestamp,
                     speaker,
-                    text
+                    text,
+                    confidence
                 FROM bh_project_interview_summary
                 WHERE id = %s AND project_interview_id = %s
                 LIMIT 1
@@ -3703,7 +3730,8 @@ def update_interview_summary_text_with_corrections(
                     project_interview_id,
                     timestamp,
                     speaker,
-                    text
+                    text,
+                    confidence
                 FROM bh_project_interview_summary
                 WHERE id = %s AND project_interview_id = %s
                 LIMIT 1
@@ -3711,6 +3739,13 @@ def update_interview_summary_text_with_corrections(
                 (summary_id, project_interview_id),
             )
             row = cursor.fetchone()
+        if row is not None:
+            confidence = row.get("confidence")
+            if confidence is not None and not isinstance(confidence, bool):
+                try:
+                    row["confidence"] = float(confidence)
+                except (TypeError, ValueError):
+                    row["confidence"] = None
         conn.commit()
     except Exception:
         conn.rollback()
@@ -3790,7 +3825,8 @@ def update_interview_summary_text(
                     project_interview_id,
                     timestamp,
                     speaker,
-                    text
+                    text,
+                    confidence
                 FROM bh_project_interview_summary
                 WHERE id = %s AND project_interview_id = %s
                 LIMIT 1
@@ -3798,6 +3834,13 @@ def update_interview_summary_text(
                 (summary_id, project_interview_id),
             )
             row = cursor.fetchone()
+        if row is not None:
+            confidence = row.get("confidence")
+            if confidence is not None and not isinstance(confidence, bool):
+                try:
+                    row["confidence"] = float(confidence)
+                except (TypeError, ValueError):
+                    row["confidence"] = None
         conn.commit()
     except Exception:
         conn.rollback()

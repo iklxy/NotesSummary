@@ -2649,6 +2649,13 @@ def update_interview_summary(
         raise HTTPException(status_code=404, detail="summary not found")
 
     old_text = str(original.get("text") or "")
+    original_snapshot = (payload.original_text or "").strip()
+    if original_snapshot and original_snapshot != old_text.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="summary text has changed since it was loaded, please refresh and retry",
+        )
+
     corrections = _extract_transcription_corrections(
         old_text,
         new_text,

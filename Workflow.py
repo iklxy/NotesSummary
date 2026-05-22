@@ -753,6 +753,8 @@ def step_write_summary(interview_id: int, cleaned_json: str) -> Dict[str, Any]:
             if not final_text:
                 final_text = str(seg.get("speaker_content") or "").strip()
             seg["speaker_content_clean"] = final_text
+            if seg.get("confidence") is None:
+                seg["confidence"] = 0.0
         inserted = DbAccess.insert_summary_from_cleaned_speakers(interview_id, speakers)
         _workflow_log(interview_id, "write_summary", f"done inserted={inserted}")
     except Exception as e:

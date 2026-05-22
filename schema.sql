@@ -324,6 +324,7 @@ CREATE TABLE `bh_project_interview_summary` (
   `timestamp` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `speaker` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `text` longtext COLLATE utf8mb4_unicode_ci,
+  `confidence` decimal(5,4) DEFAULT NULL COMMENT '该条 trans 的最终置信度',
   `modify` tinyint NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `idx_bh_interview_summary_interview_id` (`project_interview_id`),

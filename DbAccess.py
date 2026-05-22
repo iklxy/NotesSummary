@@ -561,6 +561,7 @@ class DbAccess:
                 - timestamp
                 - speaker
                 - text
+                - confidence
         """
         sql = """
             SELECT
@@ -568,7 +569,8 @@ class DbAccess:
                 project_interview_id,
                 timestamp,
                 speaker,
-                text
+                text,
+                confidence
             FROM bh_project_interview_summary
             WHERE project_interview_id = %s
             ORDER BY id ASC
@@ -1470,10 +1472,23 @@ class DbAccess:
         if not speakers:
             return 0
 
+        def _normalize_confidence(value: Any) -> Optional[float]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                confidence = float(value)
+            except (TypeError, ValueError):
+                return None
+            if confidence < 0:
+                return 0.0
+            if confidence > 1:
+                return 1.0
+            return confidence
+
         sql = """
             INSERT INTO bh_project_interview_summary
-                (project_interview_id, timestamp, speaker, text, modify)
-            VALUES (%s, %s, %s, %s, %s)
+                (project_interview_id, timestamp, speaker, text, confidence, modify)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
 
         conn = cls.get_connection()
@@ -1492,7 +1507,17 @@ class DbAccess:
                     if not clean_text:
                         continue
                     timestamp = cls._format_summary_timestamp(seg)
-                    cursor.execute(sql, (interview_id, timestamp, speaker_id, clean_text, 0))
+                    cursor.execute(
+                        sql,
+                        (
+                            interview_id,
+                            timestamp,
+                            speaker_id,
+                            clean_text,
+                            _normalize_confidence(seg.get("confidence")),
+                            0,
+                        ),
+                    )
                     inserted += 1
             conn.commit()
         except Exception:

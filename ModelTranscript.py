@@ -132,6 +132,29 @@ def coerce_int(value: Any) -> Optional[int]:
         return None
 
 
+def coerce_confidence(value: Any) -> Optional[float]:
+    """
+    将输入安全转为 0 到 1 之间的置信度浮点数。
+
+    参数:
+        value: 任意输入值。
+
+    返回:
+        转换成功时返回 0 到 1 之间的小数，否则返回 `None`。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0:
+        return 0.0
+    if confidence > 1:
+        return 1.0
+    return confidence
+
+
 def normalize_transcript_records(
     transcript: List[Dict[str, Any]],
     text_field: str,
@@ -144,7 +167,7 @@ def normalize_transcript_records(
         text_field: 本轮处理应读取的文本字段，例如 `text` 或 `corrected_text`。
 
     返回:
-        归一化后的 transcript 列表，每条记录都包含 uid、speaker_id、start_time、end_time、text。
+        归一化后的 transcript 列表，每条记录都包含 uid、speaker_id、start_time、end_time、text、confidence。
     """
     normalized: List[Dict[str, Any]] = []
     for idx, item in enumerate(transcript, start=1):
@@ -166,6 +189,7 @@ def normalize_transcript_records(
                 "start_time": coerce_int(start_time),
                 "end_time": coerce_int(end_time),
                 "text": str(item.get(text_field) or item.get("text") or item.get("speaker_content") or ""),
+                "confidence": coerce_confidence(item.get("confidence")),
             }
         )
     return normalized
@@ -242,6 +266,10 @@ def merge_transcript_output(
         }
         if preserve_raw_fields:
             merged_item["speaker_content"] = str(original.get("text") or original.get("speaker_content") or "")
+        confidence = coerce_confidence(candidate.get("confidence"))
+        if confidence is None:
+            confidence = coerce_confidence(original.get("confidence"))
+        merged_item["confidence"] = confidence if confidence is not None else 0.0
 
         output_text = candidate.get(output_text_field)
         if not isinstance(output_text, str) or not output_text.strip():
@@ -309,7 +337,8 @@ def correct_transcript_batch(
         "6. 保留所有数字、单位、时间、剂量、百分比、分数、缩写格式。\n"
         "7. 药物名、基因位点、检测名、抗体克隆号、公司名优先按行业通用写法统一。\n"
         "8. 如果全文上下文能明确支持某个纠错结果，可以据此修正待校正文段中的同音错词。\n"
-        "9. 绝不输出解释、分析、备注或修正原因。\n\n"
+        "9. 绝不输出解释、分析、备注或修正原因。\n"
+        "10. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n\n"
         "特别注意：\n"
         "- 药物名要区分通用名和商品名，例如：帕博利珠单抗 / 可瑞达，奥希替尼 / 泰瑞沙。\n"
         "- 基因和突变位点必须保持标准写法，例如：EGFR exon 19 del、T790M、ALK fusion。\n"
@@ -321,10 +350,10 @@ def correct_transcript_batch(
         "- 不要输出 markdown。\n"
         "- 不要输出多余文字。\n"
         "- 不要输出前缀、标题、解释。\n"
-        "- 必须严格返回以下结构：\n\n"
+        "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
         '      "start_time": 12340,\n      "end_time": 15800,\n      "corrected_text": "纠错后的正文",\n'
-        '      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
+        '      "confidence": 0.95,\n      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
         "【待校正文档】\n"
         f"{transcript_block}\n\n"
         "请仅返回合法 JSON。"
@@ -344,6 +373,7 @@ def correct_transcript_batch(
                 "end_time": item["end_time"],
                 "corrected_text": item["text"],
                 "text": item["text"],
+                "confidence": item.get("confidence") if item.get("confidence") is not None else 0.0,
                 "corrections": [],
                 "uncertain_terms": [],
             }
@@ -421,16 +451,17 @@ def apply_correction_fallback_batch(
         "5. 保留所有数字、单位、时间、剂量、百分比、分数、缩写格式。\n"
         "6. 药物名、基因位点、检测名、抗体克隆号、公司名优先按行业通用写法统一。\n"
         "7. 如果上下文与兜底规则都无法明确支持修改，直接保留原文。\n"
-        "8. 绝不输出解释、分析、备注或修正原因。\n\n"
+        "8. 绝不输出解释、分析、备注或修正原因。\n"
+        "9. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n\n"
         "输出要求：\n"
         "- 只输出合法 JSON。\n"
         "- 不要输出 markdown。\n"
         "- 不要输出多余文字。\n"
         "- 不要输出前缀、标题、解释。\n"
-        "- 必须严格返回以下结构：\n\n"
+        "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
         '      "start_time": 12340,\n      "end_time": 15800,\n      "corrected_text": "兜底纠错后的正文",\n'
-        '      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
+        '      "confidence": 0.95,\n      "corrections": [{"original": "原词", "corrected": "修正词"}],\n      "uncertain_terms": []\n    }\n  ]\n}\n\n'
         "【主纠错结果】\n"
         f"{transcript_block}\n\n"
         "请仅返回合法 JSON。"
@@ -450,6 +481,7 @@ def apply_correction_fallback_batch(
                 "end_time": item["end_time"],
                 "corrected_text": item["text"],
                 "text": item["text"],
+                "confidence": item.get("confidence") if item.get("confidence") is not None else 0.0,
                 "corrections": [],
                 "uncertain_terms": [],
             }
@@ -510,12 +542,13 @@ def clean_transcript_batch(
         "6. 可以删除明显的口头禅、重复词、无意义停顿词，但不能删除有实际语义作用的连接词。\n"
         "7. 对于不确定是否应删除的内容，优先保留。\n"
         "8. 只输出清洗后的正文，不要输出解释、备注、分析。\n\n"
+        "9. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n"
         "输出要求：\n"
         "- 只输出合法 JSON。\n"
         "- 不要输出 markdown。\n"
         "- 不要输出多余文字。\n"
         "- 不要输出前缀、标题、解释。\n"
-        "- 必须严格返回以下结构：\n\n"
+        "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
         '      "start_time": 12340,\n      "end_time": 15800,\n      "clean_text": "清洗后的正文"\n    }\n  ]\n}\n\n'
         "【待清洗文本】\n"
@@ -538,6 +571,7 @@ def clean_transcript_batch(
                 "corrected_text": item["text"],
                 "clean_text": item["text"],
                 "text": item["text"],
+                "confidence": item.get("confidence") if item.get("confidence") is not None else 0.0,
                 "corrections": item.get("corrections", []),
                 "uncertain_terms": item.get("uncertain_terms", []),
             }
@@ -551,6 +585,10 @@ def clean_transcript_batch(
             item["corrections"] = source.get("corrections", [])
         if not item.get("uncertain_terms"):
             item["uncertain_terms"] = source.get("uncertain_terms", [])
+        if item.get("confidence") is None:
+            item["confidence"] = source.get("confidence")
+        if item.get("confidence") is None:
+            item["confidence"] = 0.0
         item["clean_text"] = item.get("clean_text") or item.get("text", "")
         item["text"] = item["clean_text"]
     return merged
@@ -608,6 +646,7 @@ def clean_speaker_utterance(
         "term_corrections": first.get("corrections", []),
         "uncertain_terms": first.get("uncertain_terms", []),
         "corrected_text": first.get("corrected_text", speaker_text),
+        "confidence": first.get("confidence") if first.get("confidence") is not None else 0.0,
     }
 
 

@@ -13,6 +13,23 @@ from InterviewLogger import log_interview
 dotenv.load_dotenv()
 
 
+def _normalize_confidence(value: Any) -> Optional[float]:
+    """
+    将模型输出或上游记录中的 confidence 归一化到 0 到 1 之间。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0:
+        return 0.0
+    if confidence > 1:
+        return 1.0
+    return confidence
+
+
 def _extract_transcript_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     从 file_content JSON 中提取可供批处理模型使用的逐条转录记录。
@@ -46,6 +63,7 @@ def _extract_transcript_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "start_time": start_time,
                 "end_time": end_time,
                 "text": str(text or ""),
+                "confidence": _normalize_confidence(seg.get("confidence")),
             }
         )
     return records
@@ -201,6 +219,12 @@ def _run_segment_stage(
         corrected_text = str(seg.get("speaker_content_corrected", raw_text) or raw_text)
         final_text = _resolve_output_text(stage_row, request_item)
 
+        confidence = _normalize_confidence(stage_row.get("confidence"))
+        if confidence is None:
+            confidence = _normalize_confidence(seg.get("confidence"))
+        if confidence is None:
+            confidence = 0.0
+
         merged = {
             "id": seg_id,
             "uid": stage_row.get("uid", request_item["uid"]),
@@ -213,6 +237,7 @@ def _run_segment_stage(
             "end_time": seg.get("end_time"),
             "term_corrections": stage_row.get("corrections", seg.get("term_corrections", [])),
             "uncertain_terms": stage_row.get("uncertain_terms", seg.get("uncertain_terms", [])),
+            "confidence": confidence,
         }
         merged[output_text_field] = final_text
         if output_text_field == "speaker_content_corrected":
@@ -257,6 +282,7 @@ def _run_segment_stage(
                         "end_time": seg.get("end_time"),
                         "term_corrections": [],
                         "uncertain_terms": [],
+                        "confidence": _normalize_confidence(seg.get("confidence")) or 0.0,
                         output_text_field: raw_text,
                     }
         for idx in sorted(batch_results):
@@ -495,6 +521,11 @@ def clean_file_content_json(
         merged["speaker_content_clean"] = clean_text
         merged["term_corrections"] = corrected.get("term_corrections", [])
         merged["uncertain_terms"] = corrected.get("uncertain_terms", [])
+        merged["confidence"] = _normalize_confidence(cleaned.get("confidence"))
+        if merged["confidence"] is None:
+            merged["confidence"] = _normalize_confidence(corrected.get("confidence"))
+        if merged["confidence"] is None:
+            merged["confidence"] = 0.0
         enriched.append(merged)
 
         transcript_enriched.append(
@@ -509,6 +540,7 @@ def clean_file_content_json(
                 "speaker_content_clean": clean_text,
                 "term_corrections": merged.get("term_corrections", []),
                 "uncertain_terms": merged.get("uncertain_terms", []),
+                "confidence": merged.get("confidence"),
             }
         )
 
