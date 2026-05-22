@@ -3755,6 +3755,60 @@ def update_interview_summary_text_with_corrections(
     return row, inserted
 
 
+def update_interview_summary_confidence(
+    summary_id: int,
+    project_interview_id: int,
+    confidence: float,
+) -> dict | None:
+    """
+    更新某条 summary 的 confidence 值，并返回更新后的记录。
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE bh_project_interview_summary
+                SET confidence = %s
+                WHERE id = %s AND project_interview_id = %s
+                """,
+                (confidence, summary_id, project_interview_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    project_interview_id,
+                    timestamp,
+                    speaker,
+                    text,
+                    confidence
+                FROM bh_project_interview_summary
+                WHERE id = %s AND project_interview_id = %s
+                LIMIT 1
+                """,
+                (summary_id, project_interview_id),
+            )
+            row = cursor.fetchone()
+        if row is not None:
+            confidence_value = row.get("confidence")
+            if confidence_value is not None and not isinstance(confidence_value, bool):
+                try:
+                    row["confidence"] = float(confidence_value)
+                except (TypeError, ValueError):
+                    row["confidence"] = None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return row
+
+
 def fetch_key_bq_rows_by_interview(interview_id: int) -> list[dict]:
     """
     根据访谈 ID 查询该访谈下所有 key BQ 明细。

@@ -439,3 +439,15 @@ export function updateInterviewSummary(
     } as UpdateSummaryRequest),
   });
 }
+
+export function completeInterviewSummary(
+  interviewId: number,
+  summaryId: number,
+): Promise<UpdateSummaryResponse> {
+  return request<UpdateSummaryResponse>(
+    `/api/interviews/${interviewId}/summary/${summaryId}/complete`,
+    {
+      method: "PATCH",
+    },
+  );
+}

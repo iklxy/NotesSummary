@@ -48,6 +48,7 @@ import {
   getQuestionIntents,
   getInterviewNotes,
   getInterviewSummary,
+  completeInterviewSummary,
   updateInterviewSummary,
 } from "../../../lib/interviewsApi";
 import type {
@@ -139,6 +140,19 @@ function formatAudioTimestampRange(timestamp?: string | null): string {
   return start === end ? start : `${start} - ${end}`;
 }
 
+function normalizeSummaryConfidence(value?: number | string | null): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (value != null) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 function createEmptyFewshotDraft(intentId?: number): FewshotDraft {
   return {
     intent_id: intentId,
@@ -225,6 +239,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [draftSummaryText, setDraftSummaryText] = useState("");
   const [draftSummaryOriginalText, setDraftSummaryOriginalText] = useState("");
   const [savingSummaryId, setSavingSummaryId] = useState<number | null>(null);
+  const [completingSummaryId, setCompletingSummaryId] = useState<number | null>(null);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [audioIsPlaying, setAudioIsPlaying] = useState(false);
@@ -463,12 +478,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     return items
       .map((item) => ({
         item,
-        confidence:
-          typeof item.confidence === "number"
-            ? item.confidence
-            : item.confidence != null && Number.isFinite(Number(item.confidence))
-              ? Number(item.confidence)
-              : null,
+        confidence: normalizeSummaryConfidence(item.confidence),
       }))
       .filter((entry): entry is { item: InterviewSummaryItem; confidence: number } => {
         return entry.confidence !== null && entry.confidence < LOW_CONFIDENCE_THRESHOLD;
@@ -851,6 +861,43 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       }
     } finally {
       setSavingSummaryId(null);
+    }
+  };
+
+  const completeSummary = async (summaryId: number) => {
+    try {
+      setCompletingSummaryId(summaryId);
+      const result = await completeInterviewSummary(interviewIdNum, summaryId);
+      setSummary((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          items: prev.items.map((item) =>
+            item.id === summaryId
+              ? {
+                  ...item,
+                  ...(result.summary || {}),
+                }
+              : item,
+          ),
+        };
+      });
+      if (editingSummaryId === summaryId) {
+        cancelEditSummary();
+      }
+      message.success("已标记完成，confidence 已提升到 0.95");
+      setSummaryReloadToken((value) => value + 1);
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : "标记完成失败";
+      if (errorMessage.includes("404")) {
+        message.error("该条 trans 已不存在，请刷新后重试");
+      } else {
+        message.error(errorMessage);
+      }
+    } finally {
+      setCompletingSummaryId(null);
     }
   };
 
@@ -1261,6 +1308,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                           const side = speakerSideMap[speaker] || "left";
                           const timestamp = item.timestamp || "";
                           const text = item.text || "";
+                          const isBeingEdited = editingSummaryId === item.id;
                           const isActive = activeSummaryId === item.id;
                           return (
                             <div
@@ -1321,6 +1369,19 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                     }}
                                   >
                                     编辑
+                                  </Button>
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    style={{ padding: 0, height: "auto", color: "#16a34a" }}
+                                    loading={completingSummaryId === item.id}
+                                    disabled={isBeingEdited || completingSummaryId === item.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void completeSummary(item.id);
+                                    }}
+                                  >
+                                    完成
                                   </Button>
                                 </Space>
                               </Card>
@@ -1393,6 +1454,10 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                           const cardText = isEditing ? draftSummaryText : text;
                           const sideLabel = getSideLabel(side);
                           const isActive = activeSummaryId === item.id;
+                          const normalizedConfidence = normalizeSummaryConfidence(item.confidence);
+                          const needsManualReview =
+                            normalizedConfidence !== null &&
+                            normalizedConfidence < LOW_CONFIDENCE_THRESHOLD;
                           return (
                             <div
                               key={item.id}
@@ -1441,19 +1506,40 @@ export default function InterviewDetailClient({ interviewId }: Props) {
                                       </Text>
                                     ) : null}
                                   </Space>
-                                  {!isEditing ? (
-                                    <Button
-                                      type="link"
-                                      size="small"
-                                      style={{ padding: 0, height: "auto" }}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        beginEditSummary(item.id, text);
-                                      }}
-                                    >
-                                      编辑
-                                    </Button>
-                                  ) : null}
+                                  <Space size={8}>
+                                    {!isEditing ? (
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        style={{ padding: 0, height: "auto" }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          beginEditSummary(item.id, text);
+                                        }}
+                                      >
+                                        编辑
+                                      </Button>
+                                    ) : null}
+                                    {needsManualReview ? (
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        style={{ padding: 0, height: "auto", color: "#16a34a" }}
+                                        loading={completingSummaryId === item.id}
+                                        disabled={
+                                          isEditing ||
+                                          savingSummaryId === item.id ||
+                                          completingSummaryId === item.id
+                                        }
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void completeSummary(item.id);
+                                        }}
+                                      >
+                                        完成
+                                      </Button>
+                                    ) : null}
+                                  </Space>
                                 </Space>
                                 {!isEditing ? (
                                   <Paragraph style={{ marginBottom: 0, marginTop: 8 }}>

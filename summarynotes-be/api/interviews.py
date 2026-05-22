@@ -51,6 +51,7 @@ from db import (
     update_interview_cards_item,
     update_interview_minutes_json,
     update_interview_note_content,
+    update_interview_summary_confidence,
     update_interview_summary_text_with_corrections,
     upsert_interview_minutes,
     upsert_interview_cards,
@@ -2685,4 +2686,44 @@ def update_interview_summary(
         reindex_indexed=None,
         reindex_warning=None,
         corrections_inserted=corrections_inserted,
+    )
+
+
+@router.patch(
+    "/{interview_id}/summary/{summary_id}/complete",
+    response_model=SummaryUpdateResponse,
+)
+def complete_interview_summary(
+    interview_id: int,
+    summary_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> SummaryUpdateResponse:
+    """
+    将指定 summary 标记为已人工确认，并提升其 confidence。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+
+    original = fetch_interview_summary_by_id(summary_id, interview_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="summary not found")
+
+    try:
+        updated = update_interview_summary_confidence(
+            summary_id=summary_id,
+            project_interview_id=interview_id,
+            confidence=0.95,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update summary confidence failed: {e}")
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="summary not found")
+
+    return SummaryUpdateResponse(
+        success=True,
+        summary=updated,
+        reindex_succeeded=False,
+        reindex_indexed=None,
+        reindex_warning=None,
+        corrections_inserted=0,
     )
