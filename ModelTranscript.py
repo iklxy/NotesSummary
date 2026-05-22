@@ -542,7 +542,7 @@ def clean_transcript_batch(
         "6. 可以删除明显的口头禅、重复词、无意义停顿词，但不能删除有实际语义作用的连接词。\n"
         "7. 对于不确定是否应删除的内容，优先保留。\n"
         "8. 只输出清洗后的正文，不要输出解释、备注、分析。\n\n"
-        "9. JSON字段中的confidence表示你对这一条summary准确率的置信度。\n"
+        "9. JSON字段中的confidence表示你对这一条清洗结果准确率的置信度。\n"
         "输出要求：\n"
         "- 只输出合法 JSON。\n"
         "- 不要输出 markdown。\n"
@@ -550,7 +550,8 @@ def clean_transcript_batch(
         "- 不要输出前缀、标题、解释。\n"
         "- 参考JSON格式如下，必须严格返回以下结构：\n\n"
         '{\n  "transcript": [\n    {\n      "uid": "u001",\n      "speaker_id": "speaker1",\n'
-        '      "start_time": 12340,\n      "end_time": 15800,\n      "clean_text": "清洗后的正文"\n    }\n  ]\n}\n\n'
+        '      "start_time": 12340,\n      "end_time": 15800,\n      "clean_text": "清洗后的正文",\n'
+        '      "confidence": 0.95\n    }\n  ]\n}\n\n'
         "【待清洗文本】\n"
         f"{transcript_block}\n\n"
         "请仅返回合法 JSON。"
