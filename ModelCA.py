@@ -265,6 +265,38 @@ def parse_ca_diff_row_response(content: str, interview_ids: List[int]) -> Dict[s
     return payload
 
 
+def _normalize_ca_row_summary(raw_summary: Any) -> Dict[str, Any]:
+    """
+    归一化 CA 行总结结果。
+    """
+    summary = ""
+    if isinstance(raw_summary, dict):
+        summary = str(
+            raw_summary.get("summary")
+            or raw_summary.get("summary_text")
+            or raw_summary.get("text")
+            or raw_summary.get("answer")
+            or ""
+        ).strip()
+    elif isinstance(raw_summary, str):
+        summary = raw_summary.strip()
+    if not summary:
+        summary = "/"
+    return {"summary": summary}
+
+
+def parse_ca_row_summary_response(content: str) -> Dict[str, Any]:
+    """
+    解析 CA 行总结结果。
+    """
+    payload = _parse_json_response(content)
+    if not isinstance(payload, dict):
+        payload = {"summary": "/", "llm_raw_output": content}
+    payload.update(_normalize_ca_row_summary(payload))
+    payload.setdefault("llm_raw_output", content)
+    return payload
+
+
 def _normalize_ca_question_display_texts(
     raw_questions: Any,
     fallback_questions: List[Dict[str, Any]],
@@ -686,6 +718,87 @@ def generate_ca_diff_row_for_interviews(
         retry_payload = parse_ca_diff_row_response(retry_raw_output, interview_ids)
         if _has_meaningful_diff_row(retry_payload.get("diff_row") or {}, interview_ids):
             payload = retry_payload
+    return payload
+
+
+def generate_ca_row_summary_for_question(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    questionnaire_title: str,
+    question_uid: str,
+    question_order: int,
+    question_text: str,
+    question_type: str,
+    question_group: str,
+    question_group_summary: str,
+    interview_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    基于同一问题行的全部访谈答案生成整行总结。
+    """
+    if not interview_rows:
+        return {"summary": "/"}
+
+    answer_lines: List[str] = []
+    has_meaningful_answer = False
+    for index, item in enumerate(interview_rows, start=1):
+        interview_id = int(item.get("interview_id") or 0)
+        name = str(item.get("name") or f"访谈 {interview_id}").strip()
+        answer = str(item.get("answer") or "").strip()
+        evidence = item.get("evidence") or []
+        numeric_value = item.get("numeric_value")
+        source = str(item.get("source") or "").strip()
+        if answer and answer != "/":
+            has_meaningful_answer = True
+        evidence_text = "/"
+        if isinstance(evidence, list) and evidence:
+            evidence_text = "\n".join(
+                f"- {str(line or '').strip()}" for line in evidence if str(line or "").strip()
+            ) or "/"
+        answer_lines.append(
+            f"[{index}] 访谈 {interview_id} | {name}\n"
+            f"回答：{answer or '/'}\n"
+            f"数值：{numeric_value if numeric_value is not None else '/'}\n"
+            f"来源：{source or '/'}\n"
+            f"引用：\n{evidence_text}"
+        )
+
+    if not has_meaningful_answer:
+        return {"summary": "/"}
+
+    normalized_question_type = str(question_type or "qualitative").strip().lower()
+    if normalized_question_type not in {"qualitative", "quantitative"}:
+        normalized_question_type = "qualitative"
+
+    system_prompt = (
+        "你是专业的医疗咨询行业对比分析专家。"
+        "你的任务是根据同一问题下各访谈的回答，生成一条适合放在 CA 表格总结列里的行级总结。"
+        "必须输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"【问卷名称】\n{questionnaire_title}\n\n"
+        f"【问题编号】\n{question_order}\n\n"
+        f"【问题 ID】\n{question_uid}\n\n"
+        f"【问题类型】\n{normalized_question_type}\n\n"
+        f"【问题标题】\n{question_text}\n\n"
+        f"【主题分组】\n{question_group or '（无）'}\n\n"
+        f"【主题说明】\n{question_group_summary or '（无）'}\n\n"
+        + "\n\n".join(answer_lines)
+        + "\n\n"
+        "要求：\n"
+        "1. 只能基于这一行里各访谈的回答进行总结，不要回到全文 trans，也不要新增未给出的事实。\n"
+        "2. 如果这一行所有访谈都没有有效答案，或都只是 \"/\"，请直接输出 \"/\"。\n"
+        "3. 总结要面向整行答案做横向归纳，突出共性、差异和整体趋势，不要逐访谈罗列。\n"
+        "4. 定性问题的总结控制在 1 到 2 句，尽量短而直接。\n"
+        "5. 定量问题的总结可结合答案分布做概括，但不要重复统计列中的数值计算结果。\n"
+        "6. 不要输出引用、不要输出列表、不要输出 markdown。\n"
+        "7. 只输出 JSON，结构必须是 {\"summary\": \"...\"}。\n"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    payload = parse_ca_row_summary_response(raw_output)
+    summary = str(payload.get("summary") or "").strip()
+    payload["summary"] = summary or "/"
     return payload
 
 

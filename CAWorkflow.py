@@ -35,7 +35,7 @@ from db import fetch_interviews_by_project as fetch_project_interviews
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_CA_JSON_NAME = "ca_table.json"
 DEFAULT_CA_FULL_NOTES_NAME = "full_notes.md"
-CA_SCHEMA_VERSION = 3
+CA_SCHEMA_VERSION = 4
 CA_LEGACY_SCHEMA_VERSION = 2
 DEFAULT_COLUMN_META_FIELDS = [str(item["key"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS]
 
@@ -422,6 +422,7 @@ def _build_ca_framework(
                 "question_uid": str(item.get("uid") or column_id).strip(),
                 "question_text": question_text,
                 "display_text": display_text,
+                "summary_text": "/",
                 "hidden": False,
             }
         )
@@ -596,6 +597,7 @@ def _build_ca_framework_from_notes(
                     "question_uid": question_uid,
                     "question_text": row_title or row_summary,
                     "display_text": display_text,
+                    "summary_text": "/",
                     "question_type": question_type,
                     "hidden": False,
                 }
@@ -1163,6 +1165,64 @@ def generate_ca_table_for_project(
             f"question_uid={question_uid} interview_count={len(selected_interview_ids)}",
             project_id=project_id,
         )
+
+        interview_rows_for_summary: List[Dict[str, Any]] = []
+        for interview_id in selected_interview_ids:
+            interview_key = str(interview_id)
+            current_cell = cells.get(interview_key, {}).get(column_id) if isinstance(cells.get(interview_key), dict) else None
+            current_value = ""
+            current_evidence: List[str] = []
+            current_source = ""
+            current_numeric_value = None
+            if isinstance(current_cell, dict):
+                current_value = str(current_cell.get("value") or current_cell.get("answer") or current_cell.get("text") or "").strip()
+                current_evidence = [
+                    str(item or "").strip()
+                    for item in (current_cell.get("evidence") or current_cell.get("sources") or current_cell.get("quotes") or [])
+                    if str(item or "").strip()
+                ]
+                current_source = str(current_cell.get("source") or "").strip()
+                current_numeric_value = current_cell.get("numeric_value")
+            elif current_cell is not None:
+                current_value = str(current_cell).strip()
+            interview_row = next((row for row in interview_rows if int(row.get("id") or 0) == interview_id), None)
+            interview_rows_for_summary.append(
+                {
+                    "interview_id": interview_id,
+                    "name": str(interview_row.get("name") if isinstance(interview_row, dict) else f"访谈 {interview_id}").strip(),
+                    "answer": current_value or "/",
+                    "evidence": current_evidence,
+                    "numeric_value": current_numeric_value,
+                    "source": current_source or "llm",
+                }
+            )
+
+        try:
+            row_summary_payload = ModelClient.generate_ca_row_summary_for_question(
+                project_context=project_context,
+                questionnaire_title=questionnaire_name,
+                question_uid=question_uid,
+                question_order=question_order,
+                question_text=question_text,
+                question_type=question_type,
+                question_group=str(column.get("group") or "").strip(),
+                question_group_summary=str(column.get("group_summary") or "").strip(),
+                interview_rows=interview_rows_for_summary,
+            )
+            summary_text = str(row_summary_payload.get("summary") or "").strip() or "/"
+            column["summary_text"] = summary_text
+            log(
+                f"CA row summary generation done questionnaire_id={resolved_questionnaire_id} "
+                f"question_uid={question_uid} summary_len={len(summary_text) if summary_text != '/' else 0}",
+                project_id=project_id,
+            )
+        except Exception as exc:
+            column["summary_text"] = "/"
+            log(
+                f"CA row summary failed questionnaire_id={resolved_questionnaire_id} "
+                f"question_uid={question_uid} error={exc}\n{traceback.format_exc()}",
+                project_id=project_id,
+            )
 
     try:
         diff_payload = ModelClient.generate_ca_diff_row_for_interviews(

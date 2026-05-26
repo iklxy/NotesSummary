@@ -82,6 +82,7 @@ type MatrixRow =
       kind: "question";
       label: string;
       questionUid: string;
+      summaryText: string;
       values: Record<string, string>;
       evidence: Record<string, string[]>;
       order: number;
@@ -386,6 +387,10 @@ function normalizeSnapshot(
         order: Number.isFinite(Number(item.order)) ? Number(item.order) : index + 1,
         question_text: String(item.question_text || "").trim(),
         display_text: displayText.trim(),
+        summary_text:
+          item.summary_text !== undefined && item.summary_text !== null
+            ? String(item.summary_text).trim() || "/"
+            : "/",
         hidden: Boolean(item.hidden),
         question_uid: questionUid,
         group_id: item.group_id !== undefined && item.group_id !== null ? String(item.group_id).trim() : "",
@@ -444,9 +449,12 @@ function normalizeSnapshot(
     });
   }
   base.diff_row = nextDiffRow;
+  const hasSummaryText = columns.some((column) => Boolean(String(column.summary_text || "").trim()));
   const hasNotesFramework = groups.length > 0 || columns.some((column) => Boolean(column.group || column.group_order || column.question_type || column.group_summary));
   const baseSchemaVersion = Number(base.schema_version || 0);
-  if (baseSchemaVersion >= 3 || hasNotesFramework) {
+  if (baseSchemaVersion >= 4 || hasSummaryText) {
+    base.schema_version = 4;
+  } else if (baseSchemaVersion >= 3 || hasNotesFramework) {
     base.schema_version = 3;
   } else if (baseSchemaVersion >= 2 || base.diff_row) {
     base.schema_version = 2;
@@ -839,6 +847,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           kind: "question",
           label: getQuestionLabel(column),
           questionUid,
+          summaryText: String(column.summary_text || "/").trim() || "/",
           order: Number(column.order) || index + 1,
           hidden: Boolean(column.hidden),
           column,
@@ -1172,6 +1181,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         order: nextOrder,
         question_text: "自定义问题",
         display_text: "自定义问题",
+        summary_text: "/",
         hidden: false,
         question_uid: questionUid,
         group: "未分组",
@@ -1249,6 +1259,10 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           patch.group_summary !== undefined
             ? String(patch.group_summary || "")
             : current.group_summary ?? "",
+        summary_text:
+          patch.summary_text !== undefined
+            ? String(patch.summary_text || "").trim() || "/"
+            : current.summary_text ?? "/",
         question_type:
           patch.question_type !== undefined
             ? normalizeQuestionType(patch.question_type)
@@ -1335,7 +1349,8 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     const answerWidth = showEvidenceColumns ? 260 : 300;
     const evidenceWidth = 320;
     const statsWidth = 220;
-    const totalLeafColumns = 2 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
+    const summaryWidth = 260;
+    const totalLeafColumns = 3 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
 
     const renderAnswerCell = (row: MatrixRow, interviewId: number) => {
       if (row.kind === "section" || row.kind === "group") {
@@ -1398,6 +1413,16 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         return count + (value && value !== "/" ? 1 : 0);
       }, 0);
       return <Text className="text-slate-600">有效 {validCount}</Text>;
+    };
+
+    const renderSummaryCell = (row: MatrixRow) => {
+      if (row.kind === "section" || row.kind === "group") {
+        return { children: null, props: { colSpan: 0 } };
+      }
+      if (row.kind === "meta" || row.kind === "diff") {
+        return <Text type="secondary">-</Text>;
+      }
+      return <div className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.summaryText || "/"}</div>;
     };
 
     const columns: any[] = [
@@ -1507,6 +1532,13 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         width: statsWidth,
         render: (_: unknown, row: MatrixRow) => renderStatsCell(row),
       },
+      {
+        key: "summary",
+        title: "总结",
+        dataIndex: "summary",
+        width: summaryWidth,
+        render: (_: unknown, row: MatrixRow) => renderSummaryCell(row),
+      },
       ...visibleInterviews.map((interview, index) => {
         const interviewId = interview.interview_id;
         const interviewTitle = (
@@ -1607,7 +1639,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                 </Space>
               </div>
               <Paragraph className="!mb-0 text-sm text-slate-500">
-                默认沿用从详情页传入的访谈选择。矩阵按主题分组展开，左侧提供有效答案统计，右侧保持访谈回答与引用列一致。
+                默认沿用从详情页传入的访谈选择。矩阵按主题分组展开，左侧提供有效答案统计和行级总结，右侧保持访谈回答与引用列一致。
               </Paragraph>
             </Space>
           </Card>

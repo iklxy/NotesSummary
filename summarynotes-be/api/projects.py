@@ -749,14 +749,18 @@ def _infer_ca_schema_version(payload: Dict[str, Any]) -> int:
     if not isinstance(payload, dict):
         return 1
     columns = payload.get("columns") if isinstance(payload.get("columns"), list) else []
+    has_row_summary = False
     has_notes_framework = bool(payload.get("groups"))
     if isinstance(columns, list):
         for column in columns:
             if not isinstance(column, dict):
                 continue
+            if column.get("summary_text") is not None:
+                has_row_summary = True
             if column.get("group") or column.get("group_id") or column.get("group_order") or column.get("question_type") or column.get("group_summary"):
                 has_notes_framework = True
-                break
+    if has_row_summary:
+        return 4
     if has_notes_framework:
         return 3
     if payload.get("diff_row") is not None:

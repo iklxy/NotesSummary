@@ -20,7 +20,7 @@ from ModelNotes import (
     repair_notes_json,
 )
 from ModelCA import generate_ca_cells_for_question, generate_ca_question_display_texts
-from ModelCA import generate_ca_diff_row_for_interviews
+from ModelCA import generate_ca_diff_row_for_interviews, generate_ca_row_summary_for_question
 from ModelTranscript import (
     apply_correction_fallback_batch,
     build_correction_rules_block,
@@ -841,6 +841,40 @@ class ModelClient:
             questionnaire_title=questionnaire_title,
             questions=questions or [],
             interview_blocks=interview_blocks or [],
+        )
+
+    @classmethod
+    def generate_ca_row_summary_for_question(
+        cls,
+        project_context: Optional[str] = None,
+        questionnaire_title: str = "",
+        question_uid: str = "",
+        question_order: int = 0,
+        question_text: str = "",
+        question_type: str = "qualitative",
+        question_group: str = "",
+        question_group_summary: str = "",
+        interview_rows: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于同一问题行的全部访谈答案生成行总结。
+        """
+        return generate_ca_row_summary_for_question(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=130000,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            questionnaire_title=questionnaire_title,
+            question_uid=question_uid,
+            question_order=question_order,
+            question_text=question_text,
+            question_type=question_type,
+            question_group=question_group,
+            question_group_summary=question_group_summary,
+            interview_rows=interview_rows or [],
         )
 
     @classmethod

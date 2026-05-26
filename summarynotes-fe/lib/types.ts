@@ -618,6 +618,7 @@ export interface ProjectCaColumn {
   order: number;
   question_text: string;
   display_text?: string | null;
+  summary_text?: string | null;
   hidden?: boolean | null;
   question_uid?: string | null;
   group_id?: string | null;
