@@ -83,7 +83,6 @@ def flatten_leaf_questions(
             continue
 
         current_path = path_texts + [visible_text]
-        question_text = " ".join(current_path).strip()
         children = node.get("children") or []
         if children:
             child_flat, current_order = flatten_leaf_questions(
@@ -95,6 +94,8 @@ def flatten_leaf_questions(
             )
             flat_items.extend(child_flat)
             continue
+
+        question_text = " ".join(current_path).strip()
 
         flat_items.append(
             {

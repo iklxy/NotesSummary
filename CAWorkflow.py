@@ -355,6 +355,8 @@ def _build_ca_framework(
     }
     questionnaire_name = str(questionnaire_row.get("name") or f"questionnaire_{questionnaire_row.get('id')}").strip()
     simplified_question_map: Dict[str, str] = {}
+    simplified_question_uids: set[str] = set()
+    simplification_successful = False
     if flat_questions:
         try:
             simplification_payload = ModelClient.generate_ca_question_display_texts(
@@ -369,11 +371,22 @@ def _build_ca_framework(
                 display_text = str(item.get("display_text") or "").strip()
                 if uid and display_text:
                     simplified_question_map[uid] = display_text
+                    simplified_question_uids.add(uid)
+            simplification_successful = True
         except Exception as exc:
             log(
                 f"CA question simplification failed questionnaire_id={questionnaire_row.get('id')} error={exc}",
                 project_id=project_id,
             )
+
+    filtered_questions = [item for item in flat_questions if str(item.get("uid") or item.get("question_uid") or item.get("column_id") or "").strip() in simplified_question_uids]
+    if simplification_successful:
+        flat_questions = filtered_questions
+        log(
+            f"CA question simplification filtered questionnaire_id={questionnaire_row.get('id')} "
+            f"input_count={len(expanded.get('flat_questions') or [])} output_count={len(flat_questions)}",
+            project_id=project_id,
+        )
 
     rows: List[Dict[str, Any]] = []
     selected_interview_ids: List[int] = []
