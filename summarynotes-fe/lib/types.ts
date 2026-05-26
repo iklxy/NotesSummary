@@ -628,6 +628,8 @@ export interface ProjectCaColumn {
 
 export interface ProjectCaCell {
   value: string;
+  answer?: string | null;
+  evidence?: string[] | null;
   locked?: boolean | null;
   source?: string | null;
 }
@@ -645,6 +647,7 @@ export interface ProjectCaRow {
 }
 
 export interface ProjectCaSnapshot {
+  schema_version?: number | null;
   project_id: number;
   questionnaire_id?: number | null;
   project_name?: string | null;
@@ -654,6 +657,7 @@ export interface ProjectCaSnapshot {
   rows?: ProjectCaRow[];
   columns?: ProjectCaColumn[];
   cells?: Record<string, Record<string, ProjectCaCell | string>>;
+  diff_row?: Record<string, ProjectCaCell | string>;
   column_meta_fields?: string[];
   column_meta_field_labels?: Record<string, string>;
   status?: string | null;
@@ -682,6 +686,7 @@ export interface ProjectCaDimension {
 }
 
 export interface ProjectCaJson {
+  schema_version?: number | null;
   project_id: number;
   questionnaire_id?: number | null;
   project_name?: string | null;
@@ -693,6 +698,7 @@ export interface ProjectCaJson {
   rows?: ProjectCaRow[];
   columns?: ProjectCaColumn[];
   cells?: Record<string, Record<string, ProjectCaCell | string>>;
+  diff_row?: Record<string, ProjectCaCell | string>;
   framework_json?: ProjectCaSnapshot | null;
   final_json?: ProjectCaSnapshot | null;
   framework_status?: string | null;

@@ -19,6 +19,7 @@ from ModelNotes import (
     repair_notes_json,
 )
 from ModelCA import generate_ca_cells_for_question, generate_ca_question_display_texts
+from ModelCA import generate_ca_diff_row_for_interviews
 from ModelTranscript import (
     apply_correction_fallback_batch,
     build_correction_rules_block,
@@ -793,6 +794,30 @@ class ModelClient:
             project_context_block=cls._build_project_context_block(project_context),
             questionnaire_title=questionnaire_title,
             questions=questions or [],
+        )
+
+    @classmethod
+    def generate_ca_diff_row_for_interviews(
+        cls,
+        project_context: Optional[str] = None,
+        questionnaire_title: str = "",
+        questions: Optional[List[Dict[str, Any]]] = None,
+        interview_blocks: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        为每个访谈生成问卷未提及但访谈提到的差异行内容。
+        """
+        return generate_ca_diff_row_for_interviews(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=130000,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            questionnaire_title=questionnaire_title,
+            questions=questions or [],
+            interview_blocks=interview_blocks or [],
         )
 
     @classmethod

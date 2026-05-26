@@ -17,6 +17,8 @@ import {
 } from "antd";
 import {
   ArrowLeftOutlined,
+  CaretLeftOutlined,
+  CaretRightOutlined,
   DownloadOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -73,9 +75,17 @@ type MatrixRow =
       label: string;
       questionUid: string;
       values: Record<string, string>;
+      evidence: Record<string, string[]>;
       order: number;
       hidden: boolean;
       column: ProjectCaColumn;
+    }
+  | {
+      key: string;
+      kind: "diff";
+      label: string;
+      values: Record<string, string>;
+      evidence: Record<string, string[]>;
     };
 
 function cloneJson<T>(value: T): T {
@@ -113,6 +123,49 @@ function getQuestionKey(item: ProjectCaColumn, fallbackIndex: number): string {
 
 function getQuestionLabel(item: ProjectCaColumn): string {
   return String(item.display_text ?? item.question_text ?? item.question_uid ?? item.column_id ?? "").trim();
+}
+
+function normalizeCellPayload(value: ProjectCaCell | string | null | undefined): ProjectCaCell {
+  if (typeof value === "string") {
+    return {
+      value: value.trim() || "/",
+      evidence: [],
+      locked: false,
+      source: "framework",
+    };
+  }
+  if (!value || typeof value !== "object") {
+    return {
+      value: "/",
+      evidence: [],
+      locked: false,
+      source: "framework",
+    };
+  }
+  const rawValue = value as unknown as Record<string, unknown>;
+  const rawEvidence = rawValue.evidence;
+  const evidence =
+    Array.isArray(rawEvidence)
+      ? rawEvidence.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 3)
+      : [];
+  return {
+    value: String(rawValue.value ?? rawValue.answer ?? rawValue.text ?? "").trim() || "/",
+    evidence,
+    locked: Boolean(rawValue.locked),
+    source: String(rawValue.source ?? "framework"),
+  };
+}
+
+function getCellPayload(
+  cells: ProjectCaJson["cells"],
+  interviewId: number,
+  questionUid: string,
+): ProjectCaCell {
+  const row = cells?.[String(interviewId)];
+  if (!row) {
+    return normalizeCellPayload(null);
+  }
+  return normalizeCellPayload(row[questionUid]);
 }
 
 function getInterviewMetaValue(item: ProjectCaInterviewItem, key: string): string {
@@ -154,18 +207,33 @@ function getCellValue(
   interviewId: number,
   questionUid: string,
 ): string {
-  const row = cells?.[String(interviewId)];
-  if (!row) {
-    return "/";
-  }
-  const cell = row[questionUid];
-  if (cell === undefined || cell === null) {
-    return "/";
-  }
-  if (typeof cell === "string") {
-    return cell.trim() || "/";
-  }
-  return String((cell as ProjectCaCell).value ?? "").trim() || "/";
+  return getCellPayload(cells, interviewId, questionUid).value;
+}
+
+function getCellEvidence(
+  cells: ProjectCaJson["cells"],
+  interviewId: number,
+  questionUid: string,
+): string[] {
+  return getCellPayload(cells, interviewId, questionUid).evidence ?? [];
+}
+
+function getDiffValue(
+  diffRow: ProjectCaJson["diff_row"],
+  interviewId: number,
+): string {
+  const cell = diffRow?.[String(interviewId)];
+  const payload = normalizeCellPayload(cell);
+  return payload.value;
+}
+
+function getDiffEvidence(
+  diffRow: ProjectCaJson["diff_row"],
+  interviewId: number,
+): string[] {
+  const cell = diffRow?.[String(interviewId)];
+  const payload = normalizeCellPayload(cell);
+  return payload.evidence ?? [];
 }
 
 function normalizeMetaFields(
@@ -186,6 +254,7 @@ function normalizeSnapshot(
   fieldDefinitions: InterviewDetailFieldDefinition[],
 ): ProjectCaJson {
   const base: ProjectCaJson = value ? cloneJson(value) : { project_id: projectId };
+  base.schema_version = Number(base.schema_version || 0) >= 2 ? Number(base.schema_version) : 2;
   base.project_id = base.project_id || projectId;
   base.project_name = base.project_name || projectName;
   base.questionnaire_id = base.questionnaire_id || questionnaireId;
@@ -238,15 +307,11 @@ function normalizeSnapshot(
       const questionKey = getQuestionKey(column, columnIndex);
       const current = base.cells?.[interviewKey]?.[questionKey];
       if (current === undefined) {
-        nextCells[interviewKey][questionKey] = { value: "", locked: false, source: "framework" };
+        nextCells[interviewKey][questionKey] = { value: "", evidence: [], locked: false, source: "framework" };
       } else if (typeof current === "string") {
-        nextCells[interviewKey][questionKey] = { value: current, locked: false, source: "framework" };
+        nextCells[interviewKey][questionKey] = normalizeCellPayload(current);
       } else {
-        nextCells[interviewKey][questionKey] = {
-          value: String((current as ProjectCaCell).value ?? ""),
-          locked: Boolean((current as ProjectCaCell).locked),
-          source: String((current as ProjectCaCell).source ?? "framework"),
-        };
+        nextCells[interviewKey][questionKey] = normalizeCellPayload(current as ProjectCaCell);
       }
     });
   });
@@ -261,6 +326,13 @@ function normalizeSnapshot(
   base.framework_status = base.framework_status || "reviewing";
   base.final_status = base.final_status || "pending";
   base.status = base.final_status || base.framework_status || "draft";
+  const nextDiffRow: Record<string, ProjectCaCell | string> = {};
+  if (base.diff_row && typeof base.diff_row === "object") {
+    Object.entries(base.diff_row).forEach(([key, cell]) => {
+      nextDiffRow[key] = normalizeCellPayload(cell);
+    });
+  }
+  base.diff_row = nextDiffRow;
   return base;
 }
 
@@ -296,6 +368,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
   const [frameworkSnapshot, setFrameworkSnapshot] = useState<ProjectCaJson | null>(null);
   const [finalSnapshot, setFinalSnapshot] = useState<ProjectCaJson | null>(null);
   const [finalDirty, setFinalDirty] = useState(false);
+  const [showEvidenceColumns, setShowEvidenceColumns] = useState(false);
   const [detailInterviews, setDetailInterviews] = useState<Interview[]>([]);
   const [selectedInterviewIds, setSelectedInterviewIds] = useState<number[]>([]);
   const [selectedMetaFields, setSelectedMetaFields] = useState<string[]>(
@@ -514,13 +587,26 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         values: Object.fromEntries(
           visibleInterviews.map((item) => [String(item.interview_id), getCellValue(activeSnapshot.cells, item.interview_id, questionUid)]),
         ),
+        evidence: Object.fromEntries(
+          visibleInterviews.map((item) => [String(item.interview_id), getCellEvidence(activeSnapshot.cells, item.interview_id, questionUid)]),
+        ),
       });
+    });
+
+    rows.push({
+      key: "diff-row",
+      kind: "diff",
+      label: "问卷未提及但访谈中出现的内容",
+      values: Object.fromEntries(
+        visibleInterviews.map((item) => [String(item.interview_id), getDiffValue(activeSnapshot.diff_row, item.interview_id)]),
+      ),
+      evidence: Object.fromEntries(
+        visibleInterviews.map((item) => [String(item.interview_id), getDiffEvidence(activeSnapshot.diff_row, item.interview_id)]),
+      ),
     });
 
     return rows;
   }, [activeSnapshot, questionRows, visibleInterviews, visibleMetaFields]);
-
-  const totalColumns = 1 + visibleInterviews.length;
 
   const applyFrameworkMutation = (mutator: (draft: ProjectCaJson) => void) => {
     setFrameworkSnapshot((prev) => {
@@ -529,7 +615,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       }
       const next = cloneJson(prev);
       mutator(next);
-      next.selected_interview_ids = (next.interviews ?? []).map((item) => item.interview_id);
+      next.selected_interview_ids = selectedInterviewIds.length > 0 ? [...selectedInterviewIds] : (next.interviews ?? []).map((item) => item.interview_id);
       return normalizeSnapshot(
         next,
         projectId,
@@ -551,11 +637,26 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       const rowCells = cells[rowKey] && typeof cells[rowKey] === "object" ? { ...cells[rowKey] } : {};
       rowCells[questionUid] = {
         value,
+        evidence: [],
         locked: true,
         source: "manual",
       };
       cells[rowKey] = rowCells;
       draft.cells = cells;
+    });
+  };
+
+  const updateDiffCell = (interviewId: number, value: string) => {
+    applyFrameworkMutation((draft) => {
+      const diffRow = draft.diff_row && typeof draft.diff_row === "object" ? { ...draft.diff_row } : {};
+      const rowKey = String(interviewId);
+      diffRow[rowKey] = {
+        value,
+        evidence: [],
+        locked: true,
+        source: "manual",
+      };
+      draft.diff_row = diffRow;
     });
   };
 
@@ -798,6 +899,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         const rowCells = cells[interviewKey] && typeof cells[interviewKey] === "object" ? { ...cells[interviewKey] } : {};
         rowCells[questionUid] = {
           value: "",
+          evidence: [],
           locked: false,
           source: "framework",
         };
@@ -856,22 +958,84 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     if (!activeSnapshot) {
       return [];
     }
-    return [
+
+    const answerWidth = showEvidenceColumns ? 260 : 300;
+    const evidenceWidth = 320;
+    const leafColumnCount = 1 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
+
+    const renderAnswerCell = (row: MatrixRow, interviewId: number) => {
+      if (row.kind === "section") {
+        return { children: null, props: { colSpan: 0 } };
+      }
+      if (row.kind === "meta") {
+        return <Text className="text-slate-700">{row.values[String(interviewId)] || "/"}</Text>;
+      }
+      const value = row.values[String(interviewId)] || "/";
+      const placeholder = row.kind === "diff" ? "自由补充问卷未提及的内容" : "填写该问题在此访谈下的回答";
+      return (
+        <Input.TextArea
+          value={value}
+          onChange={(event) =>
+            row.kind === "diff"
+              ? updateDiffCell(interviewId, event.target.value)
+              : updateCell(row.questionUid, interviewId, event.target.value)
+          }
+          autoSize={{ minRows: row.kind === "diff" ? 2 : 3, maxRows: row.kind === "diff" ? 6 : 8 }}
+          placeholder={placeholder}
+        />
+      );
+    };
+
+    const renderEvidenceCell = (row: MatrixRow, interviewId: number) => {
+      if (row.kind === "section") {
+        return { children: null, props: { colSpan: 0 } };
+      }
+      if (row.kind === "meta") {
+        return <Text type="secondary">-</Text>;
+      }
+      const evidence = row.evidence[String(interviewId)] || [];
+      if (evidence.length === 0) {
+        return <Text type="secondary">/</Text>;
+      }
+      return (
+        <div className="whitespace-pre-wrap text-xs leading-6 text-slate-600">
+          {evidence.map((item, index) => (
+            <div key={`${interviewId}-${row.key}-evidence-${index}`} className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+              {item}
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    const columns: any[] = [
       {
         key: "label",
         title: "字段 / 问题",
         dataIndex: "label",
         fixed: "left" as const,
-        width: 350,
+        width: 390,
         render: (_: unknown, row: MatrixRow) => {
           if (row.kind === "section") {
             return {
               children: <div className="font-semibold text-slate-700">{row.label}</div>,
-              props: { colSpan: totalColumns },
+              props: { colSpan: leafColumnCount },
             };
           }
           if (row.kind === "meta") {
             return <Text className="font-medium text-slate-700">{row.label}</Text>;
+          }
+          if (row.kind === "diff") {
+            return (
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+                  {row.label}
+                </div>
+                <Text type="secondary" className="text-xs">
+                  最后一行，用来展示问卷未覆盖但访谈中提到的内容。
+                </Text>
+              </Space>
+            );
           }
           return (
             <Space direction="vertical" size={10} style={{ width: "100%" }}>
@@ -880,7 +1044,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   value={row.column.display_text ?? row.column.question_text ?? ""}
                   title={row.column.question_text || ""}
                   autoSize={{ minRows: 1, maxRows: 2 }}
-                  style={{ width: 500, minHeight: 40, resize: "none" }}
+                  style={{ width: 540, minHeight: 40, resize: "none" }}
                   onChange={(event) =>
                     updateQuestionRow(row.questionUid, {
                       display_text: event.target.value,
@@ -908,36 +1072,38 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       },
       ...visibleInterviews.map((interview, index) => {
         const interviewId = interview.interview_id;
+        const interviewTitle = (
+          <div className="space-y-1 text-left">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">访谈 {index + 1}</div>
+            <div className="text-sm font-semibold text-slate-900">{interview.name || `访谈 ${interviewId}`}</div>
+            <div className="text-xs text-slate-500">{interview.interview_date ? interview.interview_date.split("T")[0] : "-"}</div>
+          </div>
+        );
+        const children: any[] = [
+          {
+            key: `${interviewId}-answer`,
+            title: "回答",
+            width: answerWidth,
+            render: (_: unknown, row: MatrixRow) => renderAnswerCell(row, interviewId),
+          },
+        ];
+        if (showEvidenceColumns) {
+          children.push({
+            key: `${interviewId}-evidence`,
+            title: "引用",
+            width: evidenceWidth,
+            render: (_: unknown, row: MatrixRow) => renderEvidenceCell(row, interviewId),
+          });
+        }
         return {
           key: String(interviewId),
-          title: (
-            <div className="space-y-1 text-left">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-500">访谈 {index + 1}</div>
-              <div className="text-sm font-semibold text-slate-900">{interview.name || `访谈 ${interviewId}`}</div>
-              <div className="text-xs text-slate-500">{interview.interview_date ? interview.interview_date.split("T")[0] : "-"}</div>
-            </div>
-          ),
-          width: 280,
-          render: (_: unknown, row: MatrixRow) => {
-            if (row.kind === "section") {
-              return { children: null, props: { colSpan: 0 } };
-            }
-            if (row.kind === "meta") {
-              return <Text className="text-slate-700">{row.values[String(interviewId)] || "/"}</Text>;
-            }
-            return (
-              <Input.TextArea
-                value={row.values[String(interviewId)] || "/"}
-                onChange={(event) => updateCell(row.questionUid, interviewId, event.target.value)}
-                autoSize={{ minRows: 3, maxRows: 8 }}
-                placeholder="填写该问题在此访谈下的回答"
-              />
-            );
-          },
+          title: interviewTitle,
+          children,
         };
       }),
     ];
-  }, [activeSnapshot, totalColumns, updateCell, visibleInterviews]);
+    return columns;
+  }, [activeSnapshot, showEvidenceColumns, updateCell, updateDiffCell, visibleInterviews]);
 
   const matrixData = useMemo(() => matrixRows, [matrixRows]);
 
@@ -1094,7 +1260,17 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           <Card
             style={{ borderRadius: 20 }}
             title="CA 矩阵"
-            extra={<Button onClick={addQuestionRow}>新增问题行</Button>}
+            extra={
+              <Space>
+                <Button
+                  icon={showEvidenceColumns ? <CaretLeftOutlined /> : <CaretRightOutlined />}
+                  onClick={() => setShowEvidenceColumns((prev) => !prev)}
+                >
+                  {showEvidenceColumns ? "隐藏引用列" : "显示引用列"}
+                </Button>
+                <Button onClick={addQuestionRow}>新增问题行</Button>
+              </Space>
+            }
           >
             {loading ? (
               <div className="flex items-center justify-center py-16">
@@ -1105,7 +1281,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             ) : (
               <div className="overflow-auto">
                 <Paragraph className="!mb-3 text-sm text-slate-500">
-                  问题行可以直接在矩阵里编辑，修改后会同步到框架 JSON 并写回数据库。
+                  问题行可直接在矩阵里编辑；点击右上角箭头可展开或收起每个访谈右侧的引用列。
                 </Paragraph>
                 <Table
                   rowKey="key"
@@ -1118,9 +1294,11 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   rowClassName={(record) =>
                     record.kind === "section"
                       ? "bg-slate-100 font-semibold"
-                      : record.kind === "question" && record.hidden
+                      : record.kind === "diff"
+                        ? "bg-emerald-50/50"
+                        : record.kind === "question" && record.hidden
                         ? "bg-slate-50 text-slate-400"
-                      : ""
+                        : ""
                   }
                 />
               </div>

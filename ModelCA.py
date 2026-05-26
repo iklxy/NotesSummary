@@ -125,7 +125,48 @@ def parse_ca_dimensions_response(content: str) -> Dict[str, Any]:
     return payload
 
 
-def _normalize_ca_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, str]:
+def _normalize_ca_evidence(raw_evidence: Any) -> List[str]:
+    """
+    归一化证据列表。
+    """
+    if isinstance(raw_evidence, str):
+        text = raw_evidence.strip()
+        return [text] if text else []
+    if not isinstance(raw_evidence, list):
+        return []
+    evidence: List[str] = []
+    for item in raw_evidence:
+        text = str(item or "").strip()
+        if text:
+            evidence.append(text)
+    return evidence[:3]
+
+
+def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
+    """
+    归一化单个 CA 单元格。
+    """
+    if isinstance(raw_cell, dict):
+        answer = str(raw_cell.get("answer") or raw_cell.get("value") or raw_cell.get("text") or "").strip()
+        evidence = _normalize_ca_evidence(raw_cell.get("evidence") or raw_cell.get("sources") or raw_cell.get("quotes"))
+        locked = bool(raw_cell.get("locked"))
+        source = str(raw_cell.get("source") or "framework")
+        return {
+            "value": answer or "/",
+            "evidence": evidence,
+            "locked": locked,
+            "source": source,
+        }
+    text = str(raw_cell or "").strip()
+    return {
+        "value": text or "/",
+        "evidence": [],
+        "locked": False,
+        "source": "framework",
+    }
+
+
+def _normalize_ca_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, Dict[str, Any]]:
     """
     归一化单元格映射。
 
@@ -136,13 +177,12 @@ def _normalize_ca_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, s
     返回:
         统一为字符串键的单元格映射。
     """
-    cells: Dict[str, str] = {str(i): "/" for i in interview_ids}
+    cells: Dict[str, Dict[str, Any]] = {str(i): _normalize_ca_cell(None) for i in interview_ids}
     if isinstance(raw_cells, dict):
         for key, value in raw_cells.items():
             interview_key = str(key)
             if interview_key in cells:
-                text = str(value or "").strip()
-                cells[interview_key] = text or "/"
+                cells[interview_key] = _normalize_ca_cell(value)
     return cells
 
 
@@ -165,21 +205,17 @@ def parse_ca_cells_response(content: str, interview_ids: List[int]) -> Dict[str,
     return payload
 
 
-def _normalize_ca_column_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, str]:
+def _normalize_ca_column_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, Dict[str, Any]]:
     """
     归一化按问题列返回的单元格映射。
     """
-    cells: Dict[str, str] = {str(i): "/" for i in interview_ids}
+    cells: Dict[str, Dict[str, Any]] = {str(i): _normalize_ca_cell(None) for i in interview_ids}
     if isinstance(raw_cells, dict):
         for key, value in raw_cells.items():
             interview_key = str(key)
             if interview_key not in cells:
                 continue
-            if isinstance(value, dict):
-                text = str(value.get("value") or value.get("text") or "").strip()
-            else:
-                text = str(value or "").strip()
-            cells[interview_key] = text or "/"
+            cells[interview_key] = _normalize_ca_cell(value)
     return cells
 
 
@@ -191,6 +227,25 @@ def parse_ca_column_cells_response(content: str, interview_ids: List[int]) -> Di
     if not isinstance(payload, dict):
         payload = {"cells": _normalize_ca_column_cells(None, interview_ids), "llm_raw_output": content}
     payload["cells"] = _normalize_ca_column_cells(payload.get("cells"), interview_ids)
+    payload.setdefault("llm_raw_output", content)
+    return payload
+
+
+def _normalize_ca_diff_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, Dict[str, Any]]:
+    """
+    归一化差异行单元格映射。
+    """
+    return _normalize_ca_column_cells(raw_cells, interview_ids)
+
+
+def parse_ca_diff_row_response(content: str, interview_ids: List[int]) -> Dict[str, Any]:
+    """
+    解析 CA 差异行结果。
+    """
+    payload = _parse_json_response(content)
+    if not isinstance(payload, dict):
+        payload = {"diff_row": _normalize_ca_diff_cells(None, interview_ids), "llm_raw_output": content}
+    payload["diff_row"] = _normalize_ca_diff_cells(payload.get("diff_row"), interview_ids)
     payload.setdefault("llm_raw_output", content)
     return payload
 
@@ -450,6 +505,7 @@ def generate_ca_cells_for_question(
         name = str(item.get("name") or f"访谈 {interview_id}").strip()
         meta = item.get("meta") or {}
         segments = item.get("segments") or []
+        source_text = str(item.get("source_text") or "").strip()
         segment_lines: List[str] = []
         if isinstance(segments, list):
             for seg_index, seg in enumerate(segments, start=1):
@@ -463,7 +519,10 @@ def generate_ca_cells_for_question(
                     continue
                 segment_lines.append(f"[{seg_index}] summary_id={sid} speaker={speaker} score={float(score or 0.0):.4f}\n{text}")
         if not segment_lines:
-            segment_lines.append("（当前没有检索到相关片段）")
+            if source_text:
+                segment_lines.append(source_text)
+            else:
+                segment_lines.append("（当前没有检索到相关片段）")
         meta_text = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else str(meta or "")
         interview_lines.append(
             f"【访谈 {interview_id} | {name}】\n【访谈元数据】\n{meta_text}\n\n【相关片段】\n"
@@ -472,7 +531,7 @@ def generate_ca_cells_for_question(
 
     system_prompt = (
         "你是专业的医疗咨询行业对比分析专家。"
-        "你的任务是针对同一个问卷问题，基于每个访谈对应的检索片段，分别输出各访谈的单元格内容。"
+        "你的任务是针对同一个问卷问题，基于每个访谈对应的检索片段，分别输出各访谈的简短答案和原文引用。"
         "必须输出严格合法的 JSON，不要输出额外说明。"
     )
     user_prompt = (
@@ -485,13 +544,93 @@ def generate_ca_cells_for_question(
         + "\n\n"
         "要求：\n"
         "1. 只基于对应访谈的片段总结，不要跨访谈串用信息。\n"
-        "2. 如果该访谈没有相关内容，请填写 \"/\"。\n"
-        "3. 如果信息明显不足但能看出该访谈有相关讨论，请用最简短的自然语言总结。\n"
-        "4. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
-        "5. 输出结构必须是 {\"cells\": {\"35\": \"...\", \"40\": \"/\"}} 这种映射。\n"
+        "2. 答案要尽量简短，直击关键点，优先 1 句，必要时 2 句，避免冗长解释。\n"
+        "3. 每个访谈必须额外给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本，不要自行改写。\n"
+        "4. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
+        "5. 如果该访谈没有相关内容，答案写 \"/\"，引用数组写空数组。\n"
+        "6. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "7. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_column_cells_response(raw_output, interview_ids)
+    return payload
+
+
+def generate_ca_diff_row_for_interviews(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    questionnaire_title: str,
+    questions: List[Dict[str, Any]],
+    interview_blocks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    为每个访谈生成“问卷未提及但访谈提到”的差异行内容。
+    """
+    if not interview_blocks:
+        return {"diff_row": {}}
+
+    question_lines: List[str] = []
+    for index, question in enumerate(questions, start=1):
+        if not isinstance(question, dict):
+            continue
+        uid = str(question.get("uid") or question.get("question_uid") or question.get("column_id") or "").strip()
+        text = str(question.get("text") or question.get("question_text") or "").strip()
+        if not uid and not text:
+            continue
+        question_lines.append(f"[{index}] uid={uid}\n问题：{text or '（空）'}")
+
+    interview_lines: List[str] = []
+    interview_ids: List[int] = []
+    for item in interview_blocks:
+        interview_id = int(item.get("interview_id") or 0)
+        interview_ids.append(interview_id)
+        name = str(item.get("name") or f"访谈 {interview_id}").strip()
+        meta = item.get("meta") or {}
+        segments = item.get("segments") or []
+        source_text = str(item.get("source_text") or "").strip()
+        segment_lines: List[str] = []
+        if isinstance(segments, list):
+            for seg_index, seg in enumerate(segments, start=1):
+                if not isinstance(seg, dict):
+                    continue
+                sid = seg.get("summary_id", "")
+                speaker = seg.get("speaker", "")
+                text = str(seg.get("text") or "").replace("\n", " ").strip()
+                score = seg.get("score", 0.0)
+                if not text:
+                    continue
+                segment_lines.append(f"[{seg_index}] summary_id={sid} speaker={speaker} score={float(score or 0.0):.4f}\n{text}")
+        if not segment_lines:
+            segment_lines.append(source_text or "（当前没有检索到相关片段）")
+        meta_text = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else str(meta or "")
+        interview_lines.append(
+            f"【访谈 {interview_id} | {name}】\n【访谈元数据】\n{meta_text}\n\n【相关片段】\n"
+            + "\n\n".join(segment_lines)
+        )
+
+    system_prompt = (
+        "你是专业的医疗咨询行业对比分析专家。"
+        "你的任务是从每个访谈的全文中自由抽取问卷未提及但访谈中明确出现的内容，作为 CA 最后一行。"
+        "必须输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        f"【问卷名称】\n{questionnaire_title}\n\n"
+        "下面先给出当前问卷问题列表，后给出每个访谈的全文候选片段。\n\n"
+        f"【当前问卷问题】\n{chr(10).join(question_lines) or '（无）'}\n\n"
+        + "\n\n".join(interview_lines)
+        + "\n\n"
+        "要求：\n"
+        "1. 自由抽取“问卷中没有明确提到、但该访谈确实提到”的内容。\n"
+        "2. 每个访谈输出 1 到 3 条最有信息量的内容，尽量短。\n"
+        "3. 仍然给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本。\n"
+        "4. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
+        "5. 如果没有明显的差异信息，答案写 \"/\"，引用数组写空数组。\n"
+        "6. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "7. 输出结构必须是 {\"diff_row\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    payload = parse_ca_diff_row_response(raw_output, interview_ids)
     return payload
 
 

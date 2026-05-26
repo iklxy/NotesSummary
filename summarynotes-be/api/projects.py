@@ -738,6 +738,8 @@ def _hydrate_ca_payload_from_row(row: dict | None, project_name: str | None = No
     payload["framework_generated_at"] = row.get("framework_generated_at") or payload.get("framework_generated_at")
     payload["final_generated_at"] = row.get("final_generated_at") or payload.get("final_generated_at")
     payload["reviewed_at"] = row.get("reviewed_at") or payload.get("reviewed_at")
+    inferred_schema_version = 2 if payload.get("diff_row") is not None else 1
+    payload["schema_version"] = int(payload.get("schema_version") or inferred_schema_version)
     return payload
 
 
@@ -997,6 +999,10 @@ def get_project_ca_table(
                 )
             except Exception:
                 pass
+
+    if isinstance(ca_json, dict):
+        inferred_schema_version = 2 if ca_json.get("diff_row") is not None else 1
+        ca_json["schema_version"] = int(ca_json.get("schema_version") or inferred_schema_version)
 
     return {
         "success": True,

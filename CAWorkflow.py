@@ -25,8 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
 from Model import ModelClient
-from NotesMarkdownBuilder import build_interview_full_notes_markdown, build_project_full_notes_markdowns
-from MinutesWorkflow import _score_segment, _tokenize_for_search
+from MinutesWorkflow import DEFAULT_SUMMARY_TEXT_NAME, _score_segment, _tokenize_for_search
 from ProjectContext import load_project_context_by_id
 from QuestionTree import expand_questionnaire_document
 from interview_detail_fields import INTERVIEW_DETAIL_FIELD_DEFINITIONS
@@ -36,6 +35,7 @@ from db import fetch_interviews_by_project as fetch_project_interviews
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_CA_JSON_NAME = "ca_table.json"
 DEFAULT_CA_FULL_NOTES_NAME = "full_notes.md"
+CA_SCHEMA_VERSION = 2
 DEFAULT_COLUMN_META_FIELDS = [str(item["key"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS]
 
 
@@ -71,9 +71,29 @@ def _get_interview_data_dir(project_id: int, interview_id: int) -> Path:
     return _get_project_data_dir(project_id) / f"interview_{interview_id}"
 
 
+def _get_interview_summary_full_text_path(project_id: int, interview_id: int) -> Path:
+    """
+    获取访谈全文 trans 的落盘路径。
+    """
+    return _get_interview_data_dir(project_id, interview_id) / DEFAULT_SUMMARY_TEXT_NAME
+
+
+def _load_interview_summary_full_text(project_id: int, interview_id: int) -> str:
+    """
+    读取访谈全文 trans。
+    """
+    path = _get_interview_summary_full_text_path(project_id, interview_id)
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
 def _split_markdown_segments(markdown_text: str) -> List[Dict[str, Any]]:
     """
-    将全文 Notes Markdown 切分为检索片段。
+    将全文 trans / text 切分为检索片段。
 
     参数:
         markdown_text: Markdown 文本。
@@ -166,17 +186,6 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
-def _build_project_full_notes_markdown(
-    project_id: int,
-    interview_ids: List[int],
-) -> List[Dict[str, Any]]:
-    """
-    为项目下多个访谈组装全文 Notes Markdown。
-    """
-    backup_items = build_project_full_notes_markdowns(project_id, interview_ids)
-    return backup_items
-
-
 def _normalize_dimension_items(raw_dimensions: Any) -> List[Dict[str, Any]]:
     """
     规范化 CA 维度结构。
@@ -219,6 +228,27 @@ def _normalize_dimension_items(raw_dimensions: Any) -> List[Dict[str, Any]]:
             }
         )
     return normalized
+
+
+def _load_project_interview_summary_texts(
+    project_id: int,
+    interview_rows: List[Dict[str, Any]],
+) -> tuple[Dict[int, str], List[int]]:
+    """
+    读取当前项目下各访谈的 summary_full_text.txt。
+    """
+    source_texts: Dict[int, str] = {}
+    missing_ids: List[int] = []
+    for row in interview_rows:
+        interview_id = int(row.get("id") or 0)
+        if interview_id <= 0:
+            continue
+        source_text = _load_interview_summary_full_text(project_id, interview_id)
+        if not source_text.strip():
+            missing_ids.append(interview_id)
+            continue
+        source_texts[interview_id] = source_text.strip()
+    return source_texts, missing_ids
 
 
 def _build_ca_cache_path(project_id: int, questionnaire_id: int | None = None) -> Path:
@@ -384,10 +414,11 @@ def _build_ca_framework(
         for row in rows:
             interview_id = str(row["interview_id"])
             cells.setdefault(interview_id, {})
-            cells[interview_id][column_id] = {"value": "", "locked": False, "source": "framework"}
+            cells[interview_id][column_id] = {"value": "", "evidence": [], "locked": False, "source": "framework"}
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
+        "schema_version": CA_SCHEMA_VERSION,
         "project_id": project_id,
         "questionnaire_id": int(questionnaire_row["id"]),
         "project_name": project_name,
@@ -407,6 +438,7 @@ def _build_ca_framework(
         "rows": rows,
         "columns": columns,
         "cells": cells,
+        "diff_row": {},
         "framework_status": "draft",
         "final_status": "pending",
         "status": "draft",
@@ -422,7 +454,7 @@ def _build_ca_framework(
 
 def _collect_interview_blocks_for_question(
     interview_rows: List[Dict[str, Any]],
-    notes_markdowns: Dict[int, str],
+    source_texts: Dict[int, str],
     query_text: str,
 ) -> List[Dict[str, Any]]:
     """
@@ -431,9 +463,9 @@ def _collect_interview_blocks_for_question(
     interview_blocks: List[Dict[str, Any]] = []
     for row in interview_rows:
         interview_id = int(row.get("id") or 0)
-        notes_markdown = str(notes_markdowns.get(interview_id) or "").strip()
+        source_text = str(source_texts.get(interview_id) or "").strip()
         segments = _retrieve_segments_from_markdown(
-            segments=_split_markdown_segments(notes_markdown),
+            segments=_split_markdown_segments(source_text),
             query_text=query_text,
             top_k=6,
         )
@@ -443,7 +475,7 @@ def _collect_interview_blocks_for_question(
                 "name": row.get("name"),
                 "meta": row.get("detail") or {},
                 "segments": segments,
-                "notes_markdown": notes_markdown,
+                "source_text": source_text,
             }
         )
     return interview_blocks
@@ -545,30 +577,40 @@ def generate_ca_table_for_project(
             "questionnaire_id": resolved_questionnaire_id,
         }
 
-    notes_items = build_project_full_notes_markdowns(project_id, [int(row.get("id") or 0) for row in interview_rows])
-    notes_by_id = {
-        int(item["interview_id"]): item
-        for item in notes_items
-        if item.get("interview_id") is not None
-    }
-    interview_notes: List[Dict[str, Any]] = []
+    summary_texts, missing_summary_ids = _load_project_interview_summary_texts(project_id, interview_rows)
+    if missing_summary_ids:
+        log(
+            f"CA generation failed: missing summary_full_text.txt interview_ids={missing_summary_ids}",
+            project_id=project_id,
+        )
+        return {
+            "success": False,
+            "stage": "load_summary_full_text",
+            "detail": {
+                "message": "summary_full_text.txt missing for one or more interviews",
+                "missing_interview_ids": missing_summary_ids,
+            },
+            "project_id": project_id,
+            "questionnaire_id": resolved_questionnaire_id,
+        }
+
+    interview_sources: List[Dict[str, Any]] = []
     for row in interview_rows:
         interview_id = int(row.get("id") or 0)
-        note_item = notes_by_id.get(interview_id, {})
-        notes_markdown = str(note_item.get("notes_markdown") or "").strip()
-        interview_notes.append(
+        source_text = str(summary_texts.get(interview_id) or "").strip()
+        interview_sources.append(
             {
                 "interview_id": interview_id,
-                "name": str(row.get("name") or note_item.get("name") or f"访谈 {interview_id}").strip(),
+                "name": str(row.get("name") or f"访谈 {interview_id}").strip(),
                 "interview_date": row.get("interview_date"),
                 "meta": row.get("detail") if isinstance(row.get("detail"), dict) else {},
-                "notes_markdown": notes_markdown,
-                "segments": _split_markdown_segments(notes_markdown),
+                "source_text": source_text,
+                "segments": _split_markdown_segments(source_text),
             }
         )
     log(
-        f"CA generation interview notes prepared questionnaire_id={resolved_questionnaire_id} "
-        f"interview_count={len(interview_notes)} notes_items={len(notes_items)}",
+        f"CA generation interview source texts prepared questionnaire_id={resolved_questionnaire_id} "
+        f"interview_count={len(interview_sources)} source_text_count={len(summary_texts)}",
         project_id=project_id,
     )
 
@@ -587,6 +629,7 @@ def generate_ca_table_for_project(
             selected_fields=selected_fields,
             project_context=project_context,
         )
+        framework_payload["schema_version"] = CA_SCHEMA_VERSION
         framework_payload["project_context"] = project_context if isinstance(project_context, dict) else None
         framework_payload["questionnaire_id"] = resolved_questionnaire_id
         framework_payload["questionnaire_name"] = questionnaire_name
@@ -604,6 +647,11 @@ def generate_ca_table_for_project(
         framework_payload["reviewed_at"] = existing_reviewed_at
         framework_payload["final_json"] = existing_final_json
         framework_payload["selected_interview_ids"] = [row["interview_id"] for row in framework_payload.get("rows", [])]
+        framework_payload["diff_row"] = {
+            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            for item in interview_sources
+            if int(item.get("interview_id") or 0) > 0
+        }
         log(
             f"CA framework built questionnaire_id={resolved_questionnaire_id} "
             f"row_count={len(framework_payload.get('rows') or [])} "
@@ -710,17 +758,6 @@ def generate_ca_table_for_project(
     final_payload["status"] = "generating"
     final_payload["reviewed_at"] = base_framework.get("reviewed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    notes_items = build_project_full_notes_markdowns(project_id, [row["interview_id"] for row in interview_notes])
-    notes_by_id = {
-        int(item["interview_id"]): item
-        for item in notes_items
-        if item.get("interview_id") is not None
-    }
-    notes_markdown_map = {
-        interview_id: str(item.get("notes_markdown") or "").strip()
-        for interview_id, item in notes_by_id.items()
-    }
-
     columns = [column for column in (final_payload.get("columns") or []) if isinstance(column, dict)]
     rows = [row for row in (final_payload.get("rows") or []) if isinstance(row, dict)]
     cells = final_payload.get("cells") if isinstance(final_payload.get("cells"), dict) else {}
@@ -746,7 +783,7 @@ def generate_ca_table_for_project(
         )
         interview_blocks = _collect_interview_blocks_for_question(
             interview_rows=interview_rows,
-            notes_markdowns=notes_markdown_map,
+            source_texts=summary_texts,
             query_text=question_text,
         )
         try:
@@ -779,10 +816,12 @@ def generate_ca_table_for_project(
             cells.setdefault(interview_key, {})
             current_cell = cells[interview_key].get(column_id)
             current_value = ""
+            current_evidence: List[str] = []
             current_locked = False
             current_source = "framework"
             if isinstance(current_cell, dict):
                 current_value = str(current_cell.get("value") or "").strip()
+                current_evidence = [str(item or "").strip() for item in (current_cell.get("evidence") or []) if str(item or "").strip()]
                 current_locked = bool(current_cell.get("locked"))
                 current_source = str(current_cell.get("source") or "framework")
             elif current_cell is not None:
@@ -793,13 +832,20 @@ def generate_ca_table_for_project(
 
             raw_value = cell_map.get(interview_key)
             if isinstance(raw_value, dict):
-                next_value = str(raw_value.get("value") or raw_value.get("text") or "").strip()
+                next_value = str(raw_value.get("value") or raw_value.get("answer") or raw_value.get("text") or "").strip()
+                next_evidence = [
+                    str(item or "").strip()
+                    for item in (raw_value.get("evidence") or raw_value.get("sources") or raw_value.get("quotes") or [])
+                    if str(item or "").strip()
+                ]
             else:
                 next_value = str(raw_value or "").strip()
+                next_evidence = []
             if not next_value:
                 next_value = "/"
             cells[interview_key][column_id] = {
                 "value": next_value,
+                "evidence": next_evidence[:3] or current_evidence,
                 "locked": bool(current_locked),
                 "source": "llm",
             }
@@ -808,6 +854,29 @@ def generate_ca_table_for_project(
             f"question_uid={question_uid} interview_count={len(selected_interview_ids)}",
             project_id=project_id,
         )
+
+    try:
+        diff_payload = ModelClient.generate_ca_diff_row_for_interviews(
+            project_context=project_context,
+            questionnaire_title=questionnaire_name,
+            questions=[
+                {
+                    "uid": str(column.get("question_uid") or column.get("column_id") or ""),
+                    "order": int(column.get("order") or 0),
+                    "text": str(column.get("question_text") or column.get("display_text") or "").strip(),
+                }
+                for column in columns
+            ],
+            interview_blocks=interview_sources,
+        )
+        diff_row = diff_payload.get("diff_row") or {}
+        if not isinstance(diff_row, dict):
+            diff_row = {}
+    except Exception as exc:
+        log(f"CA diff row failed error={exc}", project_id=project_id)
+        diff_row = {}
+    final_payload["diff_row"] = diff_row
+    final_payload["schema_version"] = CA_SCHEMA_VERSION
 
     final_payload["cells"] = cells
     final_payload["final_json"] = {
