@@ -336,6 +336,52 @@ function normalizeSnapshot(
   return base;
 }
 
+function getSnapshotTimestamp(snapshot: ProjectCaJson | null | undefined, key: "generated_at" | "framework_generated_at" | "final_generated_at"): number {
+  if (!snapshot) {
+    return 0;
+  }
+  const raw = snapshot[key];
+  if (!raw || typeof raw !== "string") {
+    return 0;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getReviewTimestamp(snapshot: ProjectCaJson | null | undefined): number {
+  if (!snapshot?.reviewed_at || typeof snapshot.reviewed_at !== "string") {
+    return 0;
+  }
+  const parsed = Date.parse(snapshot.reviewed_at);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isFinalSnapshotOutdated(
+  frameworkSnapshot: ProjectCaJson | null,
+  finalSnapshot: ProjectCaJson | null,
+): boolean {
+  if (!finalSnapshot) {
+    return true;
+  }
+  const frameworkReviewTs = getReviewTimestamp(frameworkSnapshot);
+  const finalReviewTs = getReviewTimestamp(finalSnapshot);
+  if (frameworkReviewTs > 0) {
+    return finalReviewTs <= 0 || frameworkReviewTs > finalReviewTs;
+  }
+  const finalTs = Math.max(
+    getSnapshotTimestamp(finalSnapshot, "final_generated_at"),
+    getSnapshotTimestamp(finalSnapshot, "generated_at"),
+  );
+  const frameworkTs = Math.max(
+    getSnapshotTimestamp(frameworkSnapshot, "framework_generated_at"),
+    getSnapshotTimestamp(frameworkSnapshot, "generated_at"),
+  );
+  if (frameworkTs <= 0 || finalTs <= 0) {
+    return false;
+  }
+  return frameworkTs > finalTs;
+}
+
 function toCanonicalSnapshot(
   value: ProjectCaJson | null | undefined,
   projectId: number,
@@ -508,7 +554,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
   }, [fieldDefinitions, frameworkSnapshot, selectedMetaFields]);
 
   const activeSnapshot = useMemo(() => {
-    if (finalSnapshot && !finalDirty) {
+    if (finalSnapshot && !finalDirty && !isFinalSnapshotOutdated(frameworkSnapshot, finalSnapshot)) {
       return finalSnapshot;
     }
     return frameworkSnapshot;
@@ -746,6 +792,26 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       if (!resp.success) {
         throw new Error(resp.message || "保存 CA 框架失败");
       }
+      const reviewedAt = new Date().toISOString();
+      setFrameworkSnapshot((prev) =>
+        prev
+          ? normalizeSnapshot(
+              {
+                ...canonicalFramework,
+                reviewed_at: reviewedAt,
+                framework_status: "reviewed",
+              },
+              projectId,
+              projectName || `项目 ${projectId}`,
+              questionnaireId,
+              questionnaireName || `DG ${questionnaireId}`,
+              fieldDefinitions,
+            )
+          : prev,
+      );
+      if (finalSnapshot) {
+        setFinalDirty(true);
+      }
       message.success("CA 框架已保存");
     } catch (e) {
       message.error(e instanceof Error ? e.message : "保存 CA 框架失败");
@@ -816,7 +882,10 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
   };
 
   const handleExport = async () => {
-    const snapshot = finalSnapshot && !finalDirty ? finalSnapshot : frameworkSnapshot;
+    const snapshot =
+      finalSnapshot && !finalDirty && !isFinalSnapshotOutdated(frameworkSnapshot, finalSnapshot)
+        ? finalSnapshot
+        : frameworkSnapshot;
     if (!snapshot) {
       message.error("请先生成或加载 CA");
       return;

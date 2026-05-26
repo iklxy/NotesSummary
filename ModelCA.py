@@ -571,15 +571,30 @@ def generate_ca_diff_row_for_interviews(
     if not interview_blocks:
         return {"diff_row": {}}
 
+    def _has_meaningful_diff_row(diff_row: Dict[str, Any], interview_ids: List[int]) -> bool:
+        for interview_id in interview_ids:
+            payload = _normalize_ca_cell(diff_row.get(str(interview_id)))
+            value = str(payload.get("value") or "").strip()
+            if value and value != "/":
+                return True
+        return False
+
     question_lines: List[str] = []
     for index, question in enumerate(questions, start=1):
         if not isinstance(question, dict):
             continue
         uid = str(question.get("uid") or question.get("question_uid") or question.get("column_id") or "").strip()
         text = str(question.get("text") or question.get("question_text") or "").strip()
-        if not uid and not text:
+        display_text = str(question.get("display_text") or "").strip()
+        title = str(question.get("title") or "").strip()
+        if not uid and not text and not display_text:
             continue
-        question_lines.append(f"[{index}] uid={uid}\n问题：{text or '（空）'}")
+        question_lines.append(
+            f"[{index}] uid={uid}\n"
+            f"标题：{title or '（无）'}\n"
+            f"问卷问题：{text or '（空）'}\n"
+            f"展示文案：{display_text or text or '（空）'}"
+        )
 
     interview_lines: List[str] = []
     interview_ids: List[int] = []
@@ -588,51 +603,67 @@ def generate_ca_diff_row_for_interviews(
         interview_ids.append(interview_id)
         name = str(item.get("name") or f"访谈 {interview_id}").strip()
         meta = item.get("meta") or {}
-        segments = item.get("segments") or []
         source_text = str(item.get("source_text") or "").strip()
-        segment_lines: List[str] = []
-        if isinstance(segments, list):
-            for seg_index, seg in enumerate(segments, start=1):
-                if not isinstance(seg, dict):
-                    continue
-                sid = seg.get("summary_id", "")
-                speaker = seg.get("speaker", "")
-                text = str(seg.get("text") or "").replace("\n", " ").strip()
-                score = seg.get("score", 0.0)
-                if not text:
-                    continue
-                segment_lines.append(f"[{seg_index}] summary_id={sid} speaker={speaker} score={float(score or 0.0):.4f}\n{text}")
-        if not segment_lines:
-            segment_lines.append(source_text or "（当前没有检索到相关片段）")
         meta_text = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else str(meta or "")
         interview_lines.append(
             f"【访谈 {interview_id} | {name}】\n【访谈元数据】\n{meta_text}\n\n【相关片段】\n"
-            + "\n\n".join(segment_lines)
+            + (source_text or "（当前没有全文 trans）")
         )
 
     system_prompt = (
         "你是专业的医疗咨询行业对比分析专家。"
-        "你的任务是从每个访谈的全文中自由抽取问卷未提及但访谈中明确出现的内容，作为 CA 最后一行。"
+        "你的任务是严格对比每个访谈的全文 trans 与该 CA 所用的 DG 问卷。"
+        "只抽取“全文中明确出现、但问卷中没有明确提及”的内容，作为 CA 最后一行。"
         "必须输出严格合法的 JSON，不要输出额外说明。"
     )
     user_prompt = (
         f"{project_context_block}"
         f"【问卷名称】\n{questionnaire_title}\n\n"
-        "下面先给出当前问卷问题列表，后给出每个访谈的全文候选片段。\n\n"
+        "下面先给出当前问卷问题列表，再给出每个访谈的全文 trans。\n"
+        "你的任务不是总结全文，而是找出全文里出现、但问卷没有问到的差异内容。\n\n"
         f"【当前问卷问题】\n{chr(10).join(question_lines) or '（无）'}\n\n"
         + "\n\n".join(interview_lines)
         + "\n\n"
         "要求：\n"
-        "1. 自由抽取“问卷中没有明确提到、但该访谈确实提到”的内容。\n"
-        "2. 每个访谈输出 1 到 3 条最有信息量的内容，尽量短。\n"
-        "3. 仍然给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本。\n"
-        "4. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
-        "5. 如果没有明显的差异信息，答案写 \"/\"，引用数组写空数组。\n"
-        "6. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
-        "7. 输出结构必须是 {\"diff_row\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
+        "1. 先判断全文 trans 中有哪些内容没有被当前问卷覆盖。\n"
+        "2. 只输出真正的差异内容，不要把问卷里已经明确出现过的内容重复写进来。\n"
+        "3. 每个访谈输出 1 到 3 条最有信息量的差异内容，尽量短，但要具体。\n"
+        "4. 仍然给出 2 到 3 条原文引用，引用必须直接来自全文 trans，不要改写。\n"
+        "5. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
+        "6. 如果该访谈全文里确实没有任何问卷未提及的内容，答案写 \"/\"，引用数组写空数组。\n"
+        "7. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "8. 输出结构必须是 {\"diff_row\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_diff_row_response(raw_output, interview_ids)
+    if not _has_meaningful_diff_row(payload.get("diff_row") or {}, interview_ids):
+        retry_system_prompt = (
+            "你是专业的医疗咨询行业对比分析专家。"
+            "上一轮输出过于保守，很多访谈被错误地写成了空值。"
+            "请重新严格对比每个访谈全文 trans 与该 CA 所用的 DG 问卷，主动识别全文中问卷没有覆盖但明确出现的具体信息。"
+            "必须输出严格合法的 JSON，不要输出额外说明。"
+        )
+        retry_user_prompt = (
+            f"{project_context_block}"
+            f"【问卷名称】\n{questionnaire_title}\n\n"
+            "请重新做一次“全文 trans vs 问卷”的差异比对。\n"
+            "判断标准：只要全文里出现了问卷没有明确提到的具体诊疗细节、用药细节、流程细节、患者特征、比例、偏好、障碍、经验总结，就可以作为差异内容输出。\n"
+            "不要因为内容和问卷主题接近就忽略它；只要问卷没有明确问到，就算差异内容。\n\n"
+            f"【当前问卷问题】\n{chr(10).join(question_lines) or '（无）'}\n\n"
+            + "\n\n".join(interview_lines)
+            + "\n\n"
+            "要求：\n"
+            "1. 每个访谈都重新独立判断，不要跨访谈串用。\n"
+            "2. 每个访谈输出 1 到 3 条差异内容，尽量具体。\n"
+            "3. 原文引用必须来自全文 trans。\n"
+            "4. 如果确实没有差异内容，才输出 \"/\"。\n"
+            "5. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+            "6. 输出结构必须是 {\"diff_row\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
+        )
+        retry_raw_output = generate_fn(retry_system_prompt, retry_user_prompt)
+        retry_payload = parse_ca_diff_row_response(retry_raw_output, interview_ids)
+        if _has_meaningful_diff_row(retry_payload.get("diff_row") or {}, interview_ids):
+            payload = retry_payload
     return payload
 
 

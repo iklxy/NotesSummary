@@ -876,7 +876,9 @@ def generate_ca_table_for_project(
                 {
                     "uid": str(column.get("question_uid") or column.get("column_id") or ""),
                     "order": int(column.get("order") or 0),
-                    "text": str(column.get("question_text") or column.get("display_text") or "").strip(),
+                    "text": str(column.get("question_text") or "").strip(),
+                    "display_text": str(column.get("display_text") or "").strip(),
+                    "title": str(column.get("title") or "").strip(),
                 }
                 for column in columns
             ],
