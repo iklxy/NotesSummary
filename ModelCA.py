@@ -151,11 +151,25 @@ def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
         evidence = _normalize_ca_evidence(raw_cell.get("evidence") or raw_cell.get("sources") or raw_cell.get("quotes"))
         locked = bool(raw_cell.get("locked"))
         source = str(raw_cell.get("source") or "framework")
+        numeric_value_raw = raw_cell.get("numeric_value")
+        if numeric_value_raw is None:
+            numeric_value_raw = raw_cell.get("numericValue")
+        numeric_value: Optional[float] = None
+        if isinstance(numeric_value_raw, (int, float)):
+            numeric_value = float(numeric_value_raw)
+        elif isinstance(numeric_value_raw, str):
+            numeric_text = numeric_value_raw.strip()
+            if numeric_text:
+                try:
+                    numeric_value = float(numeric_text)
+                except Exception:
+                    numeric_value = None
         return {
             "value": answer or "/",
             "evidence": evidence,
             "locked": locked,
             "source": source,
+            "numeric_value": numeric_value,
         }
     text = str(raw_cell or "").strip()
     return {
@@ -163,6 +177,7 @@ def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
         "evidence": [],
         "locked": False,
         "source": "framework",
+        "numeric_value": None,
     }
 
 
@@ -492,6 +507,7 @@ def generate_ca_cells_for_question(
     question_order: int,
     question_text: str,
     interview_blocks: List[Dict[str, Any]],
+    question_type: str = "qualitative",
 ) -> Dict[str, Any]:
     """
     为某一个问卷叶子问题批量生成各访谈单元格内容。
@@ -536,22 +552,28 @@ def generate_ca_cells_for_question(
         "你的任务是针对同一个问卷问题，基于每个访谈对应的检索片段，分别输出各访谈的简短答案和原文引用。"
         "必须输出严格合法的 JSON，不要输出额外说明。"
     )
+    normalized_question_type = str(question_type or "qualitative").strip().lower()
+    if normalized_question_type not in {"qualitative", "quantitative"}:
+        normalized_question_type = "qualitative"
     user_prompt = (
         f"{project_context_block}"
         f"【问卷名称】\n{questionnaire_title}\n\n"
         f"【问题编号】\n{question_order}\n\n"
         f"【问题 ID】\n{question_uid}\n\n"
+        f"【问题类型】\n{normalized_question_type}\n\n"
         f"【问题正文】\n{question_text}\n\n"
         + "\n\n".join(interview_lines)
         + "\n\n"
         "要求：\n"
         "1. 只基于对应访谈的片段总结，不要跨访谈串用信息。\n"
         "2. 答案要尽量简短，直击关键点，优先 1 句，必要时 2 句，避免冗长解释。\n"
-        "3. 每个访谈必须额外给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本，不要自行改写。\n"
-        "4. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
-        "5. 如果该访谈没有相关内容，答案写 \"/\"，引用数组写空数组。\n"
-        "6. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
-        "7. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"]}}} 这种映射。\n"
+        "3. 如果问题类型是 quantitative，请优先输出明确数字，并尽量提供 numeric_value；如果无法确认数字，numeric_value 设为 null。\n"
+        "4. 如果问题类型是 qualitative，请用 bullet points 风格的短句总结，不要写成长段落。\n"
+        "5. 每个访谈必须额外给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本，不要自行改写。\n"
+        "6. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
+        "7. 如果该访谈没有相关内容，答案写 \"/\"，引用数组写空数组，numeric_value 设为 null。\n"
+        "8. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "9. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"], \"numeric_value\": 12.5}}} 这种映射。\n"
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_column_cells_response(raw_output, interview_ids)

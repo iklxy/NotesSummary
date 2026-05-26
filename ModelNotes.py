@@ -1537,6 +1537,80 @@ def parse_ca_dimensions_response(
     return result
 
 
+def _normalize_ca_note_rows(raw_rows: Any, default_group_title: str) -> List[Dict[str, Any]]:
+    """
+    归一化 Notes 驱动的 CA 行列表。
+    """
+    if not isinstance(raw_rows, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw_rows, start=1):
+        if not isinstance(item, dict):
+            continue
+        row_title = str(item.get("title") or item.get("question_text") or item.get("display_text") or "").strip()
+        row_summary = str(item.get("summary") or item.get("description") or "").strip()
+        row_type = str(item.get("question_type") or item.get("type") or "qualitative").strip().lower()
+        if row_type not in {"qualitative", "quantitative"}:
+            row_type = "qualitative"
+        if not row_title and not row_summary:
+            continue
+        normalized.append(
+            {
+                "order": int(item.get("order") or index),
+                "title": row_title or row_summary,
+                "display_text": str(item.get("display_text") or row_title or row_summary).strip(),
+                "summary": row_summary,
+                "question_type": row_type,
+                "group": str(item.get("group") or default_group_title).strip() or default_group_title,
+            }
+        )
+    return normalized
+
+
+def _normalize_ca_note_groups(raw_groups: Any) -> List[Dict[str, Any]]:
+    """
+    归一化 Notes 驱动的 CA 主题分组。
+    """
+    if not isinstance(raw_groups, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw_groups, start=1):
+        if not isinstance(item, dict):
+            continue
+        group_title = str(item.get("title") or item.get("name") or item.get("group") or "").strip()
+        group_summary = str(item.get("summary") or item.get("description") or "").strip()
+        raw_rows = item.get("rows") or item.get("questions") or item.get("sub_points") or []
+        rows = _normalize_ca_note_rows(raw_rows, group_title or f"主题分组 {index}")
+        if not group_title and not rows:
+            continue
+        normalized.append(
+            {
+                "order": int(item.get("order") or index),
+                "title": group_title or f"主题分组 {index}",
+                "summary": group_summary,
+                "rows": rows,
+            }
+        )
+    return normalized
+
+
+def parse_ca_notes_framework_response(
+    generate_fn: Callable[[str, str], str],
+    content: str,
+) -> Dict[str, Any]:
+    """
+    解析 Notes 驱动的 CA 框架结果。
+    """
+    result = _parse_json_with_repair(generate_fn, content)
+    if not isinstance(result, dict):
+        result = {"groups": [], "llm_raw_output": content}
+    result["groups"] = _normalize_ca_note_groups(result.get("groups"))
+    result.setdefault("llm_raw_output", content)
+    return result
+
+
 def _normalize_ca_cells(raw_cells: Any, interview_ids: List[int]) -> Dict[str, str]:
     """
     归一化 CA 单元格映射。
@@ -1640,6 +1714,90 @@ def generate_ca_dimensions(
         retry_raw_output = generate_fn(retry_system_prompt, retry_user_prompt)
         retry_payload = parse_ca_dimensions_response(generate_fn, retry_raw_output)
         if retry_payload.get("dimensions"):
+            payload = retry_payload
+            payload["retry_used"] = True
+            payload["retry_raw_output"] = retry_raw_output
+    return payload
+
+
+def generate_ca_notes_framework(
+    generate_fn: Callable[[str, str], str],
+    project_context_block: str,
+    interviews_notes: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    基于多份全文 Notes Markdown 生成主题分组化的 CA 框架。
+    """
+    notes_blocks: List[str] = []
+    for item in interviews_notes:
+        interview_id = item.get("interview_id")
+        name = str(item.get("name") or f"访谈 {interview_id}").strip()
+        notes_markdown = str(item.get("notes_markdown") or "").strip()
+        if not notes_markdown:
+            continue
+        notes_blocks.append(f"【访谈 {interview_id} | {name}】\n{notes_markdown}")
+    notes_block = "\n\n".join(notes_blocks)
+
+    system_prompt = (
+        "你是专业的医疗咨询行业对比分析专家。"
+        "你的任务是根据多份访谈全文 Notes Markdown，生成一张适合 CA 矩阵的主题分组化框架。"
+        "必须输出严格合法的 JSON，不要输出额外说明。"
+    )
+    user_prompt = (
+        f"{project_context_block}"
+        "请基于以下多份访谈全文 Notes Markdown，生成用于 CA 表格的主题分组与细粒度分析行。\n\n"
+        f"{notes_block}\n\n"
+        "要求：\n"
+        "1. 表头必须基于全文 Notes 自动拆分出来，不要直接沿用问卷原题。\n"
+        "2. 每个主题分组下的行要尽量细，一行只对应一个可独立回答的问题点。\n"
+        "3. 定性问题用可快速扫读的陈述式标题，避免冗长问句。\n"
+        "4. 定量问题要尽量拆成单一指标的行，避免把多个指标混在同一行。\n"
+        "5. 主题分组数量控制在 5 到 12 个，每组 2 到 5 行。\n"
+        "6. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "7. 所有 summary 字段必须是自然语言正文，不要输出 JSON 对象或字段名。\n"
+        "8. 每一行都要显式标注 question_type，取值只能是 qualitative 或 quantitative。\n"
+        "9. 如果某个主题不适合用于跨访谈对比，不要输出。\n"
+        "JSON 结构参考如下：\n"
+        "{\n"
+        '  "groups": [\n'
+        "    {\n"
+        '      "order": 1,\n'
+        '      "title": "主题分组标题",\n'
+        '      "summary": "主题分组概述",\n'
+        '      "rows": [\n'
+        "        {\n"
+        '          "order": 1,\n'
+        '          "title": "行标题",\n'
+        '          "display_text": "展示文案",\n'
+        '          "summary": "行说明",\n'
+        '          "question_type": "qualitative"\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    )
+    raw_output = generate_fn(system_prompt, user_prompt)
+    payload = parse_ca_notes_framework_response(generate_fn, raw_output)
+    if not payload.get("groups"):
+        retry_system_prompt = (
+            system_prompt
+            + "上一轮输出可能过长或结构不完整。请重新生成更精简、更稳定的版本。"
+        )
+        retry_user_prompt = (
+            f"{project_context_block}"
+            "请重新生成一版更稳定的 CA 主题分组框架。\n"
+            "要求：\n"
+            "1. 只能输出 JSON。\n"
+            "2. 主题分组数量控制在 4 到 8 个。\n"
+            "3. 每组 2 到 4 行。\n"
+            "4. 每一行必须是可以单独回答的问题点。\n"
+            "5. 定量行优先拆成单一指标。\n\n"
+            f"{notes_block}\n"
+        )
+        retry_raw_output = generate_fn(retry_system_prompt, retry_user_prompt)
+        retry_payload = parse_ca_notes_framework_response(generate_fn, retry_raw_output)
+        if retry_payload.get("groups"):
             payload = retry_payload
             payload["retry_used"] = True
             payload["retry_raw_output"] = retry_raw_output

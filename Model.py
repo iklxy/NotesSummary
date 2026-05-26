@@ -9,6 +9,7 @@ from ModelNotes import (
     escape_inner_quotes_in_notes_json,
     generate_ca_cells_for_sub_point,
     generate_ca_dimensions,
+    generate_ca_notes_framework,
     generate_kbq_dimensions,
     generate_kbq_notes,
     generate_minutes_outline_from_transcript,
@@ -708,6 +709,26 @@ class ModelClient:
         )
 
     @classmethod
+    def generate_ca_notes_framework(
+        cls,
+        project_context: Optional[str] = None,
+        interviews_notes: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        基于多份全文 Notes 生成主题分组化的 CA 框架。
+        """
+        return generate_ca_notes_framework(
+            generate_fn=lambda system_prompt, user_prompt: cls._generate_with_kind(
+                "notes",
+                system_prompt,
+                user_prompt,
+                max_tokens=130000,
+            ),
+            project_context_block=cls._build_project_context_block(project_context),
+            interviews_notes=interviews_notes or [],
+        )
+
+    @classmethod
     def generate_ca_cells_for_sub_point(
         cls,
         project_context: Optional[str] = None,
@@ -755,6 +776,7 @@ class ModelClient:
         question_order: int = 0,
         question_text: str = "",
         interview_blocks: Optional[List[Dict[str, Any]]] = None,
+        question_type: str = "qualitative",
     ) -> Dict[str, Any]:
         """
         基于某一个问卷问题为所有访谈生成单元格内容。
@@ -772,6 +794,7 @@ class ModelClient:
             question_order=question_order,
             question_text=question_text,
             interview_blocks=interview_blocks or [],
+            question_type=question_type,
         )
 
     @classmethod

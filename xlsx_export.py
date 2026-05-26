@@ -52,11 +52,25 @@ def _normalize_ca_cell(value: Any) -> Dict[str, Any]:
             answer = value.get("answer")
         if answer is None:
             answer = value.get("text")
+        numeric_value_raw = value.get("numeric_value")
+        if numeric_value_raw is None:
+            numeric_value_raw = value.get("numericValue")
+        numeric_value = None
+        if isinstance(numeric_value_raw, (int, float)):
+            numeric_value = float(numeric_value_raw)
+        elif isinstance(numeric_value_raw, str):
+            text = numeric_value_raw.strip()
+            if text:
+                try:
+                    numeric_value = float(text)
+                except Exception:
+                    numeric_value = None
         return {
             "value": _clean_text(answer).strip() or "/",
             "evidence": evidence[:3],
+            "numeric_value": numeric_value,
         }
-    return {"value": _clean_text(value).strip() or "/", "evidence": []}
+    return {"value": _clean_text(value).strip() or "/", "evidence": [], "numeric_value": None}
 
 
 def _build_ca_sheet_rows_v1(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
@@ -280,7 +294,7 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
         detail_specs.append((label, _extract_meta_value))
 
     for detail_label, extractor in detail_specs:
-        row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}]
+        row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}, {"value": "", "style": 1}]
         for column in interview_columns:
             row_values.append({"value": extractor(column), "style": 1})
             row_values.append({"value": "", "style": 1})
@@ -336,18 +350,345 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
     return rows
 
 
+def _format_number(value: float) -> str:
+    """
+    格式化统计数值。
+    """
+    if not isinstance(value, (int, float)) or not value == value:
+        return "/"
+    rounded = round(float(value), 2)
+    if float(rounded).is_integer():
+        return str(int(round(rounded)))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
+
+
+def _extract_grouped_rows_v3(ca_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    将新版 CA payload 中的列按主题分组展开。
+    """
+    columns = ca_payload.get("columns") or []
+    if not isinstance(columns, list):
+        columns = []
+    explicit_groups = ca_payload.get("groups") or []
+    grouped_rows: List[Dict[str, Any]] = []
+
+    if isinstance(explicit_groups, list) and explicit_groups:
+        sorted_groups = [
+            item for item in explicit_groups if isinstance(item, dict)
+        ]
+        sorted_groups.sort(key=lambda item: int(item.get("order") or 0))
+        consumed: set[str] = set()
+        for group_index, group in enumerate(sorted_groups, start=1):
+            label = str(group.get("title") or f"主题分组 {group_index}").strip() or f"主题分组 {group_index}"
+            summary = str(group.get("summary") or "").strip()
+            row_uids = [
+                str(uid or "").strip()
+                for uid in (group.get("row_uids") or [])
+                if str(uid or "").strip()
+            ]
+            rows_in_group: List[Dict[str, Any]] = []
+            if row_uids:
+                row_uid_set = set(row_uids)
+                for column in columns:
+                    if not isinstance(column, dict):
+                        continue
+                    question_uid = str(column.get("question_uid") or column.get("column_id") or "").strip()
+                    if question_uid in row_uid_set:
+                        rows_in_group.append(column)
+                        consumed.add(question_uid)
+            else:
+                rows_in_group = [column for column in columns if isinstance(column, dict) and str(column.get("group") or "").strip() == label]
+                for column in rows_in_group:
+                    question_uid = str(column.get("question_uid") or column.get("column_id") or "").strip()
+                    if question_uid:
+                        consumed.add(question_uid)
+            if rows_in_group:
+                grouped_rows.append(
+                    {
+                        "group_label": label,
+                        "group_summary": summary,
+                        "rows": rows_in_group,
+                    }
+                )
+        leftovers = [
+            column
+            for column in columns
+            if isinstance(column, dict)
+            and str(column.get("question_uid") or column.get("column_id") or "").strip() not in consumed
+        ]
+        if leftovers:
+            grouped_rows.append(
+                {
+                    "group_label": str(leftovers[0].get("group") or "未分组").strip() or "未分组",
+                    "group_summary": str(leftovers[0].get("group_summary") or "").strip(),
+                    "rows": leftovers,
+                }
+            )
+        return grouped_rows
+
+    current_label = None
+    current_rows: List[Dict[str, Any]] = []
+    current_summary = ""
+    for column in columns:
+        if not isinstance(column, dict):
+            continue
+        label = str(column.get("group") or "未分组").strip() or "未分组"
+        if current_label is None or current_label != label:
+            if current_rows:
+                grouped_rows.append(
+                    {
+                        "group_label": current_label or "未分组",
+                        "group_summary": current_summary,
+                        "rows": current_rows,
+                    }
+                )
+            current_label = label
+            current_rows = [column]
+            current_summary = str(column.get("group_summary") or "").strip()
+            continue
+        current_rows.append(column)
+    if current_rows:
+        grouped_rows.append(
+            {
+                "group_label": current_label or "未分组",
+                "group_summary": current_summary,
+                "rows": current_rows,
+            }
+        )
+    return grouped_rows
+
+
+def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
+    """
+    将 Notes 驱动的 CA JSON 转换为 Excel 行数据。
+    """
+    project_id = ca_payload.get("project_id")
+    project_name = str(ca_payload.get("project_name") or "").strip()
+    generated_at = str(ca_payload.get("generated_at") or "").strip()
+    selected_interview_ids = ca_payload.get("selected_interview_ids") or []
+    column_meta_fields = ca_payload.get("column_meta_fields") or []
+    column_meta_field_labels = ca_payload.get("column_meta_field_labels") or {}
+    if not isinstance(column_meta_field_labels, dict):
+        column_meta_field_labels = {}
+    interviews = ca_payload.get("interviews") or []
+    diff_row = ca_payload.get("diff_row") or {}
+    grouped_rows = _extract_grouped_rows_v3(ca_payload)
+
+    interview_columns: List[Dict[str, Any]] = []
+    interview_id_set = {str(item) for item in selected_interview_ids if item is not None}
+    for item in interviews:
+        if not isinstance(item, dict):
+            continue
+        interview_id = str(item.get("interview_id") or "").strip()
+        name = str(item.get("name") or f"访谈 {interview_id}").strip()
+        meta = item.get("meta") or {}
+        if not interview_id_set or interview_id in interview_id_set:
+            interview_columns.append(
+                {
+                    "interview_id": interview_id,
+                    "name": name,
+                    "meta": meta,
+                }
+            )
+
+    rows: List[List[Dict[str, Any]]] = []
+    title_text = f"CA Capture Sheet - {project_name or project_id}"
+    rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    rows.append(
+        [
+            {"value": f"项目：{project_name or project_id}", "style": 1},
+            {"value": f"生成时间：{generated_at or ''}", "style": 1},
+        ]
+        + [{"value": "", "style": 1}] * max(0, 2 + len(interview_columns) * 2 - 2)
+    )
+    rows.append(
+        [
+            {"value": f"选择访谈：{len(interview_columns)}", "style": 1},
+            {
+                "value": "列字段："
+                + (
+                    ", ".join(
+                        str(column_meta_field_labels.get(item) or INTERVIEW_DETAIL_FIELD_LABELS.get(item) or item)
+                        for item in column_meta_fields
+                    )
+                    if column_meta_fields
+                    else "无"
+                ),
+                "style": 1,
+            },
+        ]
+        + [{"value": "", "style": 1}] * max(0, 2 + len(interview_columns) * 2 - 2)
+    )
+    rows.append([])
+
+    rows.append([{"value": "访谈细节", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+
+    detail_specs = [
+        ("访谈ID", lambda interview: str(interview.get("interview_id") or "").strip() or "/"),
+        ("访谈名称", lambda interview: str(interview.get("name") or "").strip() or "/"),
+        (
+            "访谈日期",
+            lambda interview: str(interview.get("interview_date") or "").split("T")[0] if interview.get("interview_date") else "-",
+        ),
+    ]
+    for key in column_meta_fields:
+        label = str(column_meta_field_labels.get(key) or INTERVIEW_DETAIL_FIELD_LABELS.get(key) or key)
+
+        def _extract_meta_value(interview: Dict[str, Any], meta_key: str = key) -> str:
+            meta = interview.get("meta") or {}
+            if not isinstance(meta, dict):
+                return "/"
+            value = meta.get(meta_key)
+            return _clean_text(value).strip() or "/"
+
+        detail_specs.append((label, _extract_meta_value))
+
+    for detail_label, extractor in detail_specs:
+        row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}]
+        for column in interview_columns:
+            row_values.append({"value": extractor(column), "style": 1})
+            row_values.append({"value": "", "style": 1})
+        rows.append(row_values)
+
+    rows.append([])
+    rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+
+    for group in grouped_rows:
+        group_label = str(group.get("group_label") or "未分组").strip() or "未分组"
+        group_summary = str(group.get("group_summary") or "").strip()
+        question_rows = group.get("rows") or []
+        rows.append(
+            [
+                {"value": f"主题分组：{group_label}", "style": 3},
+                {"value": group_summary or f"{len(question_rows)} 行", "style": 1},
+            ]
+            + [{"value": "", "style": 3}] * max(0, 2 + len(interview_columns) * 2 - 2)
+        )
+        for item in question_rows:
+            if not isinstance(item, dict):
+                continue
+            if item.get("hidden"):
+                continue
+            question_uid = str(item.get("question_uid") or item.get("column_id") or "").strip()
+            question_order = item.get("order")
+            question_text = str(item.get("display_text") or item.get("question_text") or "").strip()
+            question_type = str(item.get("question_type") or "qualitative").strip().lower()
+            if not question_uid and not question_text:
+                continue
+            row_cells: List[Dict[str, Any]] = [
+                {
+                    "value": f"{question_order}. {question_text}" if question_order is not None else question_text,
+                    "style": 1,
+                },
+            ]
+            numeric_values: List[float] = []
+            valid_count = 0
+            for interview in interview_columns:
+                interview_id = str(interview.get("interview_id") or "").strip()
+                answer_text = "/"
+                evidence_text = ""
+                if interview_id and question_uid and isinstance(ca_payload.get("cells"), dict):
+                    row_cells_by_interview = ca_payload.get("cells").get(interview_id)
+                    if isinstance(row_cells_by_interview, dict):
+                        payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
+                        answer_text = payload["value"]
+                        evidence_text = "\n".join(payload.get("evidence") or [])
+                        value_text = str(payload.get("value") or "").strip()
+                        if value_text and value_text != "/":
+                            valid_count += 1
+                        numeric_value = payload.get("numeric_value")
+                        if isinstance(numeric_value, (int, float)):
+                            numeric_values.append(float(numeric_value))
+                        else:
+                            parsed = _normalize_ca_cell({"value": value_text}).get("numeric_value")
+                            if isinstance(parsed, (int, float)):
+                                numeric_values.append(float(parsed))
+                row_cells.append({"value": answer_text, "style": 1})
+                row_cells.append({"value": evidence_text, "style": 1})
+            if question_type == "quantitative" and numeric_values:
+                mean_value = sum(numeric_values) / len(numeric_values)
+                min_value = min(numeric_values)
+                max_value = max(numeric_values)
+                stats_value = f"有效 {valid_count} / 均值 {_format_number(mean_value)} / 范围 {_format_number(min_value)}-{_format_number(max_value)}"
+            else:
+                stats_value = f"有效 {valid_count}"
+            row_cells.insert(1, {"value": f"{stats_value}｜{'定量' if question_type == 'quantitative' else '定性'}", "style": 1})
+            rows.append(row_cells)
+
+    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    diff_valid_count = 0
+    diff_numeric_values: List[float] = []
+    diff_cells: List[Dict[str, Any]] = [
+        {"value": "问卷未提及但访谈中出现的内容", "style": 1},
+    ]
+    for interview in interview_columns:
+        interview_id = str(interview.get("interview_id") or "").strip()
+        answer_text = "/"
+        evidence_text = ""
+        if interview_id and isinstance(diff_row, dict):
+            payload = _normalize_ca_cell(diff_row.get(interview_id))
+            answer_text = payload["value"]
+            evidence_text = "\n".join(payload.get("evidence") or [])
+            if answer_text and answer_text != "/":
+                diff_valid_count += 1
+            numeric_value = payload.get("numeric_value")
+            if isinstance(numeric_value, (int, float)):
+                diff_numeric_values.append(float(numeric_value))
+        diff_cells.append({"value": answer_text, "style": 1})
+        diff_cells.append({"value": evidence_text, "style": 1})
+    if diff_numeric_values:
+        diff_stats = f"有效 {diff_valid_count} / 均值 {_format_number(sum(diff_numeric_values) / len(diff_numeric_values))} / 范围 {_format_number(min(diff_numeric_values))}-{_format_number(max(diff_numeric_values))}"
+    else:
+        diff_stats = f"有效 {diff_valid_count}"
+    diff_cells.insert(1, {"value": diff_stats, "style": 1})
+    rows.append(diff_cells)
+
+    return rows
+
+
 def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
     """
     将 CA JSON 生成可下载的 Excel 二进制。
     """
     schema_version = int(ca_payload.get("schema_version") or 1)
-    rows = _build_ca_sheet_rows_v2(ca_payload) if schema_version >= 2 or ca_payload.get("diff_row") is not None else _build_ca_sheet_rows_v1(ca_payload)
+    has_notes_layout = bool(ca_payload.get("groups"))
+    if not has_notes_layout and isinstance(ca_payload.get("columns"), list):
+        has_notes_layout = any(
+            isinstance(column, dict)
+            and (
+                column.get("group")
+                or column.get("group_id")
+                or column.get("group_order")
+                or column.get("group_summary")
+                or column.get("question_type")
+            )
+            for column in ca_payload.get("columns")
+        )
+    if schema_version >= 3 or has_notes_layout:
+        rows = _build_ca_sheet_rows_v3(ca_payload)
+    elif schema_version >= 2 or ca_payload.get("diff_row") is not None:
+        rows = _build_ca_sheet_rows_v2(ca_payload)
+    else:
+        rows = _build_ca_sheet_rows_v1(ca_payload)
     total_cols = max(2, max((len(row) for row in rows), default=2))
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "CA表格"
     sheet.sheet_view.showGridLines = False
-    sheet.freeze_panes = "B6"
+    has_notes_layout = bool(ca_payload.get("groups"))
+    if not has_notes_layout and isinstance(ca_payload.get("columns"), list):
+        has_notes_layout = any(
+            isinstance(column, dict)
+            and (
+                column.get("group")
+                or column.get("group_id")
+                or column.get("group_order")
+                or column.get("group_summary")
+                or column.get("question_type")
+            )
+            for column in ca_payload.get("columns")
+        )
+    sheet.freeze_panes = "C6" if (schema_version >= 3 or has_notes_layout) else "B6"
     sheet.sheet_view.zoomScale = 90
 
     thin_side = Side(style="thin", color="D9D9D9")
@@ -357,6 +698,13 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
         letter = get_column_letter(col_index)
         if col_index == 1:
             sheet.column_dimensions[letter].width = 42
+        elif schema_version >= 3 or has_notes_layout:
+            if col_index == 2:
+                sheet.column_dimensions[letter].width = 28
+            elif (col_index - 3) % 2 == 0:
+                sheet.column_dimensions[letter].width = 36
+            else:
+                sheet.column_dimensions[letter].width = 48
         elif schema_version >= 2:
             sheet.column_dimensions[letter].width = 34 if (col_index - 2) % 2 == 0 else 46
         else:
@@ -369,6 +717,8 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
             current_section = "detail"
         elif first_value == "问题":
             current_section = "question"
+        elif first_value.startswith("主题分组："):
+            current_section = "group"
         elif first_value == "差异化内容":
             current_section = "diff"
         for col_index in range(1, total_cols + 1):
@@ -394,7 +744,9 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
             sheet.row_dimensions[row_index].height = 32
         elif first_value in {"访谈细节", "问题"}:
             sheet.row_dimensions[row_index].height = 50
-        elif current_section == "question":
+        elif first_value.startswith("主题分组："):
+            sheet.row_dimensions[row_index].height = 50
+        elif current_section in {"question", "group"}:
             sheet.row_dimensions[row_index].height = 120
         elif current_section == "diff":
             sheet.row_dimensions[row_index].height = 120

@@ -738,9 +738,30 @@ def _hydrate_ca_payload_from_row(row: dict | None, project_name: str | None = No
     payload["framework_generated_at"] = row.get("framework_generated_at") or payload.get("framework_generated_at")
     payload["final_generated_at"] = row.get("final_generated_at") or payload.get("final_generated_at")
     payload["reviewed_at"] = row.get("reviewed_at") or payload.get("reviewed_at")
-    inferred_schema_version = 2 if payload.get("diff_row") is not None else 1
-    payload["schema_version"] = int(payload.get("schema_version") or inferred_schema_version)
+    payload["schema_version"] = int(payload.get("schema_version") or _infer_ca_schema_version(payload))
     return payload
+
+
+def _infer_ca_schema_version(payload: Dict[str, Any]) -> int:
+    """
+    根据 CA payload 结构推断 schema 版本。
+    """
+    if not isinstance(payload, dict):
+        return 1
+    columns = payload.get("columns") if isinstance(payload.get("columns"), list) else []
+    has_notes_framework = bool(payload.get("groups"))
+    if isinstance(columns, list):
+        for column in columns:
+            if not isinstance(column, dict):
+                continue
+            if column.get("group") or column.get("group_id") or column.get("group_order") or column.get("question_type") or column.get("group_summary"):
+                has_notes_framework = True
+                break
+    if has_notes_framework:
+        return 3
+    if payload.get("diff_row") is not None:
+        return 2
+    return 1
 
 
 def _build_download_content_disposition(filename: str) -> str:
@@ -1001,8 +1022,7 @@ def get_project_ca_table(
                 pass
 
     if isinstance(ca_json, dict):
-        inferred_schema_version = 2 if ca_json.get("diff_row") is not None else 1
-        ca_json["schema_version"] = int(ca_json.get("schema_version") or inferred_schema_version)
+        ca_json["schema_version"] = int(ca_json.get("schema_version") or _infer_ca_schema_version(ca_json))
 
     return {
         "success": True,
@@ -1117,8 +1137,8 @@ def save_project_ca_framework(
         raise HTTPException(status_code=400, detail="framework_json is required")
     existing_row = fetch_ca_table_by_project(project_id, int(questionnaire_id))
     existing_payload = _hydrate_ca_payload_from_row(existing_row, project.get("name")) if existing_row else None
-    existing_final_json = existing_payload.get("final_json") if isinstance(existing_payload, dict) else None
     existing_final_status = existing_payload.get("final_status") if isinstance(existing_payload, dict) else None
+    final_json = body.get("final_json") if isinstance(body.get("final_json"), dict) else None
 
     try:
         upsert_ca_table(
@@ -1126,9 +1146,9 @@ def save_project_ca_framework(
             questionnaire_id=int(questionnaire_id),
             ca_json=framework_json,
             framework_json=framework_json,
-            final_json=body.get("final_json") if isinstance(body.get("final_json"), dict) else existing_final_json,
+            final_json=final_json,
             framework_status=str(body.get("framework_status") or "reviewed"),
-            final_status=str(body.get("final_status") or existing_final_status or ("done" if existing_final_json is not None else "pending")),
+            final_status=str(body.get("final_status") or ("done" if final_json is not None else "pending")),
             error_message=body.get("error_message"),
             generated_at=body.get("generated_at"),
             framework_generated_at=body.get("framework_generated_at") or body.get("generated_at"),
@@ -1146,9 +1166,9 @@ def save_project_ca_framework(
         "project_name": project.get("name"),
         "questionnaire_id": int(questionnaire_id),
         "framework_json": framework_json,
-        "final_json": body.get("final_json") if isinstance(body.get("final_json"), dict) else existing_final_json,
+        "final_json": final_json,
         "framework_status": str(body.get("framework_status") or "reviewed"),
-        "final_status": str(body.get("final_status") or existing_final_status or ("done" if existing_final_json is not None else "pending")),
+        "final_status": str(body.get("final_status") or ("done" if final_json is not None else "pending")),
         "generated_at": body.get("generated_at"),
         "framework_generated_at": body.get("framework_generated_at") or body.get("generated_at"),
         "final_generated_at": body.get("final_generated_at"),

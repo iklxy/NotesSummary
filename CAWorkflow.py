@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
 from Model import ModelClient
-from MinutesWorkflow import DEFAULT_SUMMARY_TEXT_NAME, _score_segment, _tokenize_for_search
+from MinutesWorkflow import DEFAULT_MINUTES_TXT_NAME, _score_segment, _tokenize_for_search
 from ProjectContext import load_project_context_by_id
 from QuestionTree import expand_questionnaire_document
 from interview_detail_fields import INTERVIEW_DETAIL_FIELD_DEFINITIONS
@@ -35,7 +35,8 @@ from db import fetch_interviews_by_project as fetch_project_interviews
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_CA_JSON_NAME = "ca_table.json"
 DEFAULT_CA_FULL_NOTES_NAME = "full_notes.md"
-CA_SCHEMA_VERSION = 2
+CA_SCHEMA_VERSION = 3
+CA_LEGACY_SCHEMA_VERSION = 2
 DEFAULT_COLUMN_META_FIELDS = [str(item["key"]) for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS]
 
 
@@ -71,18 +72,18 @@ def _get_interview_data_dir(project_id: int, interview_id: int) -> Path:
     return _get_project_data_dir(project_id) / f"interview_{interview_id}"
 
 
-def _get_interview_summary_full_text_path(project_id: int, interview_id: int) -> Path:
+def _get_interview_minutes_text_path(project_id: int, interview_id: int) -> Path:
     """
-    获取访谈全文 trans 的落盘路径。
+    获取访谈全文 Notes 的落盘路径。
     """
-    return _get_interview_data_dir(project_id, interview_id) / DEFAULT_SUMMARY_TEXT_NAME
+    return _get_interview_data_dir(project_id, interview_id) / DEFAULT_MINUTES_TXT_NAME
 
 
-def _load_interview_summary_full_text(project_id: int, interview_id: int) -> str:
+def _load_interview_minutes_text(project_id: int, interview_id: int) -> str:
     """
-    读取访谈全文 trans。
+    读取访谈全文 Notes。
     """
-    path = _get_interview_summary_full_text_path(project_id, interview_id)
+    path = _get_interview_minutes_text_path(project_id, interview_id)
     if not path.exists() or not path.is_file():
         return ""
     try:
@@ -230,12 +231,12 @@ def _normalize_dimension_items(raw_dimensions: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
-def _load_project_interview_summary_texts(
+def _load_project_interview_minutes_texts(
     project_id: int,
     interview_rows: List[Dict[str, Any]],
 ) -> tuple[Dict[int, str], List[int]]:
     """
-    读取当前项目下各访谈的 summary_full_text.txt。
+    读取当前项目下各访谈的 minutes.txt。
     """
     source_texts: Dict[int, str] = {}
     missing_ids: List[int] = []
@@ -243,7 +244,7 @@ def _load_project_interview_summary_texts(
         interview_id = int(row.get("id") or 0)
         if interview_id <= 0:
             continue
-        source_text = _load_interview_summary_full_text(project_id, interview_id)
+        source_text = _load_interview_minutes_text(project_id, interview_id)
         if not source_text.strip():
             missing_ids.append(interview_id)
             continue
@@ -494,6 +495,175 @@ def _collect_interview_blocks_for_question(
     return interview_blocks
 
 
+def _build_ca_framework_from_notes(
+    project_id: int,
+    project_name: str,
+    questionnaire_row: Dict[str, Any],
+    questionnaire_document: Dict[str, Any],
+    interview_sources: List[Dict[str, Any]],
+    selected_fields: List[str],
+    project_context: Any = None,
+) -> Dict[str, Any]:
+    """
+    基于多份全文 Notes 生成 CA 框架。
+    """
+    column_meta_field_labels = {
+        str(item["key"]): str(item["label"])
+        for item in INTERVIEW_DETAIL_FIELD_DEFINITIONS
+        if str(item["key"]) in selected_fields
+    }
+    questionnaire_name = str(questionnaire_row.get("name") or f"questionnaire_{questionnaire_row.get('id')}").strip()
+
+    framework_payload = ModelClient.generate_ca_notes_framework(
+        project_context=project_context,
+        interviews_notes=[
+            {
+                "interview_id": item["interview_id"],
+                "name": item.get("name"),
+                "notes_markdown": item.get("source_text") or "",
+            }
+            for item in interview_sources
+        ],
+    )
+    groups = framework_payload.get("groups") or []
+    if not isinstance(groups, list) or not groups:
+        raise RuntimeError("notes framework generation returned empty groups")
+
+    rows: List[Dict[str, Any]] = []
+    columns: List[Dict[str, Any]] = []
+    cells: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    structured_groups: List[Dict[str, Any]] = []
+    selected_interview_ids: List[int] = []
+    for source in interview_sources:
+        interview_id = int(source.get("interview_id") or 0)
+        if interview_id > 0:
+            selected_interview_ids.append(interview_id)
+    for source in interview_sources:
+        interview_id = int(source.get("interview_id") or 0)
+        if interview_id <= 0:
+            continue
+        rows.append(
+            {
+                "interview_id": interview_id,
+                "name": str(source.get("name") or f"访谈 {interview_id}").strip(),
+                "interview_date": source.get("interview_date"),
+                "meta": _build_ca_meta(
+                    {
+                        "detail": source.get("meta") if isinstance(source.get("meta"), dict) else {},
+                        "name": source.get("name"),
+                        "interview_date": source.get("interview_date"),
+                    },
+                    selected_fields,
+                ),
+                "hidden": False,
+            }
+        )
+
+    next_order = 1
+    for group_index, group in enumerate(groups, start=1):
+        if not isinstance(group, dict):
+            continue
+        group_title = str(group.get("title") or group.get("name") or f"主题分组 {group_index}").strip()
+        group_summary = str(group.get("summary") or "").strip()
+        raw_rows = group.get("rows") or group.get("questions") or group.get("sub_points") or []
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+        row_uids: List[str] = []
+        for row_index, item in enumerate(raw_rows, start=1):
+            if not isinstance(item, dict):
+                continue
+            row_title = str(item.get("title") or item.get("display_text") or item.get("question_text") or "").strip()
+            row_summary = str(item.get("summary") or "").strip()
+            if not row_title and not row_summary:
+                continue
+            question_type = str(item.get("question_type") or "qualitative").strip().lower()
+            if question_type not in {"qualitative", "quantitative"}:
+                question_type = "qualitative"
+            question_uid = str(
+                item.get("uid")
+                or item.get("question_uid")
+                or item.get("column_id")
+                or f"g{group_index:02d}_r{row_index:03d}"
+            ).strip()
+            display_text = str(item.get("display_text") or row_title or row_summary).strip()
+            columns.append(
+                {
+                    "column_id": question_uid,
+                    "order": next_order,
+                    "group": group_title,
+                    "group_order": group_index,
+                    "group_summary": group_summary,
+                    "question_uid": question_uid,
+                    "question_text": row_title or row_summary,
+                    "display_text": display_text,
+                    "question_type": question_type,
+                    "hidden": False,
+                }
+            )
+            row_uids.append(question_uid)
+            for row in rows:
+                interview_key = str(row["interview_id"])
+                cells.setdefault(interview_key, {})
+                cells[interview_key][question_uid] = {
+                    "value": "",
+                    "evidence": [],
+                    "locked": False,
+                    "source": "framework",
+                    "numeric_value": None,
+                }
+            next_order += 1
+        structured_groups.append(
+            {
+                "group_id": f"group_{group_index:02d}",
+                "order": group_index,
+                "title": group_title,
+                "summary": group_summary,
+                "row_uids": row_uids,
+            }
+        )
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "schema_version": CA_SCHEMA_VERSION,
+        "framework_source": "notes",
+        "project_id": project_id,
+        "questionnaire_id": int(questionnaire_row["id"]),
+        "project_name": project_name,
+        "questionnaire_name": questionnaire_name,
+        "column_meta_fields": selected_fields,
+        "column_meta_field_labels": column_meta_field_labels,
+        "selected_interview_ids": selected_interview_ids,
+        "groups": structured_groups,
+        "interviews": [
+            {
+                "interview_id": row["interview_id"],
+                "name": row["name"],
+                "interview_date": row["interview_date"],
+                "meta": row["meta"],
+            }
+            for row in rows
+        ],
+        "rows": rows,
+        "columns": columns,
+        "cells": cells,
+        "diff_row": {
+            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            for item in interview_sources
+            if int(item.get("interview_id") or 0) > 0
+        },
+        "framework_status": "draft",
+        "final_status": "pending",
+        "status": "draft",
+        "generated_at": generated_at,
+        "framework_generated_at": generated_at,
+        "final_generated_at": None,
+        "reviewed_at": None,
+        "error_message": None,
+        "project_context": None,
+        "questionnaire_json": questionnaire_document,
+    }
+
+
 def generate_ca_table_for_project(
     project_id: int,
     interview_ids: Optional[List[int]] = None,
@@ -556,7 +726,7 @@ def generate_ca_table_for_project(
         project_id=project_id,
     )
     questionnaire_row, questionnaire_document = _load_questionnaire_document(resolved_questionnaire_id)
-    if not questionnaire_row or not isinstance(questionnaire_document, dict):
+    if not questionnaire_row:
         log(
             f"CA generation failed: questionnaire load failed questionnaire_id={resolved_questionnaire_id}",
             project_id=project_id,
@@ -568,6 +738,8 @@ def generate_ca_table_for_project(
             "project_id": project_id,
             "questionnaire_id": resolved_questionnaire_id,
         }
+    if not isinstance(questionnaire_document, dict):
+        questionnaire_document = {}
 
     questionnaire_name = str(questionnaire_row.get("name") or f"questionnaire_{resolved_questionnaire_id}").strip()
     interview_rows = _resolve_interview_rows(project_id, resolved_questionnaire_id, requested_interview_ids)
@@ -590,18 +762,18 @@ def generate_ca_table_for_project(
             "questionnaire_id": resolved_questionnaire_id,
         }
 
-    summary_texts, missing_summary_ids = _load_project_interview_summary_texts(project_id, interview_rows)
-    if missing_summary_ids:
+    minutes_texts, missing_minutes_ids = _load_project_interview_minutes_texts(project_id, interview_rows)
+    if missing_minutes_ids:
         log(
-            f"CA generation failed: missing summary_full_text.txt interview_ids={missing_summary_ids}",
+            f"CA generation failed: missing minutes.txt interview_ids={missing_minutes_ids}",
             project_id=project_id,
         )
         return {
             "success": False,
-            "stage": "load_summary_full_text",
+            "stage": "load_minutes_text",
             "detail": {
-                "message": "summary_full_text.txt missing for one or more interviews",
-                "missing_interview_ids": missing_summary_ids,
+                "message": "minutes.txt missing for one or more interviews",
+                "missing_interview_ids": missing_minutes_ids,
             },
             "project_id": project_id,
             "questionnaire_id": resolved_questionnaire_id,
@@ -610,7 +782,7 @@ def generate_ca_table_for_project(
     interview_sources: List[Dict[str, Any]] = []
     for row in interview_rows:
         interview_id = int(row.get("id") or 0)
-        source_text = str(summary_texts.get(interview_id) or "").strip()
+        source_text = str(minutes_texts.get(interview_id) or "").strip()
         interview_sources.append(
             {
                 "interview_id": interview_id,
@@ -623,26 +795,42 @@ def generate_ca_table_for_project(
         )
     log(
         f"CA generation interview source texts prepared questionnaire_id={resolved_questionnaire_id} "
-        f"interview_count={len(interview_sources)} source_text_count={len(summary_texts)}",
+        f"interview_count={len(interview_sources)} source_text_count={len(minutes_texts)}",
         project_id=project_id,
     )
 
     if normalized_mode in {"framework", "draft"}:
         log(
             f"CA framework build start questionnaire_id={resolved_questionnaire_id} "
-            f"interview_count={len(interview_rows)} selected_fields={selected_fields}",
+            f"interview_count={len(interview_rows)} selected_fields={selected_fields} mode=notes",
             project_id=project_id,
         )
-        framework_payload = _build_ca_framework(
-            project_id=project_id,
-            project_name=project_name,
-            questionnaire_row=questionnaire_row,
-            questionnaire_document=questionnaire_document,
-            interview_rows=interview_rows,
-            selected_fields=selected_fields,
-            project_context=project_context,
-        )
-        framework_payload["schema_version"] = CA_SCHEMA_VERSION
+        try:
+            framework_payload = _build_ca_framework_from_notes(
+                project_id=project_id,
+                project_name=project_name,
+                questionnaire_row=questionnaire_row,
+                questionnaire_document=questionnaire_document,
+                interview_sources=interview_sources,
+                selected_fields=selected_fields,
+                project_context=project_context,
+            )
+            framework_payload["schema_version"] = CA_SCHEMA_VERSION
+        except Exception as exc:
+            log(
+                f"CA notes framework build failed questionnaire_id={resolved_questionnaire_id} error={exc}\n{traceback.format_exc()}",
+                project_id=project_id,
+            )
+            framework_payload = _build_ca_framework(
+                project_id=project_id,
+                project_name=project_name,
+                questionnaire_row=questionnaire_row,
+                questionnaire_document=questionnaire_document,
+                interview_rows=interview_rows,
+                selected_fields=selected_fields,
+                project_context=project_context,
+            )
+            framework_payload["schema_version"] = CA_LEGACY_SCHEMA_VERSION
         framework_payload["project_context"] = project_context if isinstance(project_context, dict) else None
         framework_payload["questionnaire_id"] = resolved_questionnaire_id
         framework_payload["questionnaire_name"] = questionnaire_name
@@ -733,6 +921,112 @@ def generate_ca_table_for_project(
             "ca_json_path": str(cache_path),
         }
 
+    if normalized_mode in {"framework_legacy", "legacy_framework", "legacy"}:
+        log(
+            f"CA framework build start questionnaire_id={resolved_questionnaire_id} "
+            f"interview_count={len(interview_rows)} selected_fields={selected_fields} mode=legacy",
+            project_id=project_id,
+        )
+        framework_payload = _build_ca_framework(
+            project_id=project_id,
+            project_name=project_name,
+            questionnaire_row=questionnaire_row,
+            questionnaire_document=questionnaire_document,
+            interview_rows=interview_rows,
+            selected_fields=selected_fields,
+            project_context=project_context,
+        )
+        framework_payload["schema_version"] = CA_LEGACY_SCHEMA_VERSION
+        framework_payload["project_context"] = project_context if isinstance(project_context, dict) else None
+        framework_payload["questionnaire_id"] = resolved_questionnaire_id
+        framework_payload["questionnaire_name"] = questionnaire_name
+        framework_payload["status"] = "reviewing"
+        framework_payload["framework_status"] = "reviewing"
+        existing_row = DbAccess.fetch_ca_table_by_project(project_id, resolved_questionnaire_id)
+        existing_final_json = existing_row.get("final_json") if existing_row else None
+        existing_final_status = existing_row.get("final_status") if existing_row else None
+        existing_final_generated_at = existing_row.get("final_generated_at") if existing_row else None
+        existing_reviewed_at = existing_row.get("reviewed_at") if existing_row else None
+        framework_payload["final_status"] = existing_final_status or "pending"
+        framework_payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        framework_payload["framework_generated_at"] = framework_payload["generated_at"]
+        framework_payload["final_generated_at"] = existing_final_generated_at
+        framework_payload["reviewed_at"] = existing_reviewed_at
+        framework_payload["final_json"] = existing_final_json
+        framework_payload["selected_interview_ids"] = [row["interview_id"] for row in framework_payload.get("rows", [])]
+        framework_payload["diff_row"] = {
+            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            for item in interview_sources
+            if int(item.get("interview_id") or 0) > 0
+        }
+        log(
+            f"CA framework built questionnaire_id={resolved_questionnaire_id} "
+            f"row_count={len(framework_payload.get('rows') or [])} "
+            f"column_count={len(framework_payload.get('columns') or [])} "
+            f"selected_interview_ids={framework_payload.get('selected_interview_ids')}",
+            project_id=project_id,
+        )
+        safe_framework_payload = _json_safe_value(framework_payload)
+        cache_path = _build_ca_cache_path(project_id, resolved_questionnaire_id)
+        log(f"Writing CA framework cache file: {cache_path}", project_id=project_id)
+        cache_path.write_text(json.dumps(safe_framework_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            log(
+                f"Writing CA framework to db questionnaire_id={resolved_questionnaire_id} "
+                f"framework_status=reviewing final_status={existing_final_status or 'pending'}",
+                project_id=project_id,
+            )
+            DbAccess.upsert_ca_table(
+                project_id=project_id,
+                questionnaire_id=resolved_questionnaire_id,
+                ca_json=safe_framework_payload,
+                framework_json=safe_framework_payload,
+                final_json=existing_final_json,
+                framework_status="reviewing",
+                final_status=existing_final_status or "pending",
+                error_message=None,
+                generated_at=safe_framework_payload["generated_at"],
+                framework_generated_at=safe_framework_payload["framework_generated_at"],
+                final_generated_at=existing_final_generated_at,
+                reviewed_at=existing_reviewed_at,
+            )
+            log(
+                f"CA framework persisted questionnaire_id={resolved_questionnaire_id} "
+                f"cache_path={cache_path}",
+                project_id=project_id,
+            )
+        except Exception as exc:
+            log(f"CA framework table write failed: {exc}\n{traceback.format_exc()}", project_id=project_id)
+            return {
+                "success": False,
+                "stage": "upsert_ca_table",
+                "detail": {
+                    "message": f"upsert ca framework failed: {exc}",
+                    "traceback": traceback.format_exc(),
+                    "skipped_interview_ids": skipped_interview_ids,
+                },
+                "project_id": project_id,
+                "questionnaire_id": resolved_questionnaire_id,
+            }
+
+        return {
+            "success": True,
+            "project_id": project_id,
+            "questionnaire_id": resolved_questionnaire_id,
+            "mode": "framework_legacy",
+            "generated_at": safe_framework_payload["generated_at"],
+            "framework_generated_at": safe_framework_payload["framework_generated_at"],
+            "final_generated_at": None,
+            "column_meta_fields": selected_fields,
+            "interview_count": len(interview_rows),
+            "dimension_count": len(safe_framework_payload.get("columns") or []),
+            "requested_interview_ids": requested_interview_ids,
+            "skipped_interview_ids": skipped_interview_ids,
+            "framework_json": safe_framework_payload,
+            "ca_json": safe_framework_payload,
+            "ca_json_path": str(cache_path),
+        }
+
     base_framework = framework_json
     if not isinstance(base_framework, dict):
         row = DbAccess.fetch_ca_table_by_project(project_id, resolved_questionnaire_id)
@@ -788,6 +1082,7 @@ def generate_ca_table_for_project(
         question_text = str(column.get("question_text") or column.get("display_text") or "").strip()
         question_uid = str(column.get("question_uid") or column_id).strip()
         question_order = int(column.get("order") or 0)
+        question_type = str(column.get("question_type") or "qualitative").strip().lower()
         log(
             f"CA final column generation start questionnaire_id={resolved_questionnaire_id} "
             f"question_uid={question_uid} question_order={question_order} "
@@ -796,7 +1091,7 @@ def generate_ca_table_for_project(
         )
         interview_blocks = _collect_interview_blocks_for_question(
             interview_rows=interview_rows,
-            source_texts=summary_texts,
+            source_texts=minutes_texts,
             query_text=question_text,
         )
         try:
@@ -806,6 +1101,7 @@ def generate_ca_table_for_project(
                 question_uid=question_uid,
                 question_order=question_order,
                 question_text=question_text,
+                question_type=question_type,
                 interview_blocks=interview_blocks,
             )
             cell_map = cell_payload.get("cells") or {}

@@ -620,6 +620,11 @@ export interface ProjectCaColumn {
   display_text?: string | null;
   hidden?: boolean | null;
   question_uid?: string | null;
+  group_id?: string | null;
+  group?: string | null;
+  group_order?: number | null;
+  group_summary?: string | null;
+  question_type?: "qualitative" | "quantitative" | string | null;
   interview_id?: number | null;
   name?: string | null;
   interview_date?: string | null;
@@ -632,6 +637,7 @@ export interface ProjectCaCell {
   evidence?: string[] | null;
   locked?: boolean | null;
   source?: string | null;
+  numeric_value?: number | null;
 }
 
 export interface ProjectCaRow {
@@ -644,6 +650,18 @@ export interface ProjectCaRow {
   question_text?: string | null;
   display_text?: string | null;
   order?: number | null;
+  group?: string | null;
+  group_order?: number | null;
+  group_summary?: string | null;
+  question_type?: "qualitative" | "quantitative" | string | null;
+}
+
+export interface ProjectCaGroup {
+  group_id: string;
+  order: number;
+  title: string;
+  summary?: string | null;
+  row_uids?: string[] | null;
 }
 
 export interface ProjectCaSnapshot {
@@ -656,6 +674,7 @@ export interface ProjectCaSnapshot {
   interviews?: ProjectCaInterviewItem[];
   rows?: ProjectCaRow[];
   columns?: ProjectCaColumn[];
+  groups?: ProjectCaGroup[];
   cells?: Record<string, Record<string, ProjectCaCell | string>>;
   diff_row?: Record<string, ProjectCaCell | string>;
   column_meta_fields?: string[];
@@ -697,6 +716,7 @@ export interface ProjectCaJson {
   interviews?: ProjectCaInterviewItem[];
   rows?: ProjectCaRow[];
   columns?: ProjectCaColumn[];
+  groups?: ProjectCaGroup[];
   cells?: Record<string, Record<string, ProjectCaCell | string>>;
   diff_row?: Record<string, ProjectCaCell | string>;
   framework_json?: ProjectCaSnapshot | null;

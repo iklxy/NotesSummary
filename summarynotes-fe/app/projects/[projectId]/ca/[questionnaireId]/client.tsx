@@ -8,6 +8,7 @@ import {
   Card,
   Checkbox,
   Input,
+  Select,
   Space,
   Spin,
   Table,
@@ -65,6 +66,13 @@ type MatrixRow =
     }
   | {
       key: string;
+      kind: "group";
+      label: string;
+      summary?: string;
+      questionUids: string[];
+    }
+  | {
+      key: string;
       kind: "meta";
       label: string;
       values: Record<string, string>;
@@ -79,6 +87,8 @@ type MatrixRow =
       order: number;
       hidden: boolean;
       column: ProjectCaColumn;
+      group: string;
+      questionType: "qualitative" | "quantitative";
     }
   | {
       key: string;
@@ -125,6 +135,25 @@ function getQuestionLabel(item: ProjectCaColumn): string {
   return String(item.display_text ?? item.question_text ?? item.question_uid ?? item.column_id ?? "").trim();
 }
 
+function normalizeQuestionType(value: unknown): "qualitative" | "quantitative" {
+  const text = String(value || "").trim().toLowerCase();
+  return text === "quantitative" ? "quantitative" : "qualitative";
+}
+
+function parseNumericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const match = value.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+    if (match) {
+      const parsed = Number(match[0]);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+  }
+  return null;
+}
+
 function normalizeCellPayload(value: ProjectCaCell | string | null | undefined): ProjectCaCell {
   if (typeof value === "string") {
     return {
@@ -132,6 +161,7 @@ function normalizeCellPayload(value: ProjectCaCell | string | null | undefined):
       evidence: [],
       locked: false,
       source: "framework",
+      numeric_value: null,
     };
   }
   if (!value || typeof value !== "object") {
@@ -140,6 +170,7 @@ function normalizeCellPayload(value: ProjectCaCell | string | null | undefined):
       evidence: [],
       locked: false,
       source: "framework",
+      numeric_value: null,
     };
   }
   const rawValue = value as unknown as Record<string, unknown>;
@@ -153,6 +184,7 @@ function normalizeCellPayload(value: ProjectCaCell | string | null | undefined):
     evidence,
     locked: Boolean(rawValue.locked),
     source: String(rawValue.source ?? "framework"),
+    numeric_value: parseNumericValue(rawValue.numeric_value ?? rawValue.numericValue),
   };
 }
 
@@ -236,6 +268,71 @@ function getDiffEvidence(
   return payload.evidence ?? [];
 }
 
+function getCellNumericValue(
+  cells: ProjectCaJson["cells"],
+  interviewId: number,
+  questionUid: string,
+): number | null {
+  return getCellPayload(cells, interviewId, questionUid).numeric_value ?? null;
+}
+
+function getGroupLabel(column: ProjectCaColumn): string {
+  return String(column.group || "未分组").trim() || "未分组";
+}
+
+function getGroupSummary(column: ProjectCaColumn): string {
+  return String(column.group_summary || "").trim();
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "/";
+  }
+  const rounded = Math.round(value * 100) / 100;
+  const text = Number.isInteger(rounded) ? String(Math.trunc(rounded)) : String(rounded);
+  return text.replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+}
+
+function computeQuestionStats(
+  snapshot: ProjectCaJson | null,
+  row: ProjectCaColumn,
+  visibleInterviews: ProjectCaInterviewItem[],
+): { validCount: number; numericValues: number[]; summary: string } {
+  if (!snapshot) {
+    return { validCount: 0, numericValues: [], summary: "/" };
+  }
+  const questionUid = String(row.question_uid || row.column_id || "").trim();
+  const numericValues: number[] = [];
+  let validCount = 0;
+  visibleInterviews.forEach((interview) => {
+    const interviewId = interview.interview_id;
+    const payload = getCellPayload(snapshot.cells, interviewId, questionUid);
+    const value = String(payload.value || "").trim();
+    if (value && value !== "/") {
+      validCount += 1;
+    }
+    const numericValue = payload.numeric_value ?? parseNumericValue(payload.value);
+    if (Number.isFinite(numericValue as number)) {
+      numericValues.push(Number(numericValue));
+    }
+  });
+  if (row.question_type === "quantitative" && numericValues.length > 0) {
+    const mean = numericValues.reduce((sum, item) => sum + item, 0) / numericValues.length;
+    const min = Math.min(...numericValues);
+    const max = Math.max(...numericValues);
+    return {
+      validCount,
+      numericValues,
+      summary: `有效 ${validCount} / 均值 ${formatNumber(mean)} / 范围 ${formatNumber(min)}-${formatNumber(max)}`,
+    };
+  }
+  return {
+    validCount,
+    numericValues,
+    summary: `有效 ${validCount}`,
+  };
+}
+
 function normalizeMetaFields(
   snapshot: ProjectCaJson | null | undefined,
   fieldDefinitions: InterviewDetailFieldDefinition[],
@@ -254,7 +351,6 @@ function normalizeSnapshot(
   fieldDefinitions: InterviewDetailFieldDefinition[],
 ): ProjectCaJson {
   const base: ProjectCaJson = value ? cloneJson(value) : { project_id: projectId };
-  base.schema_version = Number(base.schema_version || 0) >= 2 ? Number(base.schema_version) : 2;
   base.project_id = base.project_id || projectId;
   base.project_name = base.project_name || projectName;
   base.questionnaire_id = base.questionnaire_id || questionnaireId;
@@ -292,12 +388,29 @@ function normalizeSnapshot(
         display_text: displayText.trim(),
         hidden: Boolean(item.hidden),
         question_uid: questionUid,
+        group_id: item.group_id !== undefined && item.group_id !== null ? String(item.group_id).trim() : "",
+        group: item.group !== undefined && item.group !== null ? String(item.group).trim() : "",
+        group_order: Number.isFinite(Number(item.group_order)) ? Number(item.group_order) : null,
+        group_summary: item.group_summary !== undefined && item.group_summary !== null ? String(item.group_summary).trim() : "",
+        question_type: normalizeQuestionType(item.question_type),
         interview_id: item.interview_id ?? null,
         name: item.name ?? null,
         interview_date: item.interview_date ?? null,
         meta: item.meta ?? null,
       };
     });
+  const groups = Array.isArray(base.groups)
+    ? base.groups
+        .filter((item): item is NonNullable<ProjectCaJson["groups"]>[number] => Boolean(item))
+        .map((item, index) => ({
+          group_id: String(item.group_id || `group_${index + 1}`),
+          order: Number.isFinite(Number(item.order)) ? Number(item.order) : index + 1,
+          title: String(item.title || "").trim(),
+          summary: item.summary !== undefined && item.summary !== null ? String(item.summary).trim() : "",
+          row_uids: Array.isArray(item.row_uids) ? item.row_uids.map((uid) => String(uid || "").trim()).filter(Boolean) : [],
+        }))
+        .filter((item) => Boolean(item.title))
+    : [];
 
   const nextCells: Record<string, Record<string, ProjectCaCell | string>> = {};
   interviews.forEach((interview, interviewIndex) => {
@@ -318,14 +431,12 @@ function normalizeSnapshot(
 
   base.interviews = interviews;
   base.columns = columns;
+  base.groups = groups;
   base.cells = nextCells;
   base.selected_interview_ids =
     base.selected_interview_ids && base.selected_interview_ids.length > 0
       ? base.selected_interview_ids.filter((item) => interviews.some((row) => row.interview_id === item))
       : interviews.map((item) => item.interview_id);
-  base.framework_status = base.framework_status || "reviewing";
-  base.final_status = base.final_status || "pending";
-  base.status = base.final_status || base.framework_status || "draft";
   const nextDiffRow: Record<string, ProjectCaCell | string> = {};
   if (base.diff_row && typeof base.diff_row === "object") {
     Object.entries(base.diff_row).forEach(([key, cell]) => {
@@ -333,6 +444,18 @@ function normalizeSnapshot(
     });
   }
   base.diff_row = nextDiffRow;
+  const hasNotesFramework = groups.length > 0 || columns.some((column) => Boolean(column.group || column.group_order || column.question_type || column.group_summary));
+  const baseSchemaVersion = Number(base.schema_version || 0);
+  if (baseSchemaVersion >= 3 || hasNotesFramework) {
+    base.schema_version = 3;
+  } else if (baseSchemaVersion >= 2 || base.diff_row) {
+    base.schema_version = 2;
+  } else {
+    base.schema_version = 2;
+  }
+  base.framework_status = base.framework_status || "reviewing";
+  base.final_status = base.final_status || "pending";
+  base.status = base.final_status || base.framework_status || "draft";
   return base;
 }
 
@@ -576,8 +699,88 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       return [];
     }
     return [...(activeSnapshot.columns ?? [])]
-      .sort((a, b) => a.order - b.order);
+      .sort((a, b) => {
+        const aGroupOrder = Number.isFinite(Number(a.group_order)) ? Number(a.group_order) : 9999;
+        const bGroupOrder = Number.isFinite(Number(b.group_order)) ? Number(b.group_order) : 9999;
+        if (aGroupOrder !== bGroupOrder) {
+          return aGroupOrder - bGroupOrder;
+        }
+        return a.order - b.order;
+      });
   }, [activeSnapshot]);
+
+  const groupedQuestionRows = useMemo(() => {
+    if (!activeSnapshot) {
+      return [];
+    }
+    const groups: Array<{
+      key: string;
+      label: string;
+      summary: string;
+      questionRows: ProjectCaColumn[];
+    }> = [];
+    const explicitGroups = Array.isArray(activeSnapshot.groups) ? activeSnapshot.groups : [];
+    if (explicitGroups.length > 0) {
+      explicitGroups
+        .slice()
+        .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
+        .forEach((group) => {
+          const key = String(group.group_id || group.title || "").trim();
+          const label = String(group.title || "未分组").trim() || "未分组";
+          const summary = String(group.summary || "").trim();
+          const rowUids = new Set(
+            Array.isArray(group.row_uids) ? group.row_uids.map((uid) => String(uid || "").trim()).filter(Boolean) : [],
+          );
+          const matched = questionRows.filter((column) => {
+            const questionKey = getQuestionKey(column, 0);
+            if (rowUids.size > 0) {
+              return rowUids.has(questionKey);
+            }
+            const columnGroup = getGroupLabel(column);
+            return columnGroup === label || String(column.group_id || "").trim() === key;
+          });
+          if (matched.length > 0) {
+            groups.push({
+              key: key || label,
+              label,
+              summary,
+              questionRows: matched,
+            });
+          }
+        });
+      const consumed = new Set(groups.flatMap((item) => item.questionRows.map((column) => getQuestionKey(column, 0))));
+      const leftovers = questionRows.filter((column, index) => {
+        const questionKey = getQuestionKey(column, index);
+        return !consumed.has(questionKey);
+      });
+      if (leftovers.length > 0) {
+        const fallbackLabel = getGroupLabel(leftovers[0]);
+        groups.push({
+          key: fallbackLabel,
+          label: fallbackLabel,
+          summary: getGroupSummary(leftovers[0]),
+          questionRows: leftovers,
+        });
+      }
+      return groups;
+    }
+
+    questionRows.forEach((column) => {
+      const label = getGroupLabel(column);
+      const lastGroup = groups[groups.length - 1];
+      if (!lastGroup || lastGroup.label !== label) {
+        groups.push({
+          key: label,
+          label,
+          summary: getGroupSummary(column),
+          questionRows: [column],
+        });
+      } else {
+        lastGroup.questionRows.push(column);
+      }
+    });
+    return groups;
+  }, [activeSnapshot, questionRows]);
 
   const matrixRows = useMemo<MatrixRow[]>(() => {
     if (!activeSnapshot) {
@@ -620,22 +823,34 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
 
     rows.push({ key: "section-question", kind: "section", label: "问题" });
 
-    questionRows.forEach((column, index) => {
-      const questionUid = getQuestionKey(column, index);
+    groupedQuestionRows.forEach((group, groupIndex) => {
       rows.push({
-        key: `question-${questionUid}`,
-        kind: "question",
-        label: getQuestionLabel(column),
-        questionUid,
-        order: Number(column.order) || index + 1,
-        hidden: Boolean(column.hidden),
-        column,
-        values: Object.fromEntries(
-          visibleInterviews.map((item) => [String(item.interview_id), getCellValue(activeSnapshot.cells, item.interview_id, questionUid)]),
-        ),
-        evidence: Object.fromEntries(
-          visibleInterviews.map((item) => [String(item.interview_id), getCellEvidence(activeSnapshot.cells, item.interview_id, questionUid)]),
-        ),
+        key: `group-${group.key || groupIndex}`,
+        kind: "group",
+        label: group.label || "未分组",
+        summary: group.summary,
+        questionUids: group.questionRows.map((column, index) => getQuestionKey(column, index)),
+      });
+
+      group.questionRows.forEach((column, index) => {
+        const questionUid = getQuestionKey(column, index);
+        rows.push({
+          key: `question-${questionUid}`,
+          kind: "question",
+          label: getQuestionLabel(column),
+          questionUid,
+          order: Number(column.order) || index + 1,
+          hidden: Boolean(column.hidden),
+          column,
+          group: group.label || "未分组",
+          questionType: normalizeQuestionType(column.question_type),
+          values: Object.fromEntries(
+            visibleInterviews.map((item) => [String(item.interview_id), getCellValue(activeSnapshot.cells, item.interview_id, questionUid)]),
+          ),
+          evidence: Object.fromEntries(
+            visibleInterviews.map((item) => [String(item.interview_id), getCellEvidence(activeSnapshot.cells, item.interview_id, questionUid)]),
+          ),
+        });
       });
     });
 
@@ -652,7 +867,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     });
 
     return rows;
-  }, [activeSnapshot, questionRows, visibleInterviews, visibleMetaFields]);
+  }, [activeSnapshot, groupedQuestionRows, questionRows, visibleInterviews, visibleMetaFields]);
 
   const applyFrameworkMutation = (mutator: (draft: ProjectCaJson) => void) => {
     setFrameworkSnapshot((prev) => {
@@ -686,6 +901,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         evidence: [],
         locked: true,
         source: "manual",
+        numeric_value: null,
       };
       cells[rowKey] = rowCells;
       draft.cells = cells;
@@ -701,6 +917,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         evidence: [],
         locked: true,
         source: "manual",
+        numeric_value: null,
       };
       draft.diff_row = diffRow;
     });
@@ -781,12 +998,10 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       const resp = await saveProjectCaFramework(projectId, {
         questionnaire_id: questionnaireId,
         framework_json: canonicalFramework,
-        final_json: canonicalFinal || undefined,
         framework_status: "reviewed",
-        final_status: canonicalFinal?.final_status || (canonicalFinal ? "done" : "pending"),
+        final_status: "pending",
         generated_at: canonicalFramework.generated_at || canonicalFramework.framework_generated_at || undefined,
         framework_generated_at: canonicalFramework.framework_generated_at || canonicalFramework.generated_at || undefined,
-        final_generated_at: canonicalFinal?.final_generated_at || undefined,
         reviewed_at: new Date().toISOString(),
       });
       if (!resp.success) {
@@ -809,9 +1024,8 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             )
           : prev,
       );
-      if (finalSnapshot) {
-        setFinalDirty(true);
-      }
+      setFinalSnapshot(null);
+      setFinalDirty(false);
       message.success("CA 框架已保存");
     } catch (e) {
       message.error(e instanceof Error ? e.message : "保存 CA 框架失败");
@@ -937,6 +1151,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     applyFrameworkMutation((draft) => {
       const columns = Array.isArray(draft.columns) ? [...draft.columns] : [];
       const interviews = draft.interviews ?? [];
+      const groups = Array.isArray(draft.groups) ? [...draft.groups] : [];
       const nextOrder = columns.reduce((max, column) => {
         const order = Number(column.order) || 0;
         return Math.max(max, order);
@@ -959,9 +1174,34 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
         display_text: "自定义问题",
         hidden: false,
         question_uid: questionUid,
+        group: "未分组",
+        group_order: 9999,
+        group_summary: "",
+        question_type: "qualitative",
       };
       columns.push(nextColumn);
       draft.columns = columns;
+      const ungroupedTitle = "未分组";
+      const ungroupedGroupIndex = groups.findIndex((group) => String(group?.title || "").trim() === ungroupedTitle);
+      if (ungroupedGroupIndex >= 0) {
+        const targetGroup = groups[ungroupedGroupIndex];
+        const rowUids = Array.isArray(targetGroup.row_uids) ? [...targetGroup.row_uids] : [];
+        rowUids.push(questionUid);
+        groups[ungroupedGroupIndex] = {
+          ...targetGroup,
+          row_uids: rowUids,
+        };
+      } else {
+        const nextGroupOrder = groups.reduce((max, group) => Math.max(max, Number(group?.order) || 0), 0) + 1;
+        groups.push({
+          group_id: `group_${Date.now()}`,
+          order: nextGroupOrder,
+          title: ungroupedTitle,
+          summary: "",
+          row_uids: [questionUid],
+        });
+      }
+      draft.groups = groups;
       const cells = draft.cells ?? {};
       interviews.forEach((interview, interviewIndex) => {
         const interviewKey = String(interview.interview_id || interviewIndex + 1);
@@ -971,6 +1211,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           evidence: [],
           locked: false,
           source: "framework",
+          numeric_value: null,
         };
         cells[interviewKey] = rowCells;
       });
@@ -996,6 +1237,22 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           patch.display_text !== undefined
             ? String(patch.display_text || "")
             : current.display_text ?? current.question_text,
+        group:
+          patch.group !== undefined
+            ? String(patch.group || "")
+            : current.group ?? "",
+        group_order:
+          patch.group_order !== undefined && Number.isFinite(Number(patch.group_order))
+            ? Number(patch.group_order)
+            : current.group_order ?? null,
+        group_summary:
+          patch.group_summary !== undefined
+            ? String(patch.group_summary || "")
+            : current.group_summary ?? "",
+        question_type:
+          patch.question_type !== undefined
+            ? normalizeQuestionType(patch.question_type)
+            : normalizeQuestionType(current.question_type),
         order:
           patch.order !== undefined && Number.isFinite(Number(patch.order))
             ? Math.max(1, Number(patch.order))
@@ -1007,10 +1264,57 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     });
   };
 
+  const updateGroupRow = (questionUids: string[], groupTitle: string) => {
+    applyFrameworkMutation((draft) => {
+      const columns = Array.isArray(draft.columns) ? [...draft.columns] : [];
+      const targetUids = new Set(questionUids.map((item) => String(item || "").trim()).filter(Boolean));
+      columns.forEach((column) => {
+        const questionUid = String(column.question_uid || column.column_id || "").trim();
+        if (!targetUids.has(questionUid)) {
+          return;
+        }
+        column.group = groupTitle;
+      });
+      draft.columns = columns;
+      if (Array.isArray(draft.groups)) {
+        draft.groups = draft.groups.map((group) => {
+          if (!group || !Array.isArray(group.row_uids)) {
+            return group;
+          }
+          const groupRowUids = new Set(group.row_uids.map((item) => String(item || "").trim()).filter(Boolean));
+          const intersects = questionUids.some((item) => groupRowUids.has(String(item || "").trim()));
+          if (!intersects) {
+            return group;
+          }
+          return {
+            ...group,
+            title: groupTitle,
+          };
+        });
+      }
+    });
+  };
+
   const deleteQuestionRow = (questionUid: string) => {
     applyFrameworkMutation((draft) => {
       const columns = Array.isArray(draft.columns) ? [...draft.columns] : [];
       draft.columns = columns.filter((column) => String(column.question_uid || column.column_id || "") !== questionUid);
+      if (Array.isArray(draft.groups)) {
+        draft.groups = draft.groups
+          .map((group) => {
+            if (!group) {
+              return group;
+            }
+            const rowUids = Array.isArray(group.row_uids)
+              ? group.row_uids.map((item) => String(item || "").trim()).filter((item) => item && item !== questionUid)
+              : [];
+            return {
+              ...group,
+              row_uids: rowUids,
+            };
+          })
+          .filter((group) => Array.isArray(group?.row_uids) ? group.row_uids.length > 0 : true);
+      }
       const cells = draft.cells ?? {};
       Object.keys(cells).forEach((interviewKey) => {
         if (cells[interviewKey] && typeof cells[interviewKey] === "object") {
@@ -1030,10 +1334,11 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
 
     const answerWidth = showEvidenceColumns ? 260 : 300;
     const evidenceWidth = 320;
-    const leafColumnCount = 1 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
+    const statsWidth = 220;
+    const totalLeafColumns = 2 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
 
     const renderAnswerCell = (row: MatrixRow, interviewId: number) => {
-      if (row.kind === "section") {
+      if (row.kind === "section" || row.kind === "group") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta") {
@@ -1056,7 +1361,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     };
 
     const renderEvidenceCell = (row: MatrixRow, interviewId: number) => {
-      if (row.kind === "section") {
+      if (row.kind === "section" || row.kind === "group") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta") {
@@ -1077,18 +1382,57 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       );
     };
 
+    const renderStatsCell = (row: MatrixRow) => {
+      if (row.kind === "section" || row.kind === "group") {
+        return { children: null, props: { colSpan: 0 } };
+      }
+      if (row.kind === "meta") {
+        return <Text type="secondary">-</Text>;
+      }
+      if (row.kind === "question") {
+        const stats = computeQuestionStats(activeSnapshot, row.column, visibleInterviews);
+        return <Text className="text-slate-600">{stats.summary}</Text>;
+      }
+      const validCount = visibleInterviews.reduce((count, item) => {
+        const value = getDiffValue(activeSnapshot.diff_row, item.interview_id);
+        return count + (value && value !== "/" ? 1 : 0);
+      }, 0);
+      return <Text className="text-slate-600">有效 {validCount}</Text>;
+    };
+
     const columns: any[] = [
       {
         key: "label",
         title: "字段 / 问题",
         dataIndex: "label",
         fixed: "left" as const,
-        width: 390,
+        width: 420,
         render: (_: unknown, row: MatrixRow) => {
           if (row.kind === "section") {
             return {
               children: <div className="font-semibold text-slate-700">{row.label}</div>,
-              props: { colSpan: leafColumnCount },
+              props: { colSpan: totalLeafColumns },
+            };
+          }
+          if (row.kind === "group") {
+            return {
+              children: (
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  <Space align="center" size={8} wrap style={{ width: "100%" }}>
+                    <Tag color="green">主题分组</Tag>
+                    <Input
+                      value={row.label}
+                      onChange={(event) => updateGroupRow(row.questionUids, event.target.value)}
+                      style={{ width: 320 }}
+                    />
+                    <Tag color="processing">{row.questionUids.length} 行</Tag>
+                  </Space>
+                  <Text type="secondary" className="text-xs">
+                    {row.summary || "该主题下的分析行。"}
+                  </Text>
+                </Space>
+              ),
+              props: { colSpan: totalLeafColumns },
             };
           }
           if (row.kind === "meta") {
@@ -1108,20 +1452,37 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           }
           return (
             <Space direction="vertical" size={10} style={{ width: "100%" }}>
-              <Space align="start" size={8} wrap style={{ width: "100%" }}>
-                <Input.TextArea
-                  value={row.column.display_text ?? row.column.question_text ?? ""}
-                  title={row.column.question_text || ""}
-                  autoSize={{ minRows: 1, maxRows: 2 }}
-                  style={{ width: 540, minHeight: 40, resize: "none" }}
-                  onChange={(event) =>
+              <Space align="center" size={8} wrap style={{ width: "100%" }}>
+                <Tag color={row.questionType === "quantitative" ? "gold" : "green"}>
+                  {row.questionType === "quantitative" ? "定量" : "定性"}
+                </Tag>
+                <Tag color="blue">{row.group}</Tag>
+              </Space>
+              <Input.TextArea
+                value={row.column.display_text ?? row.column.question_text ?? ""}
+                title={row.column.question_text || ""}
+                autoSize={{ minRows: 1, maxRows: 2 }}
+                style={{ width: 540, minHeight: 40, resize: "none" }}
+                onChange={(event) =>
+                  updateQuestionRow(row.questionUid, {
+                    display_text: event.target.value,
+                  })
+                }
+              />
+              <Space align="center" size={8} wrap style={{ width: "100%" }}>
+                <Select
+                  value={row.questionType}
+                  style={{ width: 110 }}
+                  options={[
+                    { label: "定性", value: "qualitative" },
+                    { label: "定量", value: "quantitative" },
+                  ]}
+                  onChange={(value) =>
                     updateQuestionRow(row.questionUid, {
-                      display_text: event.target.value,
+                      question_type: value,
                     })
                   }
                 />
-              </Space>
-              <Space align="center" size={8} wrap style={{ width: "100%" }}>
                 <Checkbox
                   checked={row.hidden}
                   onChange={(event) => updateQuestionRow(row.questionUid, { hidden: event.target.checked })}
@@ -1138,6 +1499,13 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             </Space>
           );
         },
+      },
+      {
+        key: "stats",
+        title: "统计",
+        dataIndex: "stats",
+        width: statsWidth,
+        render: (_: unknown, row: MatrixRow) => renderStatsCell(row),
       },
       ...visibleInterviews.map((interview, index) => {
         const interviewId = interview.interview_id;
@@ -1172,7 +1540,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       }),
     ];
     return columns;
-  }, [activeSnapshot, showEvidenceColumns, updateCell, updateDiffCell, visibleInterviews]);
+  }, [activeSnapshot, groupedQuestionRows, showEvidenceColumns, updateCell, updateDiffCell, updateGroupRow, updateQuestionRow, visibleInterviews]);
 
   const matrixData = useMemo(() => matrixRows, [matrixRows]);
 
@@ -1239,7 +1607,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                 </Space>
               </div>
               <Paragraph className="!mb-0 text-sm text-slate-500">
-                默认沿用从详情页传入的访谈选择。细节字段和问题行都按扁平矩阵展示，导出会保持相同结构。
+                默认沿用从详情页传入的访谈选择。矩阵按主题分组展开，左侧提供有效答案统计，右侧保持访谈回答与引用列一致。
               </Paragraph>
             </Space>
           </Card>
@@ -1253,7 +1621,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   <div className="text-lg font-semibold text-slate-900">当前访谈列</div>
                   <Text type="secondary">已纳入矩阵的访谈标签。</Text>
                 </div>
-                <Tag color="blue">{frameworkSnapshot ? `${frameworkSnapshot.columns?.length ?? 0} 问题` : "0 问题"}</Tag>
+                <Tag color="blue">{frameworkSnapshot ? `${frameworkSnapshot.columns?.length ?? 0} 行` : "0 行"}</Tag>
               </div>
               <div className="flex flex-wrap gap-2">
                 {selectedInterviewSummary.length > 0 ? (
@@ -1350,7 +1718,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             ) : (
               <div className="overflow-auto">
                 <Paragraph className="!mb-3 text-sm text-slate-500">
-                  问题行可直接在矩阵里编辑；点击右上角箭头可展开或收起每个访谈右侧的引用列。
+                  主题分组可以直接在分组行里编辑；问题行支持定性/定量切换，点击右上角箭头可展开或收起每个访谈右侧的引用列。
                 </Paragraph>
                 <Table
                   rowKey="key"
@@ -1363,6 +1731,8 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   rowClassName={(record) =>
                     record.kind === "section"
                       ? "bg-slate-100 font-semibold"
+                      : record.kind === "group"
+                        ? "bg-emerald-50/50"
                       : record.kind === "diff"
                         ? "bg-emerald-50/50"
                         : record.kind === "question" && record.hidden
