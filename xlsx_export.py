@@ -747,6 +747,14 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
 
     rows.append([])
     rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
+    rows.append(
+        [
+            {"value": "问题内容", "style": 3},
+            {"value": "有效答案统计", "style": 3},
+            {"value": "单行总结", "style": 3},
+        ]
+        + [{"value": "", "style": 3}] * max(0, total_cols - 3)
+    )
 
     for group in grouped_rows:
         group_label = str(group.get("group_label") or "未分组").strip() or "未分组"
@@ -947,6 +955,8 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
                 cell.font = Font(name="Calibri", size=12)
 
         if row_index == 1:
+            sheet.row_dimensions[row_index].height = 32
+        elif first_value == "问题内容":
             sheet.row_dimensions[row_index].height = 32
         elif first_value in {"访谈细节", "问题"}:
             sheet.row_dimensions[row_index].height = 50
