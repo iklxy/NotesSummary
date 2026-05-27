@@ -581,7 +581,7 @@ def generate_ca_cells_for_question(
 
     system_prompt = (
         "你是专业的医疗咨询行业对比分析专家。"
-        "你的任务是针对同一个问卷问题，基于每个访谈对应的检索片段，分别输出各访谈的简短答案和原文引用。"
+        "你的任务是针对同一个问卷问题，基于每个访谈提供的全文 Notes 或相关片段，分别输出各访谈的简短答案和原文引用。"
         "必须输出严格合法的 JSON，不要输出额外说明。"
     )
     normalized_question_type = str(question_type or "qualitative").strip().lower()

@@ -28,7 +28,7 @@ from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
 from ca_summary import build_ca_summary_payload, get_ca_summary_cache_path
 from Model import ModelClient
-from MinutesWorkflow import DEFAULT_MINUTES_TXT_NAME, _score_segment, _tokenize_for_search
+from MinutesWorkflow import DEFAULT_MINUTES_TXT_NAME
 from ProjectContext import load_project_context_by_id
 from QuestionTree import expand_questionnaire_document
 from interview_detail_fields import INTERVIEW_DETAIL_FIELD_DEFINITIONS
@@ -123,36 +123,6 @@ def _split_markdown_segments(markdown_text: str) -> List[Dict[str, Any]]:
             }
         )
     return segments
-
-
-def _retrieve_segments_from_markdown(
-    segments: List[Dict[str, Any]],
-    query_text: str,
-    top_k: int,
-) -> List[Dict[str, Any]]:
-    """
-    从全文 Notes 片段中检索最相关的内容。
-    """
-    ranked: List[Tuple[float, Dict[str, Any]]] = []
-    for seg in segments:
-        score = _score_segment(str(seg.get("text") or ""), query_text)
-        if score <= 0:
-            continue
-        ranked.append((score, seg))
-
-    ranked.sort(key=lambda item: (-item[0], int(item[1].get("summary_id") or 0)))
-    selected = ranked[: max(1, top_k)]
-    results: List[Dict[str, Any]] = []
-    for score, seg in selected:
-        results.append(
-            {
-                "summary_id": seg.get("summary_id"),
-                "speaker": seg.get("speaker"),
-                "text": seg.get("text"),
-                "score": score,
-            }
-        )
-    return results
 
 
 def _normalize_meta_value(value: Any) -> Any:
@@ -476,23 +446,21 @@ def _collect_interview_blocks_for_question(
     query_text: str,
 ) -> List[Dict[str, Any]]:
     """
-    为某个问卷问题收集每个访谈的相关片段。
+    为某个问卷问题收集每个访谈的全文 Notes。
+
+    这里不再按块检索；直接把整篇 minutes.txt 交给模型，
+    让模型基于全文自行判断哪些内容相关。
     """
     interview_blocks: List[Dict[str, Any]] = []
     for row in interview_rows:
         interview_id = int(row.get("id") or 0)
         source_text = str(source_texts.get(interview_id) or "").strip()
-        segments = _retrieve_segments_from_markdown(
-            segments=_split_markdown_segments(source_text),
-            query_text=query_text,
-            top_k=6,
-        )
         interview_blocks.append(
             {
                 "interview_id": interview_id,
                 "name": row.get("name"),
                 "meta": row.get("detail") or {},
-                "segments": segments,
+                "segments": [],
                 "source_text": source_text,
             }
         )
