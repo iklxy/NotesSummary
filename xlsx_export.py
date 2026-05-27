@@ -699,7 +699,7 @@ def _build_ca_sheet_rows_v4(
             )
 
     cell_step = 2 if include_evidence_columns else 1
-    total_cols = 3 + len(interview_columns) * cell_step
+    total_cols = 4 + len(interview_columns) * cell_step
     rows: List[List[Dict[str, Any]]] = []
     title_text = f"CA Capture Sheet - {project_name or project_id}"
     rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
@@ -756,6 +756,7 @@ def _build_ca_sheet_rows_v4(
 
     for detail_label, extractor in detail_specs:
         row_values: List[Dict[str, Any]] = [
+            {"value": "", "style": 1},
             {"value": detail_label, "style": 2},
             {"value": "", "style": 1},
             {"value": "", "style": 1},
@@ -770,25 +771,19 @@ def _build_ca_sheet_rows_v4(
     rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     rows.append(
         [
+            {"value": "主题分组", "style": 3},
             {"value": "问题内容", "style": 3},
             {"value": "有效答案统计", "style": 3},
             {"value": "单行总结", "style": 3},
         ]
-        + [{"value": "", "style": 3}] * max(0, total_cols - 3)
+        + [{"value": "", "style": 3}] * max(0, total_cols - 4)
     )
 
     for group in grouped_rows:
         group_label = str(group.get("group_label") or "未分组").strip() or "未分组"
         group_summary = str(group.get("group_summary") or "").strip()
         question_rows = group.get("rows") or []
-        rows.append(
-            [
-                {"value": f"主题分组：{group_label}", "style": 3},
-                {"value": group_summary or f"{len(question_rows)} 行", "style": 1},
-                {"value": "", "style": 1},
-            ]
-            + [{"value": "", "style": 3}] * max(0, total_cols - 3)
-        )
+        visible_question_rows: List[Dict[str, Any]] = []
         for item in question_rows:
             if not isinstance(item, dict):
                 continue
@@ -797,11 +792,24 @@ def _build_ca_sheet_rows_v4(
             question_uid = str(item.get("question_uid") or item.get("column_id") or "").strip()
             question_order = item.get("order")
             question_text = str(item.get("display_text") or item.get("question_text") or "").strip()
-            question_type = str(item.get("question_type") or "qualitative").strip().lower()
             summary_text = str(item.get("summary_text") or "/").strip() or "/"
             if not question_uid and not question_text:
                 continue
+            visible_question_rows.append(item)
+        if not visible_question_rows:
+            continue
+        for index, item in enumerate(visible_question_rows):
+            question_uid = str(item.get("question_uid") or item.get("column_id") or "").strip()
+            question_order = item.get("order")
+            question_text = str(item.get("display_text") or item.get("question_text") or "").strip()
+            question_type = str(item.get("question_type") or "qualitative").strip().lower()
+            summary_text = str(item.get("summary_text") or "/").strip() or "/"
             row_cells: List[Dict[str, Any]] = [
+                {
+                    "value": group_label if index == 0 else "",
+                    "style": 2,
+                    "merge_span": len(visible_question_rows) if index == 0 else 0,
+                },
                 {
                     "value": f"{question_order}. {question_text}" if question_order is not None else question_text,
                     "style": 1,
@@ -841,13 +849,13 @@ def _build_ca_sheet_rows_v4(
                 stats_value = f"有效 {valid_count} / 均值 {_format_number(mean_value)} / 范围 {_format_number(min_value)}-{_format_number(max_value)}"
             else:
                 stats_value = f"有效 {valid_count}"
-            row_cells[1] = {"value": stats_value, "style": 1}
+            row_cells[2] = {"value": stats_value, "style": 1}
             rows.append(row_cells)
 
-    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     diff_valid_count = 0
     diff_numeric_values: List[float] = []
     diff_cells: List[Dict[str, Any]] = [
+        {"value": "差异化内容", "style": 2},
         {"value": "问卷未提及但访谈中出现的内容", "style": 1},
         {"value": "", "style": 1},
         {"value": "", "style": 1},
@@ -872,7 +880,7 @@ def _build_ca_sheet_rows_v4(
         diff_stats = f"有效 {diff_valid_count} / 均值 {_format_number(sum(diff_numeric_values) / len(diff_numeric_values))} / 范围 {_format_number(min(diff_numeric_values))}-{_format_number(max(diff_numeric_values))}"
     else:
         diff_stats = f"有效 {diff_valid_count}"
-    diff_cells[1] = {"value": diff_stats, "style": 1}
+    diff_cells[2] = {"value": diff_stats, "style": 1}
     rows.append(diff_cells)
 
     return rows
@@ -916,7 +924,7 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
     sheet.title = "CA表格"
     sheet.sheet_view.showGridLines = False
     is_summary_layout = schema_version >= 4 or has_row_summary
-    sheet.freeze_panes = "D6" if is_summary_layout else ("C6" if (schema_version >= 3 or has_notes_layout) else "B6")
+    sheet.freeze_panes = "E6" if is_summary_layout else ("C6" if (schema_version >= 3 or has_notes_layout) else "B6")
     sheet.sheet_view.zoomScale = 90
 
     thin_side = Side(style="thin", color="D9D9D9")
@@ -925,13 +933,15 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
     for col_index in range(1, total_cols + 1):
         letter = get_column_letter(col_index)
         if col_index == 1:
-            sheet.column_dimensions[letter].width = 42
+            sheet.column_dimensions[letter].width = 18 if is_summary_layout else 42
         elif is_summary_layout:
             if col_index == 2:
-                sheet.column_dimensions[letter].width = 28
+                sheet.column_dimensions[letter].width = 30
             elif col_index == 3:
+                sheet.column_dimensions[letter].width = 28
+            elif col_index == 4:
                 sheet.column_dimensions[letter].width = 36
-            elif include_evidence_columns and (col_index - 4) % 2 == 0:
+            elif include_evidence_columns and (col_index - 5) % 2 == 0:
                 sheet.column_dimensions[letter].width = 36
             elif include_evidence_columns:
                 sheet.column_dimensions[letter].width = 48
@@ -957,12 +967,11 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
     current_section = None
     for row_index, row in enumerate(rows, start=1):
         first_value = _clean_text(row[0].get("value")) if row else ""
+        second_value = _clean_text(row[1].get("value")) if len(row) > 1 else ""
         if first_value == "访谈细节":
             current_section = "detail"
         elif first_value == "问题":
             current_section = "question"
-        elif first_value.startswith("主题分组："):
-            current_section = "group"
         elif first_value == "差异化内容":
             current_section = "diff"
         for col_index in range(1, total_cols + 1):
@@ -986,13 +995,11 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
 
         if row_index == 1:
             sheet.row_dimensions[row_index].height = 32
-        elif first_value == "问题内容":
+        elif first_value in {"主题分组", "问题内容", "有效答案统计", "单行总结"}:
             sheet.row_dimensions[row_index].height = 32
         elif first_value in {"访谈细节", "问题"}:
             sheet.row_dimensions[row_index].height = 50
-        elif first_value.startswith("主题分组："):
-            sheet.row_dimensions[row_index].height = 50
-        elif current_section in {"question", "group"}:
+        elif current_section == "question":
             sheet.row_dimensions[row_index].height = 120
         elif current_section == "diff":
             sheet.row_dimensions[row_index].height = 120
@@ -1002,6 +1009,32 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
                 cell_text = _clean_text(cell_spec.get("value"))
                 max_lines = max(max_lines, cell_text.count("\n") + 1)
             sheet.row_dimensions[row_index].height = min(max(24, max_lines * 22), 120)
+
+    if is_summary_layout:
+        for row_index, row in enumerate(rows, start=1):
+            first_value = _clean_text(row[0].get("value")) if row else ""
+            second_value = _clean_text(row[1].get("value")) if len(row) > 1 else ""
+            if first_value == "问题" and second_value == "问题内容":
+                continue
+            if first_value == "差异化内容":
+                continue
+            if first_value == "主题分组" and second_value == "问题内容":
+                continue
+            merge_span = 0
+            if row and isinstance(row[0], dict):
+                merge_span_raw = row[0].get("merge_span")
+                if isinstance(merge_span_raw, int):
+                    merge_span = merge_span_raw
+                elif isinstance(merge_span_raw, str) and merge_span_raw.strip():
+                    try:
+                        merge_span = int(merge_span_raw.strip())
+                    except Exception:
+                        merge_span = 0
+            if merge_span > 1:
+                end_row = row_index + merge_span - 1
+                sheet.merge_cells(start_row=row_index, start_column=1, end_row=end_row, end_column=1)
+                merged_cell = sheet.cell(row=row_index, column=1)
+                merged_cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="left")
 
     if total_cols > 1:
         sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)

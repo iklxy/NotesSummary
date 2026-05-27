@@ -68,13 +68,6 @@ type MatrixRow =
     }
   | {
       key: string;
-      kind: "group";
-      label: string;
-      summary?: string;
-      questionUids: string[];
-    }
-  | {
-      key: string;
       kind: "meta";
       label: string;
       values: Record<string, string>;
@@ -82,6 +75,11 @@ type MatrixRow =
   | {
       key: string;
       kind: "question";
+      groupLabel: string;
+      groupSummary: string;
+      groupQuestionUids: string[];
+      groupRowSpan: number;
+      groupQuestionCount: number;
       label: string;
       questionUid: string;
       summaryText: string;
@@ -836,19 +834,17 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     rows.push({ key: "section-question", kind: "section", label: "问题" });
 
     groupedQuestionRows.forEach((group, groupIndex) => {
-      rows.push({
-        key: `group-${group.key || groupIndex}`,
-        kind: "group",
-        label: group.label || "未分组",
-        summary: group.summary,
-        questionUids: group.questionRows.map((column, index) => getQuestionKey(column, index)),
-      });
-
+      const groupQuestionUids = group.questionRows.map((column, index) => getQuestionKey(column, index));
       group.questionRows.forEach((column, index) => {
         const questionUid = getQuestionKey(column, index);
         rows.push({
           key: `question-${questionUid}`,
           kind: "question",
+          groupLabel: group.label || "未分组",
+          groupSummary: group.summary || "",
+          groupQuestionUids,
+          groupRowSpan: index === 0 ? group.questionRows.length : 0,
+          groupQuestionCount: group.questionRows.length,
           label: getQuestionLabel(column),
           questionUid,
           summaryText: String(column.summary_text || "/").trim() || "/",
@@ -1351,14 +1347,122 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       return [];
     }
 
+    const groupWidth = 160;
+    const questionWidth = 260;
     const answerWidth = showEvidenceColumns ? 260 : 300;
     const evidenceWidth = 320;
     const statsWidth = 220;
     const summaryWidth = 260;
-    const totalLeafColumns = 3 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
+    const totalLeafColumns = 4 + visibleInterviews.length * (showEvidenceColumns ? 2 : 1);
+
+    const renderGroupCell = (row: MatrixRow) => {
+      if (row.kind === "section") {
+        return {
+          children: <div className="font-semibold text-slate-700">{row.label}</div>,
+          props: { colSpan: totalLeafColumns },
+        };
+      }
+      if (row.kind === "meta") {
+        return <Text type="secondary">-</Text>;
+      }
+      if (row.kind === "diff") {
+        return <Tag color="green">差异</Tag>;
+      }
+      if (row.kind !== "question") {
+        return null;
+      }
+      if (row.groupRowSpan <= 0) {
+        return { children: null, props: { rowSpan: 0 } };
+      }
+      return {
+        children: (
+          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+            <Space align="center" size={8} wrap style={{ width: "100%" }}>
+              <Tag color="green">主题分组</Tag>
+              <Input
+                value={row.groupLabel}
+                onChange={(event) => updateGroupRow(row.groupQuestionUids, event.target.value)}
+                style={{ width: 110 }}
+              />
+              <Tag color="processing">{row.groupQuestionCount} 行</Tag>
+            </Space>
+            <Text type="secondary" className="text-xs">
+              {row.groupSummary || "该主题下的分析行。"}
+            </Text>
+          </Space>
+        ),
+        props: { rowSpan: row.groupRowSpan },
+      };
+    };
+
+    const renderQuestionCell = (row: MatrixRow) => {
+      if (row.kind === "section") {
+        return { children: null, props: { colSpan: 0 } };
+      }
+      if (row.kind === "meta") {
+        return <Text className="font-medium text-slate-700">{row.label}</Text>;
+      }
+      if (row.kind === "diff") {
+        return (
+          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+              {row.label}
+            </div>
+            <Text type="secondary" className="text-xs">
+              最后一行，用来展示问卷未覆盖但访谈中提到的内容。
+            </Text>
+          </Space>
+        );
+      }
+      return (
+        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <Input.TextArea
+            value={row.column.display_text ?? row.column.question_text ?? ""}
+            title={row.column.question_text || ""}
+            autoSize={{ minRows: 1, maxRows: 2 }}
+            style={{ width: 240, minHeight: 40, resize: "none" }}
+            onChange={(event) =>
+              updateQuestionRow(row.questionUid, {
+                display_text: event.target.value,
+              })
+            }
+          />
+          <Space align="center" size={8} wrap style={{ width: "100%" }}>
+            <Tag color={row.questionType === "quantitative" ? "gold" : "green"}>
+              {row.questionType === "quantitative" ? "定量" : "定性"}
+            </Tag>
+            <Select
+              value={row.questionType}
+              style={{ width: 110 }}
+              options={[
+                { label: "定性", value: "qualitative" },
+                { label: "定量", value: "quantitative" },
+              ]}
+              onChange={(value) =>
+                updateQuestionRow(row.questionUid, {
+                  question_type: value,
+                })
+              }
+            />
+            <Checkbox
+              checked={row.hidden}
+              onChange={(event) => updateQuestionRow(row.questionUid, { hidden: event.target.checked })}
+            >
+              隐藏
+            </Checkbox>
+            <Button danger size="small" onClick={() => deleteQuestionRow(row.questionUid)}>
+              删除
+            </Button>
+          </Space>
+          <Text type="secondary" className="text-xs">
+            {row.hidden ? "已隐藏" : "问题行"}
+          </Text>
+        </Space>
+      );
+    };
 
     const renderAnswerCell = (row: MatrixRow, interviewId: number) => {
-      if (row.kind === "section" || row.kind === "group") {
+      if (row.kind === "section") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta") {
@@ -1381,7 +1485,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     };
 
     const renderEvidenceCell = (row: MatrixRow, interviewId: number) => {
-      if (row.kind === "section" || row.kind === "group") {
+      if (row.kind === "section") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta") {
@@ -1403,7 +1507,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     };
 
     const renderStatsCell = (row: MatrixRow) => {
-      if (row.kind === "section" || row.kind === "group") {
+      if (row.kind === "section") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta") {
@@ -1421,7 +1525,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     };
 
     const renderSummaryCell = (row: MatrixRow) => {
-      if (row.kind === "section" || row.kind === "group") {
+      if (row.kind === "section") {
         return { children: null, props: { colSpan: 0 } };
       }
       if (row.kind === "meta" || row.kind === "diff") {
@@ -1432,102 +1536,22 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
 
     const columns: any[] = [
       {
-        key: "label",
-        title: "字段 / 问题",
-        dataIndex: "label",
+        key: "group",
+        title: "主题分组",
         fixed: "left" as const,
-        width: 420,
+        width: groupWidth,
         render: (_: unknown, row: MatrixRow) => {
-          if (row.kind === "section") {
-            return {
-              children: <div className="font-semibold text-slate-700">{row.label}</div>,
-              props: { colSpan: totalLeafColumns },
-            };
-          }
-          if (row.kind === "group") {
-            return {
-              children: (
-                <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                  <Space align="center" size={8} wrap style={{ width: "100%" }}>
-                    <Tag color="green">主题分组</Tag>
-                    <Input
-                      value={row.label}
-                      onChange={(event) => updateGroupRow(row.questionUids, event.target.value)}
-                      style={{ width: 320 }}
-                    />
-                    <Tag color="processing">{row.questionUids.length} 行</Tag>
-                  </Space>
-                  <Text type="secondary" className="text-xs">
-                    {row.summary || "该主题下的分析行。"}
-                  </Text>
-                </Space>
-              ),
-              props: { colSpan: totalLeafColumns },
-            };
-          }
-          if (row.kind === "meta") {
-            return <Text className="font-medium text-slate-700">{row.label}</Text>;
-          }
-          if (row.kind === "diff") {
-            return (
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
-                  {row.label}
-                </div>
-                <Text type="secondary" className="text-xs">
-                  最后一行，用来展示问卷未覆盖但访谈中提到的内容。
-                </Text>
-              </Space>
-            );
-          }
-          return (
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
-              <Space align="center" size={8} wrap style={{ width: "100%" }}>
-                <Tag color={row.questionType === "quantitative" ? "gold" : "green"}>
-                  {row.questionType === "quantitative" ? "定量" : "定性"}
-                </Tag>
-                <Tag color="blue">{row.group}</Tag>
-              </Space>
-              <Input.TextArea
-                value={row.column.display_text ?? row.column.question_text ?? ""}
-                title={row.column.question_text || ""}
-                autoSize={{ minRows: 1, maxRows: 2 }}
-                style={{ width: 540, minHeight: 40, resize: "none" }}
-                onChange={(event) =>
-                  updateQuestionRow(row.questionUid, {
-                    display_text: event.target.value,
-                  })
-                }
-              />
-              <Space align="center" size={8} wrap style={{ width: "100%" }}>
-                <Select
-                  value={row.questionType}
-                  style={{ width: 110 }}
-                  options={[
-                    { label: "定性", value: "qualitative" },
-                    { label: "定量", value: "quantitative" },
-                  ]}
-                  onChange={(value) =>
-                    updateQuestionRow(row.questionUid, {
-                      question_type: value,
-                    })
-                  }
-                />
-                <Checkbox
-                  checked={row.hidden}
-                  onChange={(event) => updateQuestionRow(row.questionUid, { hidden: event.target.checked })}
-                >
-                  隐藏
-                </Checkbox>
-                <Button danger size="small" onClick={() => deleteQuestionRow(row.questionUid)}>
-                  删除
-                </Button>
-              </Space>
-              <Text type="secondary" className="text-xs">
-                问题行
-              </Text>
-            </Space>
-          );
+          return renderGroupCell(row);
+        },
+      },
+      {
+        key: "question",
+        title: "问题内容",
+        dataIndex: "question",
+        fixed: "left" as const,
+        width: questionWidth,
+        render: (_: unknown, row: MatrixRow) => {
+          return renderQuestionCell(row);
         },
       },
       {
@@ -1644,7 +1668,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                 </Space>
               </div>
               <Paragraph className="!mb-0 text-sm text-slate-500">
-                默认沿用从详情页传入的访谈选择。矩阵按主题分组展开，左侧提供有效答案统计和行级总结，右侧保持访谈回答与引用列一致。
+                默认沿用从详情页传入的访谈选择。矩阵按主题分组展开，左侧是分组列，右侧是问题内容列，后面继续保留统计、总结与访谈回答列。
               </Paragraph>
             </Space>
           </Card>
@@ -1787,7 +1811,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
             ) : (
               <div className="overflow-auto">
                 <Paragraph className="!mb-3 text-sm text-slate-500">
-                  主题分组可以直接在分组行里编辑；问题行支持定性/定量切换，点击右上角箭头可展开或收起每个访谈右侧的引用列。
+                  主题分组会以左侧纵向合并单元格展示；问题内容列保留题目编辑、定性/定量切换与删除操作，点击右上角箭头可展开或收起每个访谈右侧的引用列。
                 </Paragraph>
                 <Table
                   rowKey="key"
@@ -1800,8 +1824,6 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   rowClassName={(record) =>
                     record.kind === "section"
                       ? "bg-slate-100 font-semibold"
-                      : record.kind === "group"
-                        ? "bg-emerald-50/50"
                       : record.kind === "diff"
                         ? "bg-emerald-50/50"
                         : record.kind === "question" && record.hidden
