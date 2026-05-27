@@ -206,7 +206,10 @@ def _build_ca_sheet_rows_v1(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
     return rows
 
 
-def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
+def _build_ca_sheet_rows_v2(
+    ca_payload: Dict[str, Any],
+    include_evidence_columns: bool = True,
+) -> List[List[Dict[str, Any]]]:
     """
     将新版 CA JSON 转换为 Excel 行数据。
     """
@@ -241,15 +244,17 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 }
             )
 
+    cell_step = 2 if include_evidence_columns else 1
+    total_cols = 1 + len(interview_columns) * cell_step
     rows: List[List[Dict[str, Any]]] = []
     title_text = f"CA 表格 - {project_name or project_id}"
-    rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (len(interview_columns) * 2))
+    rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     rows.append(
         [
             {"value": f"项目：{project_name or project_id}", "style": 1},
             {"value": f"生成时间：{generated_at or ''}", "style": 1},
         ]
-        + [{"value": "", "style": 1}] * max(0, len(interview_columns) * 2 - 2)
+        + [{"value": "", "style": 1}] * max(0, total_cols - 2)
     )
     rows.append(
         [
@@ -267,11 +272,11 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 "style": 1,
             },
         ]
-        + [{"value": "", "style": 1}] * max(0, len(interview_columns) * 2 - 2)
+        + [{"value": "", "style": 1}] * max(0, total_cols - 2)
     )
     rows.append([])
 
-    rows.append([{"value": "访谈细节", "style": 3}] + [{"value": "", "style": 3}] * (len(interview_columns) * 2))
+    rows.append([{"value": "访谈细节", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
 
     detail_specs = [
         ("访谈ID", lambda interview: str(interview.get("interview_id") or "").strip() or "/"),
@@ -294,14 +299,15 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
         detail_specs.append((label, _extract_meta_value))
 
     for detail_label, extractor in detail_specs:
-        row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}, {"value": "", "style": 1}]
+        row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}]
         for column in interview_columns:
             row_values.append({"value": extractor(column), "style": 1})
-            row_values.append({"value": "", "style": 1})
+            if include_evidence_columns:
+                row_values.append({"value": "", "style": 1})
         rows.append(row_values)
 
     rows.append([])
-    rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (len(interview_columns) * 2))
+    rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
 
     for item in columns:
         if not isinstance(item, dict):
@@ -330,10 +336,11 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                     answer_text = payload["value"]
                     evidence_text = "\n".join(payload.get("evidence") or [])
             row_cells.append({"value": answer_text, "style": 1})
-            row_cells.append({"value": evidence_text, "style": 1})
+            if include_evidence_columns:
+                row_cells.append({"value": evidence_text, "style": 1})
         rows.append(row_cells)
 
-    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (len(interview_columns) * 2))
+    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     diff_cells: List[Dict[str, Any]] = [{"value": "问卷未提及但访谈中出现的内容", "style": 1}]
     for interview in interview_columns:
         interview_id = str(interview.get("interview_id") or "").strip()
@@ -344,7 +351,8 @@ def _build_ca_sheet_rows_v2(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
             answer_text = payload["value"]
             evidence_text = "\n".join(payload.get("evidence") or [])
         diff_cells.append({"value": answer_text, "style": 1})
-        diff_cells.append({"value": evidence_text, "style": 1})
+        if include_evidence_columns:
+            diff_cells.append({"value": evidence_text, "style": 1})
     rows.append(diff_cells)
 
     return rows
@@ -458,7 +466,10 @@ def _extract_grouped_rows_v3(ca_payload: Dict[str, Any]) -> List[Dict[str, Any]]
     return grouped_rows
 
 
-def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
+def _build_ca_sheet_rows_v3(
+    ca_payload: Dict[str, Any],
+    include_evidence_columns: bool = True,
+) -> List[List[Dict[str, Any]]]:
     """
     将 Notes 驱动的 CA JSON 转换为 Excel 行数据。
     """
@@ -491,15 +502,17 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 }
             )
 
+    cell_step = 2 if include_evidence_columns else 1
+    total_cols = 2 + len(interview_columns) * cell_step
     rows: List[List[Dict[str, Any]]] = []
     title_text = f"CA Capture Sheet - {project_name or project_id}"
-    rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     rows.append(
         [
             {"value": f"项目：{project_name or project_id}", "style": 1},
             {"value": f"生成时间：{generated_at or ''}", "style": 1},
         ]
-        + [{"value": "", "style": 1}] * max(0, 2 + len(interview_columns) * 2 - 2)
+        + [{"value": "", "style": 1}] * max(0, total_cols - 2)
     )
     rows.append(
         [
@@ -517,11 +530,11 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 "style": 1,
             },
         ]
-        + [{"value": "", "style": 1}] * max(0, 2 + len(interview_columns) * 2 - 2)
+        + [{"value": "", "style": 1}] * max(0, total_cols - 2)
     )
     rows.append([])
 
-    rows.append([{"value": "访谈细节", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    rows.append([{"value": "访谈细节", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
 
     detail_specs = [
         ("访谈ID", lambda interview: str(interview.get("interview_id") or "").strip() or "/"),
@@ -547,11 +560,12 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
         row_values: List[Dict[str, Any]] = [{"value": detail_label, "style": 2}]
         for column in interview_columns:
             row_values.append({"value": extractor(column), "style": 1})
-            row_values.append({"value": "", "style": 1})
+            if include_evidence_columns:
+                row_values.append({"value": "", "style": 1})
         rows.append(row_values)
 
     rows.append([])
-    rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    rows.append([{"value": "问题", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
 
     for group in grouped_rows:
         group_label = str(group.get("group_label") or "未分组").strip() or "未分组"
@@ -562,7 +576,7 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 {"value": f"主题分组：{group_label}", "style": 3},
                 {"value": group_summary or f"{len(question_rows)} 行", "style": 1},
             ]
-            + [{"value": "", "style": 3}] * max(0, 2 + len(interview_columns) * 2 - 2)
+            + [{"value": "", "style": 3}] * max(0, total_cols - 2)
         )
         for item in question_rows:
             if not isinstance(item, dict):
@@ -583,19 +597,19 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
             ]
             numeric_values: List[float] = []
             valid_count = 0
-            for interview in interview_columns:
-                interview_id = str(interview.get("interview_id") or "").strip()
-                answer_text = "/"
-                evidence_text = ""
-                if interview_id and question_uid and isinstance(ca_payload.get("cells"), dict):
-                    row_cells_by_interview = ca_payload.get("cells").get(interview_id)
-                    if isinstance(row_cells_by_interview, dict):
-                        payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
-                        answer_text = payload["value"]
-                        evidence_text = "\n".join(payload.get("evidence") or [])
-                        value_text = str(payload.get("value") or "").strip()
-                        if value_text and value_text != "/":
-                            valid_count += 1
+        for interview in interview_columns:
+            interview_id = str(interview.get("interview_id") or "").strip()
+            answer_text = "/"
+            evidence_text = ""
+            if interview_id and question_uid and isinstance(ca_payload.get("cells"), dict):
+                row_cells_by_interview = ca_payload.get("cells").get(interview_id)
+                if isinstance(row_cells_by_interview, dict):
+                    payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
+                    answer_text = payload["value"]
+                    evidence_text = "\n".join(payload.get("evidence") or [])
+                    value_text = str(payload.get("value") or "").strip()
+                    if value_text and value_text != "/":
+                        valid_count += 1
                         numeric_value = payload.get("numeric_value")
                         if isinstance(numeric_value, (int, float)):
                             numeric_values.append(float(numeric_value))
@@ -604,7 +618,8 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                             if isinstance(parsed, (int, float)):
                                 numeric_values.append(float(parsed))
                 row_cells.append({"value": answer_text, "style": 1})
-                row_cells.append({"value": evidence_text, "style": 1})
+                if include_evidence_columns:
+                    row_cells.append({"value": evidence_text, "style": 1})
             if question_type == "quantitative" and numeric_values:
                 mean_value = sum(numeric_values) / len(numeric_values)
                 min_value = min(numeric_values)
@@ -615,7 +630,7 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
             row_cells.insert(1, {"value": f"{stats_value}｜{'定量' if question_type == 'quantitative' else '定性'}", "style": 1})
             rows.append(row_cells)
 
-    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (2 + len(interview_columns) * 2 - 1))
+    rows.append([{"value": "差异化内容", "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
     diff_valid_count = 0
     diff_numeric_values: List[float] = []
     diff_cells: List[Dict[str, Any]] = [
@@ -635,7 +650,8 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
             if isinstance(numeric_value, (int, float)):
                 diff_numeric_values.append(float(numeric_value))
         diff_cells.append({"value": answer_text, "style": 1})
-        diff_cells.append({"value": evidence_text, "style": 1})
+        if include_evidence_columns:
+            diff_cells.append({"value": evidence_text, "style": 1})
     if diff_numeric_values:
         diff_stats = f"有效 {diff_valid_count} / 均值 {_format_number(sum(diff_numeric_values) / len(diff_numeric_values))} / 范围 {_format_number(min(diff_numeric_values))}-{_format_number(max(diff_numeric_values))}"
     else:
@@ -646,7 +662,10 @@ def _build_ca_sheet_rows_v3(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
     return rows
 
 
-def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
+def _build_ca_sheet_rows_v4(
+    ca_payload: Dict[str, Any],
+    include_evidence_columns: bool = True,
+) -> List[List[Dict[str, Any]]]:
     """
     将带行总结列的 Notes 驱动 CA JSON 转换为 Excel 行数据。
     """
@@ -679,7 +698,8 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                 }
             )
 
-    total_cols = 3 + len(interview_columns) * 2
+    cell_step = 2 if include_evidence_columns else 1
+    total_cols = 3 + len(interview_columns) * cell_step
     rows: List[List[Dict[str, Any]]] = []
     title_text = f"CA Capture Sheet - {project_name or project_id}"
     rows.append([{"value": title_text, "style": 3}] + [{"value": "", "style": 3}] * (total_cols - 1))
@@ -742,7 +762,8 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
         ]
         for column in interview_columns:
             row_values.append({"value": extractor(column), "style": 1})
-            row_values.append({"value": "", "style": 1})
+            if include_evidence_columns:
+                row_values.append({"value": "", "style": 1})
         rows.append(row_values)
 
     rows.append([])
@@ -811,7 +832,8 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
                             if isinstance(parsed, (int, float)):
                                 numeric_values.append(float(parsed))
                 row_cells.append({"value": answer_text, "style": 1})
-                row_cells.append({"value": evidence_text, "style": 1})
+                if include_evidence_columns:
+                    row_cells.append({"value": evidence_text, "style": 1})
             if question_type == "quantitative" and numeric_values:
                 mean_value = sum(numeric_values) / len(numeric_values)
                 min_value = min(numeric_values)
@@ -844,7 +866,8 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
             if isinstance(numeric_value, (int, float)):
                 diff_numeric_values.append(float(numeric_value))
         diff_cells.append({"value": answer_text, "style": 1})
-        diff_cells.append({"value": evidence_text, "style": 1})
+        if include_evidence_columns:
+            diff_cells.append({"value": evidence_text, "style": 1})
     if diff_numeric_values:
         diff_stats = f"有效 {diff_valid_count} / 均值 {_format_number(sum(diff_numeric_values) / len(diff_numeric_values))} / 范围 {_format_number(min(diff_numeric_values))}-{_format_number(max(diff_numeric_values))}"
     else:
@@ -855,7 +878,7 @@ def _build_ca_sheet_rows_v4(ca_payload: Dict[str, Any]) -> List[List[Dict[str, A
     return rows
 
 
-def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
+def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_columns: bool = True) -> bytes:
     """
     将 CA JSON 生成可下载的 Excel 二进制。
     """
@@ -880,11 +903,11 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
             for column in ca_payload.get("columns")
         )
     if schema_version >= 4 or has_row_summary:
-        rows = _build_ca_sheet_rows_v4(ca_payload)
+        rows = _build_ca_sheet_rows_v4(ca_payload, include_evidence_columns=include_evidence_columns)
     elif schema_version >= 3 or has_notes_layout:
-        rows = _build_ca_sheet_rows_v3(ca_payload)
+        rows = _build_ca_sheet_rows_v3(ca_payload, include_evidence_columns=include_evidence_columns)
     elif schema_version >= 2 or ca_payload.get("diff_row") is not None:
-        rows = _build_ca_sheet_rows_v2(ca_payload)
+        rows = _build_ca_sheet_rows_v2(ca_payload, include_evidence_columns=include_evidence_columns)
     else:
         rows = _build_ca_sheet_rows_v1(ca_payload)
     total_cols = max(2, max((len(row) for row in rows), default=2))
@@ -908,19 +931,26 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any]) -> bytes:
                 sheet.column_dimensions[letter].width = 28
             elif col_index == 3:
                 sheet.column_dimensions[letter].width = 36
-            elif (col_index - 4) % 2 == 0:
+            elif include_evidence_columns and (col_index - 4) % 2 == 0:
                 sheet.column_dimensions[letter].width = 36
-            else:
+            elif include_evidence_columns:
                 sheet.column_dimensions[letter].width = 48
+            else:
+                sheet.column_dimensions[letter].width = 42
         elif schema_version >= 3 or has_notes_layout:
             if col_index == 2:
                 sheet.column_dimensions[letter].width = 28
-            elif (col_index - 3) % 2 == 0:
+            elif include_evidence_columns and (col_index - 3) % 2 == 0:
                 sheet.column_dimensions[letter].width = 36
-            else:
+            elif include_evidence_columns:
                 sheet.column_dimensions[letter].width = 48
+            else:
+                sheet.column_dimensions[letter].width = 42
         elif schema_version >= 2:
-            sheet.column_dimensions[letter].width = 34 if (col_index - 2) % 2 == 0 else 46
+            if include_evidence_columns:
+                sheet.column_dimensions[letter].width = 34 if (col_index - 2) % 2 == 0 else 46
+            else:
+                sheet.column_dimensions[letter].width = 42
         else:
             sheet.column_dimensions[letter].width = 42 if schema_version >= 2 else 40
 

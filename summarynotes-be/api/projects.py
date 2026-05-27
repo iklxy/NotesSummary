@@ -1203,6 +1203,11 @@ def export_project_ca_table_xlsx(
     body = payload or {}
     questionnaire_id = body.get("questionnaire_id")
     ca_json = body.get("ca_json") if isinstance(body, dict) else None
+    include_evidence_columns = body.get("include_evidence_columns", True)
+    if isinstance(include_evidence_columns, str):
+        include_evidence_columns = include_evidence_columns.strip().lower() not in {"0", "false", "no", "off", ""}
+    else:
+        include_evidence_columns = bool(include_evidence_columns)
     if not isinstance(ca_json, dict):
         row = fetch_ca_table_by_project(project_id, int(questionnaire_id) if questionnaire_id is not None else None)
         if row:
@@ -1237,7 +1242,7 @@ def export_project_ca_table_xlsx(
         raise HTTPException(status_code=500, detail=f"save ca table failed: {e}")
 
     try:
-        xlsx_bytes = build_ca_table_xlsx_bytes(ca_json)
+        xlsx_bytes = build_ca_table_xlsx_bytes(ca_json, include_evidence_columns=include_evidence_columns)
     except Exception as e:
         log_project("CA", project_id, f"CA Excel export failed: build xlsx failed error={e}")
         raise HTTPException(status_code=500, detail=f"build ca xlsx failed: {e}")

@@ -8,6 +8,8 @@ import {
   Card,
   Checkbox,
   Input,
+  Modal,
+  Radio,
   Select,
   Space,
   Spin,
@@ -538,6 +540,8 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
   const [savingFramework, setSavingFramework] = useState(false);
   const [generatingContent, setGeneratingContent] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportIncludeEvidenceColumns, setExportIncludeEvidenceColumns] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
   const [questionnaireName, setQuestionnaireName] = useState("");
@@ -1104,7 +1108,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     }
   };
 
-  const handleExport = async () => {
+  const handleExport = async (includeEvidenceColumns: boolean) => {
     const snapshot =
       finalSnapshot && !finalDirty && !isFinalSnapshotOutdated(frameworkSnapshot, finalSnapshot)
         ? finalSnapshot
@@ -1127,6 +1131,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       const resp = await exportProjectCaTableXlsx(projectId, {
         questionnaire_id: questionnaireId,
         ca_json: canonical,
+        include_evidence_columns: includeEvidenceColumns,
       });
       const url = URL.createObjectURL(resp.blob);
       const link = document.createElement("a");
@@ -1633,7 +1638,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   <Button type="primary" loading={generatingContent} onClick={() => void handleGenerateContent()}>
                     生成内容
                   </Button>
-                  <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+                  <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportDialogOpen(true)}>
                     导出 Excel
                   </Button>
                 </Space>
@@ -1643,6 +1648,38 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
               </Paragraph>
             </Space>
           </Card>
+
+          <Modal
+            title="导出 Excel"
+            open={exportDialogOpen}
+            okText="导出"
+            cancelText="取消"
+            confirmLoading={exporting}
+            onOk={() => {
+              setExportDialogOpen(false);
+              void handleExport(exportIncludeEvidenceColumns);
+            }}
+            onCancel={() => {
+              if (!exporting) {
+                setExportDialogOpen(false);
+              }
+            }}
+          >
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <Text type="secondary">请选择导出时是否包含原文引用列。</Text>
+              <Radio.Group
+                value={exportIncludeEvidenceColumns}
+                onChange={(event) => {
+                  setExportIncludeEvidenceColumns(event.target.value as boolean);
+                }}
+              >
+                <Space direction="vertical" size={8}>
+                  <Radio value={true}>包含原文引用列</Radio>
+                  <Radio value={false}>不包含原文引用列</Radio>
+                </Space>
+              </Radio.Group>
+            </Space>
+          </Modal>
 
           {error ? <Alert type="error" message={error} /> : null}
 
