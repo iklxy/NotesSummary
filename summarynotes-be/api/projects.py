@@ -40,7 +40,9 @@ from db import (
     update_project_guide,
     upsert_ca_table,
 )
+from ca_summary import build_ca_summary_payload, get_ca_summary_cache_path
 from storage import delete_remote_object
+from docx_export import DOCX_MIME_TYPE, build_ca_summary_docx_bytes
 from xlsx_export import XLSX_MIME_TYPE, build_ca_table_xlsx_bytes
 
 
@@ -806,6 +808,23 @@ def _build_ca_export_filename(project_name: str | None, project_id: int) -> str:
     return f"{cleaned}_CA.xlsx"
 
 
+def _build_ca_summary_export_filename(project_name: str | None, project_id: int) -> str:
+    """
+    构造 CA Summary Word 的导出文件名。
+    """
+    base_name = (project_name or f"project_{project_id}").strip() or f"project_{project_id}"
+    safe_chars: List[str] = []
+    for ch in base_name:
+        if ch.isalnum() or ch in {"-", "_", " ", "(", ")", "[", "]", "【", "】", "、", ".", ","}:
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    cleaned = "".join(safe_chars).strip().replace(" ", "_")
+    if not cleaned:
+        cleaned = f"project_{project_id}"
+    return f"{cleaned}_CA_单行总结.docx"
+
+
 @router.post("", response_model=Dict[str, Any])
 def create_project(
     background_tasks: BackgroundTasks,
@@ -1002,7 +1021,7 @@ def get_project_ca_table(
     ca_json = _hydrate_ca_payload_from_row(row, project.get("name")) if row else None
 
     if ca_json is None:
-        fallback_payload, fallback_path = _load_ca_payload_from_files(project_id, questionnaire_id)
+        fallback_payload, _ = _load_ca_payload_from_files(project_id, questionnaire_id)
         if fallback_payload is not None:
             ca_json = fallback_payload
             fallback_framework_json = fallback_payload.get("framework_json") or fallback_payload
@@ -1254,6 +1273,112 @@ def export_project_ca_table_xlsx(
     }
     log_project("CA", project_id, f"CA Excel export done filename={filename}")
     return Response(content=xlsx_bytes, media_type=XLSX_MIME_TYPE, headers=headers)
+
+
+@router.post("/{project_id}/ca-table/export-word")
+def export_project_ca_table_word(
+    project_id: int,
+    payload: Dict[str, Any] | None = Body(default=None),
+    questionnaire_id: int | None = None,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Response:
+    """
+    导出项目级 CA 的单行总结 Word。
+    """
+    project = _get_owned_project_or_404(project_id, current_user_id)
+    log_project("CA", project_id, "CA Word export start")
+    body = payload or {}
+    questionnaire_id = int(body.get("questionnaire_id")) if body.get("questionnaire_id") is not None else questionnaire_id
+    ca_json = body.get("ca_json") if isinstance(body.get("ca_json"), dict) else None
+    if not isinstance(ca_json, dict):
+        row = fetch_ca_table_by_project(project_id, questionnaire_id)
+        ca_json = _hydrate_ca_payload_from_row(row, project.get("name")) if row else None
+
+    if ca_json is None:
+        fallback_payload, _ = _load_ca_payload_from_files(project_id, questionnaire_id)
+        if fallback_payload is not None:
+            ca_json = fallback_payload
+            fallback_framework_json = fallback_payload.get("framework_json") or fallback_payload
+            fallback_final_json = fallback_payload.get("final_json") if isinstance(fallback_payload.get("final_json"), dict) else None
+            try:
+                upsert_ca_table(
+                    project_id=project_id,
+                    questionnaire_id=questionnaire_id,
+                    ca_json=fallback_payload,
+                    framework_json=fallback_framework_json,
+                    final_json=fallback_final_json,
+                    framework_status=str(fallback_payload.get("framework_status") or fallback_payload.get("status") or "reviewed"),
+                    final_status=str(fallback_payload.get("final_status") or ("done" if fallback_final_json is not None else "pending")),
+                    error_message=fallback_payload.get("error_message"),
+                    generated_at=fallback_payload.get("generated_at"),
+                    framework_generated_at=fallback_payload.get("framework_generated_at"),
+                    final_generated_at=fallback_payload.get("final_generated_at"),
+                    reviewed_at=fallback_payload.get("reviewed_at"),
+                )
+            except Exception:
+                pass
+
+    if not isinstance(ca_json, dict):
+        log_project("CA", project_id, "CA Word export failed: no CA data available")
+        raise HTTPException(status_code=404, detail="ca table not found")
+
+    try:
+        framework_json = ca_json.get("framework_json") if isinstance(ca_json.get("framework_json"), dict) else ca_json
+        final_json = ca_json.get("final_json") if isinstance(ca_json.get("final_json"), dict) else None
+        upsert_ca_table(
+            project_id=project_id,
+            questionnaire_id=int(questionnaire_id) if questionnaire_id is not None else ca_json.get("questionnaire_id"),
+            ca_json=ca_json,
+            framework_json=framework_json,
+            final_json=final_json,
+            framework_status=str(ca_json.get("framework_status") or ca_json.get("status") or "reviewed"),
+            final_status=str(ca_json.get("final_status") or ("done" if final_json is not None else "pending")),
+            error_message=ca_json.get("error_message"),
+            generated_at=ca_json.get("generated_at"),
+            framework_generated_at=ca_json.get("framework_generated_at") or ca_json.get("generated_at"),
+            final_generated_at=ca_json.get("final_generated_at"),
+            reviewed_at=ca_json.get("reviewed_at"),
+        )
+    except Exception as e:
+        log_project("CA", project_id, f"CA Word export database backfill failed error={e}")
+        raise HTTPException(status_code=500, detail=f"save ca table failed: {e}")
+
+    try:
+        summary_payload = build_ca_summary_payload(ca_json)
+        summary_cache_path = get_ca_summary_cache_path(
+            project_id,
+            int(questionnaire_id) if questionnaire_id is not None else ca_json.get("questionnaire_id"),
+        )
+        summary_cache_path.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        log_project("CA", project_id, f"CA Word summary payload failed error={e}")
+        raise HTTPException(status_code=500, detail=f"build ca summary payload failed: {e}")
+
+    project_name = project.get("name")
+    questionnaire_name = str(ca_json.get("questionnaire_name") or (f"questionnaire_{questionnaire_id}" if questionnaire_id else "")).strip()
+    subtitle_lines = [
+        f"项目：{project_name or project_id}",
+        f"问卷：{questionnaire_name or questionnaire_id or '未指定'}",
+        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"有效题目数：{len(summary_payload.get('items') or [])}",
+    ]
+
+    try:
+        docx_bytes = build_ca_summary_docx_bytes(
+            title=f"CA 单行总结 - {project_name or project_id}",
+            subtitle_lines=subtitle_lines,
+            summary_items=summary_payload.get("items") or [],
+        )
+    except Exception as e:
+        log_project("CA", project_id, f"CA Word export failed: build docx failed error={e}")
+        raise HTTPException(status_code=500, detail=f"build ca summary docx failed: {e}")
+
+    filename = _build_ca_summary_export_filename(project_name, project_id)
+    headers = {
+        "Content-Disposition": _build_download_content_disposition(filename),
+    }
+    log_project("CA", project_id, f"CA Word export done filename={filename} item_count={len(summary_payload.get('items') or [])}")
+    return Response(content=docx_bytes, media_type=DOCX_MIME_TYPE, headers=headers)
 
 
 @router.delete("/{project_id}", response_model=Dict[str, Any])

@@ -827,6 +827,144 @@ def build_overall_notes_docx_bytes(
     return buffer.getvalue()
 
 
+def _build_ca_summary_document_xml(
+    title: str,
+    subtitle_lines: Iterable[str],
+    summary_items: List[Dict[str, Any]],
+) -> str:
+    """
+    组装 CA Summary Word 的主文档 XML。
+    """
+    paragraphs: List[str] = []
+    paragraphs.append(_w_paragraph(title, bold=True, size=32, align="center"))
+    paragraphs.append(_w_blank_paragraph())
+    for line in subtitle_lines:
+        cleaned = _clean_text(line)
+        if cleaned:
+            paragraphs.append(_paragraph_from_text(cleaned, size=22))
+    if subtitle_lines:
+        paragraphs.append(_w_blank_paragraph())
+
+    paragraphs.append(_paragraph_from_text("CA 单行总结", bold=True, size=28))
+    if summary_items:
+        for index, item in enumerate(summary_items, start=1):
+            question = _clean_text(item.get("question")) or f"问题 {index}"
+            valid_answer_count = item.get("valid_answer_count")
+            summary_text = _clean_text(item.get("summary_text"))
+            paragraphs.append(_paragraph_from_text(f"Q{index}: {question}", bold=True, size=24))
+            paragraphs.append(_paragraph_from_text(f"有效回答数：{valid_answer_count if valid_answer_count is not None else 0}", size=22))
+            paragraphs.append(_paragraph_from_text("观点：", bold=True, size=22))
+            if summary_text:
+                _append_markdown_text(paragraphs, summary_text, base_size=22)
+            else:
+                paragraphs.append(_paragraph_from_text("暂无可展示的内容。", size=22))
+            paragraphs.append(_w_blank_paragraph())
+    else:
+        paragraphs.append(_paragraph_from_text("暂无可导出的单行总结。", size=22))
+        paragraphs.append(_w_blank_paragraph())
+
+    body = "".join(paragraphs)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"'
+        ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+        ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+        ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        ' xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+        ' xmlns:v="urn:schemas-microsoft-com:vml"'
+        ' xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"'
+        ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+        ' xmlns:w10="urn:schemas-microsoft-com:office:word"'
+        ' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
+        ' xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"'
+        ' xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"'
+        ' xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"'
+        ' xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+        ' mc:Ignorable="w14 wp14">'
+        "<w:body>"
+        f"{body}"
+        "<w:sectPr>"
+        "<w:pgSz w:w=\"11906\" w:h=\"16838\"/>"
+        "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" "
+        "w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>"
+        "</w:sectPr>"
+        "</w:body>"
+        "</w:document>"
+    )
+
+
+def build_ca_summary_docx_bytes(
+    *,
+    title: str,
+    subtitle_lines: Iterable[str],
+    summary_items: List[Dict[str, Any]],
+) -> bytes:
+    """
+    生成 CA Summary Word 的 .docx 文件二进制。
+    """
+    document_xml = _build_ca_summary_document_xml(title, subtitle_lines, summary_items)
+    core_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+        ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+        ' xmlns:dcterms="http://purl.org/dc/terms/"'
+        ' xmlns:dcmitype="http://purl.org/dc/dcmitype/"'
+        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f"<dc:title>{escape(_clean_text(title))}</dc:title>"
+        f"<dc:creator>NotesSummary</dc:creator>"
+        f"<cp:lastModifiedBy>NotesSummary</cp:lastModifiedBy>"
+        f"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}</dcterms:created>"
+        f"<dcterms:modified xsi:type=\"dcterms:W3CDTF\">{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}</dcterms:modified>"
+        "</cp:coreProperties>"
+    )
+    app_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+        ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        "<Application>NotesSummary</Application>"
+        "</Properties>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/docProps/core.xml" '
+        'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        "</Types>"
+    )
+    rels_root = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/>'
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" '
+        'Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" '
+        'Target="docProps/app.xml"/>'
+        "</Relationships>"
+    )
+
+    buffer = BytesIO()
+    with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels_root)
+        archive.writestr("docProps/core.xml", core_xml)
+        archive.writestr("docProps/app.xml", app_xml)
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
 def _w_blank_paragraph() -> str:
     """
     生成空白段落。

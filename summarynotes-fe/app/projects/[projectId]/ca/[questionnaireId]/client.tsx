@@ -29,6 +29,7 @@ import {
 import BrandHero from "../../../../../components/BrandHero";
 import { getInterviewDetailFields } from "../../../../../lib/interviewDetailFieldsApi";
 import {
+  exportProjectCaTableWord,
   exportProjectCaTableXlsx,
   generateProjectCaTable,
   getProjectCaTable,
@@ -538,6 +539,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
   const [savingFramework, setSavingFramework] = useState(false);
   const [generatingContent, setGeneratingContent] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingWord, setExportingWord] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportIncludeEvidenceColumns, setExportIncludeEvidenceColumns] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1145,6 +1147,46 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
     }
   };
 
+  const handleExportWord = async () => {
+    const snapshot =
+      finalSnapshot && !finalDirty && !isFinalSnapshotOutdated(frameworkSnapshot, finalSnapshot)
+        ? finalSnapshot
+        : frameworkSnapshot;
+    if (!snapshot) {
+      message.error("请先生成或加载 CA");
+      return;
+    }
+    setExportingWord(true);
+    try {
+      const canonical = toCanonicalSnapshot(
+        snapshot,
+        projectId,
+        projectName || `项目 ${projectId}`,
+        questionnaireId,
+        questionnaireName || `DG ${questionnaireId}`,
+        fieldDefinitions,
+        selectedInterviewIds,
+      );
+      const resp = await exportProjectCaTableWord(projectId, {
+        questionnaire_id: questionnaireId,
+        ca_json: canonical,
+      });
+      const url = URL.createObjectURL(resp.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = resp.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      message.success("Word 已导出");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导出 Word 失败");
+    } finally {
+      setExportingWord(false);
+    }
+  };
+
   const handleMetaFieldChange = (field: string, checked: boolean) => {
     setSelectedMetaFields((prev) => {
       if (checked) {
@@ -1664,6 +1706,9 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                   </Button>
                   <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportDialogOpen(true)}>
                     导出 Excel
+                  </Button>
+                  <Button icon={<DownloadOutlined />} loading={exportingWord} onClick={() => void handleExportWord()}>
+                    导出 Word
                   </Button>
                 </Space>
               </div>

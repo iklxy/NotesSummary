@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from DbAccess import DbAccess
 from InterviewLogger import log_interview, log_project
+from ca_summary import build_ca_summary_payload, get_ca_summary_cache_path
 from Model import ModelClient
 from MinutesWorkflow import DEFAULT_MINUTES_TXT_NAME, _score_segment, _tokenize_for_search
 from ProjectContext import load_project_context_by_id
@@ -1489,6 +1490,16 @@ def generate_ca_table_for_project(
     cache_path = _build_ca_cache_path(project_id, resolved_questionnaire_id)
     log(f"Writing CA final cache file: {cache_path}", project_id=project_id)
     cache_path.write_text(json.dumps(safe_final_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        summary_payload = build_ca_summary_payload(safe_final_payload)
+        summary_cache_path = get_ca_summary_cache_path(project_id, resolved_questionnaire_id)
+        summary_cache_path.write_text(json.dumps(_json_safe_value(summary_payload), ensure_ascii=False, indent=2), encoding="utf-8")
+        log(
+            f"Writing CA summary cache file: {summary_cache_path} item_count={len(summary_payload.get('items') or [])}",
+            project_id=project_id,
+        )
+    except Exception as exc:
+        log(f"Writing CA summary cache failed error={exc}\n{traceback.format_exc()}", project_id=project_id)
     try:
         log(
             f"Writing CA final to db questionnaire_id={resolved_questionnaire_id} "

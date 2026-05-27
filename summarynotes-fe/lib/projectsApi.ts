@@ -166,3 +166,43 @@ export async function exportProjectCaTableXlsx(
     filename,
   };
 }
+
+export async function exportProjectCaTableWord(
+  projectId: number,
+  payload: Record<string, unknown>,
+): Promise<{ blob: Blob; filename: string }> {
+  const resp = await fetch(`/api/projects/${projectId}/ca/export-word`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    let detail: unknown;
+    try {
+      detail = await resp.json();
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`export ca word failed: ${JSON.stringify(detail)}`);
+  }
+  const contentDisposition = resp.headers.get("content-disposition") || "";
+  const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  let filename = `project_${projectId}_CA_单行总结.docx`;
+  if (filenameStarMatch?.[1]) {
+    try {
+      filename = decodeURIComponent(filenameStarMatch[1]);
+    } catch {
+      filename = filenameStarMatch[1];
+    }
+  } else if (filenameMatch?.[1]) {
+    filename = filenameMatch[1];
+  }
+  return {
+    blob: await resp.blob(),
+    filename,
+  };
+}
