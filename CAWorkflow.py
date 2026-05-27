@@ -19,6 +19,8 @@ import json
 import re
 import traceback
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from time import perf_counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -494,6 +496,214 @@ def _collect_interview_blocks_for_question(
             }
         )
     return interview_blocks
+
+
+def _group_ca_columns_for_generation(
+    columns: List[Dict[str, Any]],
+    groups: Any,
+) -> List[Dict[str, Any]]:
+    """
+    按主题分组整理 CA 列，用于分组并发生成。
+    """
+    grouped_columns: List[Dict[str, Any]] = []
+    if isinstance(groups, list) and groups:
+        sorted_groups = [item for item in groups if isinstance(item, dict)]
+        sorted_groups.sort(key=lambda item: int(item.get("order") or 0))
+        consumed: set[str] = set()
+
+        for group_index, group in enumerate(sorted_groups, start=1):
+            group_label = str(group.get("title") or group.get("name") or f"主题分组 {group_index}").strip() or f"主题分组 {group_index}"
+            group_summary = str(group.get("summary") or "").strip()
+            row_uids = [
+                str(uid or "").strip()
+                for uid in (group.get("row_uids") or [])
+                if str(uid or "").strip()
+            ]
+            group_columns: List[Dict[str, Any]] = []
+            if row_uids:
+                row_uid_set = set(row_uids)
+                for column in columns:
+                    if not isinstance(column, dict):
+                        continue
+                    question_uid = str(column.get("question_uid") or column.get("column_id") or "").strip()
+                    if question_uid in row_uid_set:
+                        group_columns.append(column)
+                        consumed.add(question_uid)
+            else:
+                group_columns = [
+                    column
+                    for column in columns
+                    if isinstance(column, dict) and str(column.get("group") or "").strip() == group_label
+                ]
+                for column in group_columns:
+                    question_uid = str(column.get("question_uid") or column.get("column_id") or "").strip()
+                    if question_uid:
+                        consumed.add(question_uid)
+            if group_columns:
+                grouped_columns.append(
+                    {
+                        "group_label": group_label,
+                        "group_summary": group_summary,
+                        "columns": group_columns,
+                    }
+                )
+
+        leftovers = [
+            column
+            for column in columns
+            if isinstance(column, dict)
+            and str(column.get("question_uid") or column.get("column_id") or "").strip() not in consumed
+        ]
+        if leftovers:
+            grouped_columns.append(
+                {
+                    "group_label": str(leftovers[0].get("group") or "未分组").strip() or "未分组",
+                    "group_summary": str(leftovers[0].get("group_summary") or "").strip(),
+                    "columns": leftovers,
+                }
+            )
+        return grouped_columns
+
+    current_label = None
+    current_summary = ""
+    current_columns: List[Dict[str, Any]] = []
+    for column in columns:
+        if not isinstance(column, dict):
+            continue
+        label = str(column.get("group") or "未分组").strip() or "未分组"
+        summary = str(column.get("group_summary") or "").strip()
+        if current_label is None or current_label != label:
+            if current_columns:
+                grouped_columns.append(
+                    {
+                        "group_label": current_label or "未分组",
+                        "group_summary": current_summary,
+                        "columns": current_columns,
+                    }
+                )
+            current_label = label
+            current_summary = summary
+            current_columns = [column]
+            continue
+        current_columns.append(column)
+    if current_columns:
+        grouped_columns.append(
+            {
+                "group_label": current_label or "未分组",
+                "group_summary": current_summary,
+                "columns": current_columns,
+            }
+        )
+    return grouped_columns
+
+
+def _generate_ca_question_content(
+    project_context: Any,
+    questionnaire_name: str,
+    question_uid: str,
+    question_order: int,
+    question_text: str,
+    question_type: str,
+    question_group: str,
+    question_group_summary: str,
+    interview_rows: List[Dict[str, Any]],
+    minutes_texts: Dict[int, str],
+    selected_interview_ids: List[int],
+) -> Dict[str, Any]:
+    """
+    生成单个问题的 CA 单元格和行总结。
+    """
+    interview_blocks = _collect_interview_blocks_for_question(
+        interview_rows=interview_rows,
+        source_texts=minutes_texts,
+        query_text=question_text,
+    )
+
+    cell_map: Dict[str, Any] = {}
+    cell_error: Optional[str] = None
+    try:
+        cell_payload = ModelClient.generate_ca_cells_for_question(
+            project_context=project_context,
+            questionnaire_title=questionnaire_name,
+            question_uid=question_uid,
+            question_order=question_order,
+            question_text=question_text,
+            question_type=question_type,
+            interview_blocks=interview_blocks,
+        )
+        cell_map = cell_payload.get("cells") or {}
+    except Exception as exc:
+        cell_error = str(exc)
+        cell_map = {}
+    if not isinstance(cell_map, dict):
+        cell_map = {}
+
+    interview_row_by_id = {
+        int(row.get("id") or 0): row
+        for row in interview_rows
+        if int(row.get("id") or 0) > 0
+    }
+    interview_rows_for_summary: List[Dict[str, Any]] = []
+    for interview_id in selected_interview_ids:
+        interview_key = str(interview_id)
+        raw_value = cell_map.get(interview_key)
+        current_value = ""
+        current_evidence: List[str] = []
+        current_source = ""
+        current_numeric_value = None
+        if isinstance(raw_value, dict):
+            current_value = str(raw_value.get("value") or raw_value.get("answer") or raw_value.get("text") or "").strip()
+            current_evidence = [
+                str(item or "").strip()
+                for item in (raw_value.get("evidence") or raw_value.get("sources") or raw_value.get("quotes") or [])
+                if str(item or "").strip()
+            ]
+            current_source = str(raw_value.get("source") or "").strip()
+            current_numeric_value = raw_value.get("numeric_value")
+        elif raw_value is not None:
+            current_value = str(raw_value).strip()
+        interview_row = interview_row_by_id.get(interview_id)
+        interview_rows_for_summary.append(
+            {
+                "interview_id": interview_id,
+                "name": str(interview_row.get("name") if isinstance(interview_row, dict) else f"访谈 {interview_id}").strip(),
+                "answer": current_value or "/",
+                "evidence": current_evidence,
+                "numeric_value": current_numeric_value,
+                "source": current_source or "llm",
+            }
+        )
+
+    summary_text = "/"
+    summary_error: Optional[str] = None
+    try:
+        row_summary_payload = ModelClient.generate_ca_row_summary_for_question(
+            project_context=project_context,
+            questionnaire_title=questionnaire_name,
+            question_uid=question_uid,
+            question_order=question_order,
+            question_text=question_text,
+            question_type=question_type,
+            question_group=question_group,
+            question_group_summary=question_group_summary,
+            interview_rows=interview_rows_for_summary,
+        )
+        summary_text = str(row_summary_payload.get("summary") or "").strip() or "/"
+    except Exception as exc:
+        summary_error = str(exc)
+
+    return {
+        "question_uid": question_uid,
+        "question_order": question_order,
+        "question_text": question_text,
+        "question_type": question_type,
+        "question_group": question_group,
+        "question_group_summary": question_group_summary,
+        "cell_map": cell_map,
+        "summary_text": summary_text,
+        "cell_error": cell_error,
+        "summary_error": summary_error,
+    }
 
 
 def _build_ca_framework_from_notes(
@@ -1077,152 +1287,160 @@ def generate_ca_table_for_project(
     if not selected_interview_ids:
         selected_interview_ids = [int(row.get("id") or 0) for row in interview_rows if int(row.get("id") or 0) > 0]
 
-    for column in columns:
-        column_id = str(column.get("column_id") or "").strip()
-        if not column_id:
+    grouped_columns = _group_ca_columns_for_generation(columns, final_payload.get("groups"))
+    final_generation_started_at = perf_counter()
+    for group_index, group in enumerate(grouped_columns, start=1):
+        group_label = str(group.get("group_label") or "未分组").strip() or "未分组"
+        group_summary = str(group.get("group_summary") or "").strip()
+        group_columns = [column for column in (group.get("columns") or []) if isinstance(column, dict)]
+        if not group_columns:
             continue
-        question_text = str(column.get("question_text") or column.get("display_text") or "").strip()
-        question_uid = str(column.get("question_uid") or column_id).strip()
-        question_order = int(column.get("order") or 0)
-        question_type = str(column.get("question_type") or "qualitative").strip().lower()
+
+        thread_count = min(max(len(group_columns), 1), 20)
+        group_started_at = perf_counter()
+        group_generated_count = 0
+        group_cell_error_count = 0
+        group_summary_error_count = 0
         log(
-            f"CA final column generation start questionnaire_id={resolved_questionnaire_id} "
-            f"question_uid={question_uid} question_order={question_order} "
-            f"interview_block_count={len(interview_rows)}",
+            f"CA final group generation start questionnaire_id={resolved_questionnaire_id} "
+            f"group_index={group_index} group_label={group_label} question_count={len(group_columns)} "
+            f"thread_count={thread_count} group_summary_len={len(group_summary)}",
             project_id=project_id,
         )
-        interview_blocks = _collect_interview_blocks_for_question(
-            interview_rows=interview_rows,
-            source_texts=minutes_texts,
-            query_text=question_text,
-        )
-        try:
-            cell_payload = ModelClient.generate_ca_cells_for_question(
-                project_context=project_context,
-                questionnaire_title=questionnaire_name,
-                question_uid=question_uid,
-                question_order=question_order,
-                question_text=question_text,
-                question_type=question_type,
-                interview_blocks=interview_blocks,
-            )
-            cell_map = cell_payload.get("cells") or {}
-            log(
-                f"CA final column generation done questionnaire_id={resolved_questionnaire_id} "
-                f"question_uid={question_uid} returned_cell_count={len(cell_map) if isinstance(cell_map, dict) else 0}",
-                project_id=project_id,
-            )
-        except Exception as exc:
-            log(
-                f"CA cell failed question_uid={question_uid} question_text={question_text} error={exc}",
-                project_id=project_id,
-            )
-            cell_map = {}
-
-        if not isinstance(cell_map, dict):
-            cell_map = {}
-
-        for interview_id in selected_interview_ids:
-            interview_key = str(interview_id)
-            cells.setdefault(interview_key, {})
-            current_cell = cells[interview_key].get(column_id)
-            current_value = ""
-            current_evidence: List[str] = []
-            current_locked = False
-            current_source = "framework"
-            if isinstance(current_cell, dict):
-                current_value = str(current_cell.get("value") or "").strip()
-                current_evidence = [str(item or "").strip() for item in (current_cell.get("evidence") or []) if str(item or "").strip()]
-                current_locked = bool(current_cell.get("locked"))
-                current_source = str(current_cell.get("source") or "framework")
-            elif current_cell is not None:
-                current_value = str(current_cell).strip()
-
-            if current_locked or (current_source == "manual" and current_value and current_value != "/"):
-                continue
-
-            raw_value = cell_map.get(interview_key)
-            if isinstance(raw_value, dict):
-                next_value = str(raw_value.get("value") or raw_value.get("answer") or raw_value.get("text") or "").strip()
-                next_evidence = [
-                    str(item or "").strip()
-                    for item in (raw_value.get("evidence") or raw_value.get("sources") or raw_value.get("quotes") or [])
-                    if str(item or "").strip()
-                ]
-            else:
-                next_value = str(raw_value or "").strip()
-                next_evidence = []
-            if not next_value:
-                next_value = "/"
-            cells[interview_key][column_id] = {
-                "value": next_value,
-                "evidence": next_evidence[:3] or current_evidence,
-                "locked": bool(current_locked),
-                "source": "llm",
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            future_map = {
+                executor.submit(
+                    _generate_ca_question_content,
+                    project_context,
+                    questionnaire_name,
+                    str(column.get("question_uid") or column.get("column_id") or "").strip(),
+                    int(column.get("order") or 0),
+                    str(column.get("question_text") or column.get("display_text") or "").strip(),
+                    str(column.get("question_type") or "qualitative").strip().lower(),
+                    str(column.get("group") or group_label).strip() or group_label,
+                    str(column.get("group_summary") or group_summary).strip(),
+                    interview_rows,
+                    minutes_texts,
+                    selected_interview_ids,
+                ): column
+                for column in group_columns
+                if str(column.get("question_uid") or column.get("column_id") or "").strip()
             }
+
+            for future in as_completed(future_map):
+                column = future_map[future]
+                column_id = str(column.get("column_id") or "").strip()
+                question_uid = str(column.get("question_uid") or column_id).strip()
+                question_text = str(column.get("question_text") or column.get("display_text") or "").strip()
+                question_order = int(column.get("order") or 0)
+                question_type = str(column.get("question_type") or "qualitative").strip().lower()
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    log(
+                        f"CA question worker failed questionnaire_id={resolved_questionnaire_id} "
+                        f"group_label={group_label} question_uid={question_uid} error={exc}\n{traceback.format_exc()}",
+                        project_id=project_id,
+                    )
+                    result = {
+                        "question_uid": question_uid,
+                        "question_order": question_order,
+                        "question_text": question_text,
+                        "question_type": question_type,
+                        "question_group": str(column.get("group") or group_label).strip() or group_label,
+                        "question_group_summary": str(column.get("group_summary") or group_summary).strip(),
+                        "cell_map": {},
+                        "summary_text": "/",
+                        "cell_error": str(exc),
+                        "summary_error": str(exc),
+                    }
+
+                cell_map = result.get("cell_map") or {}
+                if not isinstance(cell_map, dict):
+                    cell_map = {}
+                if result.get("cell_error"):
+                    group_cell_error_count += 1
+                    log(
+                        f"CA cell generation error questionnaire_id={resolved_questionnaire_id} "
+                        f"group_label={group_label} question_uid={question_uid} error={result.get('cell_error')}",
+                        project_id=project_id,
+                    )
+                if result.get("summary_error"):
+                    group_summary_error_count += 1
+                    log(
+                        f"CA row summary error questionnaire_id={resolved_questionnaire_id} "
+                        f"group_label={group_label} question_uid={question_uid} error={result.get('summary_error')}",
+                        project_id=project_id,
+                    )
+                log(
+                    f"CA final column generation done questionnaire_id={resolved_questionnaire_id} "
+                    f"group_label={group_label} question_uid={question_uid} "
+                    f"returned_cell_count={len(cell_map)}",
+                    project_id=project_id,
+                )
+
+                for interview_id in selected_interview_ids:
+                    interview_key = str(interview_id)
+                    cells.setdefault(interview_key, {})
+                    current_cell = cells[interview_key].get(column_id)
+                    current_value = ""
+                    current_evidence: List[str] = []
+                    current_locked = False
+                    current_source = "framework"
+                    if isinstance(current_cell, dict):
+                        current_value = str(current_cell.get("value") or "").strip()
+                        current_evidence = [str(item or "").strip() for item in (current_cell.get("evidence") or []) if str(item or "").strip()]
+                        current_locked = bool(current_cell.get("locked"))
+                        current_source = str(current_cell.get("source") or "framework")
+                    elif current_cell is not None:
+                        current_value = str(current_cell).strip()
+
+                    if current_locked or (current_source == "manual" and current_value and current_value != "/"):
+                        continue
+
+                    raw_value = cell_map.get(interview_key)
+                    if isinstance(raw_value, dict):
+                        next_value = str(raw_value.get("value") or raw_value.get("answer") or raw_value.get("text") or "").strip()
+                        next_evidence = [
+                            str(item or "").strip()
+                            for item in (raw_value.get("evidence") or raw_value.get("sources") or raw_value.get("quotes") or [])
+                            if str(item or "").strip()
+                        ]
+                    else:
+                        next_value = str(raw_value or "").strip()
+                        next_evidence = []
+                    if not next_value:
+                        next_value = "/"
+                    cells[interview_key][column_id] = {
+                        "value": next_value,
+                        "evidence": next_evidence[:3] or current_evidence,
+                        "locked": bool(current_locked),
+                        "source": "llm",
+                    }
+
+                summary_text = str(result.get("summary_text") or "").strip() or "/"
+                column["summary_text"] = summary_text
+                log(
+                    f"CA final column applied questionnaire_id={resolved_questionnaire_id} "
+                    f"group_label={group_label} question_uid={question_uid} interview_count={len(selected_interview_ids)}",
+                    project_id=project_id,
+                )
+                log(
+                    f"CA row summary generation done questionnaire_id={resolved_questionnaire_id} "
+                    f"group_label={group_label} question_uid={question_uid} summary_len={len(summary_text) if summary_text != '/' else 0}",
+                    project_id=project_id,
+                )
+                group_generated_count += 1
+
+        group_elapsed = perf_counter() - group_started_at
         log(
-            f"CA final column applied questionnaire_id={resolved_questionnaire_id} "
-            f"question_uid={question_uid} interview_count={len(selected_interview_ids)}",
+            f"CA final group generation done questionnaire_id={resolved_questionnaire_id} "
+            f"group_index={group_index} group_label={group_label} question_count={len(group_columns)} "
+            f"generated_count={group_generated_count} cell_error_count={group_cell_error_count} "
+            f"summary_error_count={group_summary_error_count} thread_count={thread_count} "
+            f"elapsed_sec={group_elapsed:.2f}",
             project_id=project_id,
         )
-
-        interview_rows_for_summary: List[Dict[str, Any]] = []
-        for interview_id in selected_interview_ids:
-            interview_key = str(interview_id)
-            current_cell = cells.get(interview_key, {}).get(column_id) if isinstance(cells.get(interview_key), dict) else None
-            current_value = ""
-            current_evidence: List[str] = []
-            current_source = ""
-            current_numeric_value = None
-            if isinstance(current_cell, dict):
-                current_value = str(current_cell.get("value") or current_cell.get("answer") or current_cell.get("text") or "").strip()
-                current_evidence = [
-                    str(item or "").strip()
-                    for item in (current_cell.get("evidence") or current_cell.get("sources") or current_cell.get("quotes") or [])
-                    if str(item or "").strip()
-                ]
-                current_source = str(current_cell.get("source") or "").strip()
-                current_numeric_value = current_cell.get("numeric_value")
-            elif current_cell is not None:
-                current_value = str(current_cell).strip()
-            interview_row = next((row for row in interview_rows if int(row.get("id") or 0) == interview_id), None)
-            interview_rows_for_summary.append(
-                {
-                    "interview_id": interview_id,
-                    "name": str(interview_row.get("name") if isinstance(interview_row, dict) else f"访谈 {interview_id}").strip(),
-                    "answer": current_value or "/",
-                    "evidence": current_evidence,
-                    "numeric_value": current_numeric_value,
-                    "source": current_source or "llm",
-                }
-            )
-
-        try:
-            row_summary_payload = ModelClient.generate_ca_row_summary_for_question(
-                project_context=project_context,
-                questionnaire_title=questionnaire_name,
-                question_uid=question_uid,
-                question_order=question_order,
-                question_text=question_text,
-                question_type=question_type,
-                question_group=str(column.get("group") or "").strip(),
-                question_group_summary=str(column.get("group_summary") or "").strip(),
-                interview_rows=interview_rows_for_summary,
-            )
-            summary_text = str(row_summary_payload.get("summary") or "").strip() or "/"
-            column["summary_text"] = summary_text
-            log(
-                f"CA row summary generation done questionnaire_id={resolved_questionnaire_id} "
-                f"question_uid={question_uid} summary_len={len(summary_text) if summary_text != '/' else 0}",
-                project_id=project_id,
-            )
-        except Exception as exc:
-            column["summary_text"] = "/"
-            log(
-                f"CA row summary failed questionnaire_id={resolved_questionnaire_id} "
-                f"question_uid={question_uid} error={exc}\n{traceback.format_exc()}",
-                project_id=project_id,
-            )
 
     try:
         diff_payload = ModelClient.generate_ca_diff_row_for_interviews(
@@ -1259,6 +1477,13 @@ def generate_ca_table_for_project(
     final_payload["final_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     final_payload["framework_generated_at"] = base_framework.get("framework_generated_at") or base_framework.get("generated_at")
     final_payload["selected_interview_ids"] = selected_interview_ids
+    total_elapsed = perf_counter() - final_generation_started_at
+    log(
+        f"CA final generation summary questionnaire_id={resolved_questionnaire_id} "
+        f"group_count={len(grouped_columns)} column_count={len(columns)} interview_count={len(selected_interview_ids)} "
+        f"elapsed_sec={total_elapsed:.2f}",
+        project_id=project_id,
+    )
 
     safe_final_payload = _json_safe_value(final_payload)
     cache_path = _build_ca_cache_path(project_id, resolved_questionnaire_id)
