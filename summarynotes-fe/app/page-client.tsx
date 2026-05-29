@@ -136,9 +136,18 @@ export default function Home() {
         titleClassName="text-[42px] leading-tight md:text-[52px]"
         descriptionClassName="text-[18px] md:text-[20px]"
         stats={
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right shadow-[0_12px_28px_-20px_rgba(15,23,42,0.22)]">
-            <div className="text-xs text-slate-500">当前项目</div>
-            <div className="mt-1 text-3xl font-semibold text-slate-900">{projects.length}</div>
+          <div className="flex flex-col items-end gap-4">
+            <Button
+              icon={<LogoutOutlined />}
+              onClick={handleLogout}
+              loading={loggingOut}
+            >
+              退出登录
+            </Button>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right shadow-[0_12px_28px_-20px_rgba(15,23,42,0.22)]">
+              <div className="text-xs text-slate-500">当前项目</div>
+              <div className="mt-1 text-3xl font-semibold text-slate-900">{projects.length}</div>
+            </div>
           </div>
         }
       />
@@ -151,18 +160,9 @@ export default function Home() {
                   <Title level={4} style={{ marginBottom: 0 }} className="summarynotes-section-title">
                     项目入口
                   </Title>
-                  <Space>
-                    <Button
-                      icon={<LogoutOutlined />}
-                      onClick={handleLogout}
-                      loading={loggingOut}
-                    >
-                      退出登录
-                    </Button>
-                    <Button type="primary" onClick={openCreateProject}>
-                      新建项目
-                    </Button>
-                  </Space>
+                  <Button type="primary" onClick={openCreateProject}>
+                    新建项目
+                  </Button>
                 </div>
                 {projects.length === 0 ? (
                   <Text type="secondary">当前暂无项目，请点击右侧“新建项目”。</Text>
