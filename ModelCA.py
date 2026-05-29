@@ -694,7 +694,8 @@ def generate_ca_cells_for_question(
         "12.不得因为原文表达方式不同、顺序不同、跨句跨段落出现而输出 /。\n"
         "13.不得因为信息不是以问题中的关键词原样出现，就判定为未提及而输出 /。\n"
         "14.不得因为答案不够完整就直接输出 /；能回答多少就回答多少，不要因为缺乏部分信息就完全放弃输出。\n"
-        "15. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"answer_runs\": [{\"text\": \"...\", \"highlight\": true}], \"evidence\": [\"...\", \"...\"], \"numeric_value\": 12.5}}} 这种映射。\n"
+        "15.只要原文中存在能直接支撑该问题的相关片段，就必须回答,只有全文确实找不到任何支撑片段时，才允许输出 /。\n"
+        "16. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"answer_runs\": [{\"text\": \"...\", \"highlight\": true}], \"evidence\": [\"...\", \"...\"], \"numeric_value\": 12.5}}} 这种映射。\n"
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_column_cells_response(raw_output, interview_ids)
