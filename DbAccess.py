@@ -152,8 +152,40 @@ class DbAccess:
             database=config.DB_NAME,
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=10,
+            read_timeout=60,
+            write_timeout=60,
             autocommit=False,
         )
+
+    @staticmethod
+    def _is_retryable_mysql_write_error(exc: Exception) -> bool:
+        """
+        判断当前写库异常是否适合做一次重试。
+
+        这里只重试明显的连接类异常，避免把真正的 SQL 逻辑错误静默吞掉。
+        """
+        if isinstance(exc, pymysql.err.InterfaceError):
+            return True
+        if isinstance(exc, pymysql.err.OperationalError):
+            code = exc.args[0] if exc.args else None
+            return code in {2006, 2013, 2055}
+        return False
+
+    @staticmethod
+    def _compact_ca_json_value(value: Any) -> Any:
+        """
+        压缩 CA JSON 中重复嵌套的字段。
+
+        `ca_json` / `framework_json` / `final_json` 在数据库里本来就是三列，
+        如果再把同名大对象内嵌一遍，单次写包会明显膨胀。
+        """
+        if not isinstance(value, dict):
+            return value
+        compact_value = dict(value)
+        compact_value.pop("framework_json", None)
+        compact_value.pop("final_json", None)
+        return compact_value
 
     @classmethod
     def _fetch_one(
@@ -970,6 +1002,8 @@ class DbAccess:
             if value is None:
                 return None
             if isinstance(value, (dict, list)):
+                if isinstance(value, dict):
+                    value = DbAccess._compact_ca_json_value(value)
                 return json.dumps(value, ensure_ascii=False)
             text = str(value).strip()
             return text or None
@@ -1345,34 +1379,52 @@ class DbAccess:
         effective_final_json = final_json
         effective_framework_status = framework_status or ("reviewed" if effective_framework_json is not None else "draft")
         effective_final_status = final_status or ("done" if effective_final_json is not None else "pending")
-        conn = cls.get_connection()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    sql,
-                    (
-                        project_id,
-                        questionnaire_id,
-                        _json_or_none(active_json),
-                        _json_or_none(effective_framework_json),
-                        _json_or_none(effective_final_json),
-                        str(effective_framework_status or "draft"),
-                        str(effective_final_status or "done"),
-                        error_message,
-                        _datetime_or_none(generated_at),
-                        _datetime_or_none(framework_generated_at),
-                        _datetime_or_none(final_generated_at),
-                        _datetime_or_none(reviewed_at),
-                    ),
-                )
-                rowcount = cursor.rowcount
-            conn.commit()
-            return rowcount
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        params = (
+            project_id,
+            questionnaire_id,
+            _json_or_none(active_json),
+            _json_or_none(effective_framework_json),
+            _json_or_none(effective_final_json),
+            str(effective_framework_status or "draft"),
+            str(effective_final_status or "done"),
+            error_message,
+            _datetime_or_none(generated_at),
+            _datetime_or_none(framework_generated_at),
+            _datetime_or_none(final_generated_at),
+            _datetime_or_none(reviewed_at),
+        )
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            conn = cls.get_connection()
+            try:
+                try:
+                    conn.ping(reconnect=True)
+                except Exception:
+                    pass
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    rowcount = cursor.rowcount
+                conn.commit()
+                return rowcount
+            except Exception as exc:
+                last_exc = exc
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                if attempt == 0 and cls._is_retryable_mysql_write_error(exc):
+                    continue
+                raise
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("upsert_ca_table failed without captured exception")
 
     @classmethod
     def fetch_ca_table_by_project(

@@ -160,6 +160,23 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
+def _compact_ca_payload_for_storage(payload: Any) -> Any:
+    """
+    为数据库写入生成更轻量的 CA JSON。
+
+    说明：
+        运行态对象里会同时挂 `framework_json` / `final_json` 方便前后端回显，
+        但落库时这些字段会和数据库列重复，容易把单次写入包撑大。
+        这里仅移除这两层重复嵌套，保留核心 CA 数据结构。
+    """
+    if not isinstance(payload, dict):
+        return payload
+    compact_payload = dict(payload)
+    compact_payload.pop("framework_json", None)
+    compact_payload.pop("final_json", None)
+    return compact_payload
+
+
 def _normalize_dimension_items(raw_dimensions: Any) -> List[Dict[str, Any]]:
     """
     规范化 CA 维度结构。
@@ -1061,21 +1078,24 @@ def generate_ca_table_for_project(
             project_id=project_id,
         )
         safe_framework_payload = _json_safe_value(framework_payload)
+        db_framework_payload = _compact_ca_payload_for_storage(safe_framework_payload)
+        db_existing_final_json = _compact_ca_payload_for_storage(existing_final_json)
         cache_path = _build_ca_cache_path(project_id, resolved_questionnaire_id)
         log(f"Writing CA framework cache file: {cache_path}", project_id=project_id)
         cache_path.write_text(json.dumps(safe_framework_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             log(
                 f"Writing CA framework to db questionnaire_id={resolved_questionnaire_id} "
-                f"framework_status=reviewing final_status={existing_final_status or 'pending'}",
+                f"framework_status=reviewing final_status={existing_final_status or 'pending'} "
+                f"payload_bytes={len(json.dumps(db_framework_payload, ensure_ascii=False))}",
                 project_id=project_id,
             )
             DbAccess.upsert_ca_table(
                 project_id=project_id,
                 questionnaire_id=resolved_questionnaire_id,
-                ca_json=safe_framework_payload,
-                framework_json=safe_framework_payload,
-                final_json=existing_final_json,
+                ca_json=db_framework_payload,
+                framework_json=db_framework_payload,
+                final_json=db_existing_final_json,
                 framework_status="reviewing",
                 final_status=existing_final_status or "pending",
                 error_message=None,
@@ -1483,6 +1503,8 @@ def generate_ca_table_for_project(
     )
 
     safe_final_payload = _json_safe_value(final_payload)
+    db_final_payload = _compact_ca_payload_for_storage(safe_final_payload)
+    db_base_framework = _compact_ca_payload_for_storage(base_framework)
     cache_path = _build_ca_cache_path(project_id, resolved_questionnaire_id)
     log(f"Writing CA final cache file: {cache_path}", project_id=project_id)
     cache_path.write_text(json.dumps(safe_final_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1499,15 +1521,16 @@ def generate_ca_table_for_project(
     try:
         log(
             f"Writing CA final to db questionnaire_id={resolved_questionnaire_id} "
-            f"final_status=done reviewed_at={final_payload.get('reviewed_at')}",
+            f"final_status=done reviewed_at={final_payload.get('reviewed_at')} "
+            f"payload_bytes={len(json.dumps(db_final_payload, ensure_ascii=False))}",
             project_id=project_id,
         )
         DbAccess.upsert_ca_table(
             project_id=project_id,
             questionnaire_id=resolved_questionnaire_id,
-            ca_json=safe_final_payload,
-            framework_json=base_framework,
-            final_json=safe_final_payload,
+            ca_json=db_final_payload,
+            framework_json=db_base_framework,
+            final_json=db_final_payload,
             framework_status=str(base_framework.get("framework_status") or "reviewed"),
             final_status="done",
             error_message=None,
