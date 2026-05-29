@@ -96,7 +96,7 @@ def _build_answer_rich_text(answer_text: str, raw_runs: Any) -> Any:
         highlight = bool(run.get("highlight"))
         font_kwargs: Dict[str, Any] = {"color": "FF111827"}
         if highlight:
-            font_kwargs.update({"b": True, "color": "FF047857"})
+            font_kwargs.update({"b": True, "color": "FFDC2626"})
         rich_text.append(TextBlock(InlineFont(**font_kwargs), text))
     if len(rich_text) == 0:
         return None

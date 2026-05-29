@@ -1520,7 +1520,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       if (row.kind === "diff") {
         return (
           <Space direction="vertical" size={8} style={{ width: "100%" }}>
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+            <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-900">
               {row.label}
             </div>
             <Text type="secondary" className="text-xs">
@@ -1590,11 +1590,11 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       return (
         <Space direction="vertical" size={8} style={{ width: "100%" }}>
           {showRuns ? (
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2 text-sm leading-6 text-slate-700">
+            <div className="rounded-xl border border-red-100 bg-red-50/60 px-3 py-2 text-sm leading-6 text-slate-700">
               {answerRuns.map((run, index) => (
                 <span
                   key={`${row.key}-${interviewId}-run-${index}`}
-                  className={run.highlight ? "rounded bg-emerald-200/80 px-0.5 font-semibold text-emerald-900" : ""}
+                  className={run.highlight ? "rounded bg-red-200/80 px-0.5 font-semibold text-red-900" : ""}
                 >
                   {run.text}
                 </span>
@@ -1629,7 +1629,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       return (
         <div className="whitespace-pre-wrap text-xs leading-6 text-slate-600">
           {evidence.map((item, index) => (
-            <div key={`${interviewId}-${row.key}-evidence-${index}`} className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+            <div key={`${interviewId}-${row.key}-evidence-${index}`} className="rounded-xl border border-red-100 bg-red-50/60 px-3 py-2">
               {item}
             </div>
           ))}
@@ -1959,7 +1959,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
                     record.kind === "section"
                       ? "bg-slate-100 font-semibold"
                       : record.kind === "diff"
-                        ? "bg-emerald-50/50"
+                        ? "bg-red-50/50"
                         : record.kind === "question" && record.hidden
                         ? "bg-slate-50 text-slate-400"
                         : ""
