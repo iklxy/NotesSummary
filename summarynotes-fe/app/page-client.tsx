@@ -19,10 +19,11 @@ import {
   message,
 } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { UploadOutlined } from "@ant-design/icons";
+import { LogoutOutlined, UploadOutlined } from "@ant-design/icons";
 import BrandHero from "../components/BrandHero";
 import { Project } from "../lib/types";
 import { createProject, deleteProject, getProjects } from "../lib/projectsApi";
+import { logout } from "../lib/authApi";
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -32,6 +33,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [guideFileList, setGuideFileList] = useState<UploadFile[]>([]);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -100,6 +102,31 @@ export default function Home() {
     });
   };
 
+  const handleLogout = () => {
+    Modal.confirm({
+      title: "退出登录",
+      content: "确定要退出当前登录并返回登录页吗？",
+      okText: "退出登录",
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        try {
+          setLoggingOut(true);
+          const resp = await logout();
+          if (!resp.success) {
+            throw new Error(resp.message || "退出登录失败");
+          }
+          message.success("已退出登录");
+          router.replace("/login?next=/");
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "退出登录失败");
+        } finally {
+          setLoggingOut(false);
+        }
+      },
+    });
+  };
+
   return (
     <Layout className="min-h-screen">
       <BrandHero
@@ -124,9 +151,18 @@ export default function Home() {
                   <Title level={4} style={{ marginBottom: 0 }} className="summarynotes-section-title">
                     项目入口
                   </Title>
-                  <Button type="primary" onClick={openCreateProject}>
-                    新建项目
-                  </Button>
+                  <Space>
+                    <Button
+                      icon={<LogoutOutlined />}
+                      onClick={handleLogout}
+                      loading={loggingOut}
+                    >
+                      退出登录
+                    </Button>
+                    <Button type="primary" onClick={openCreateProject}>
+                      新建项目
+                    </Button>
+                  </Space>
                 </div>
                 {projects.length === 0 ? (
                   <Text type="secondary">当前暂无项目，请点击右侧“新建项目”。</Text>
