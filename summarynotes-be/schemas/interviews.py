@@ -193,6 +193,27 @@ class InterviewStatusResponse(BaseModel):
     status: Optional[int] = None
 
 
+class InterviewDetailUpdateRequest(BaseModel):
+    """
+    更新访谈细节字段的请求体。
+    """
+    detail_json: Any = None
+    doctor_level: Optional[str] = None
+    doctor_title: Optional[str] = None
+    city: Optional[str] = None
+    hospital: Optional[str] = None
+    department: Optional[str] = None
+    hospital_decile: Optional[str] = None
+    hospital_city: Optional[str] = None
+
+
+class InterviewNameUpdateRequest(BaseModel):
+    """
+    更新访谈名称的请求体。
+    """
+    name: str
+
+
 class DeleteInterviewResponse(BaseModel):
     """
     /api/interviews/{interview_id} 删除接口返回值。

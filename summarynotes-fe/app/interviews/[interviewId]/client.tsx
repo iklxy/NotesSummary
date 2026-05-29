@@ -24,6 +24,8 @@ import {
   Tag,
   Select,
   Slider,
+  Divider,
+  Switch,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -42,6 +44,7 @@ import {
   createQuestionFewshotSample,
   deleteQuestionFewshotSample,
   generateQuestionNotes,
+  getInterviewDetail,
   getInterviewFewshotSamples,
   getInterviewAudioUrl,
   getInterviewQuestions,
@@ -49,6 +52,8 @@ import {
   getInterviewNotes,
   getInterviewSummary,
   completeInterviewSummary,
+  updateInterviewDetail,
+  updateInterviewName,
   updateInterviewSummary,
 } from "../../../lib/interviewsApi";
 import type {
@@ -62,6 +67,7 @@ import type {
   FewshotSampleItem,
   QuestionIntentItem,
   QuestionItem,
+  InterviewDetailResponse,
 } from "../../../lib/types";
 
 const { Content } = Layout;
@@ -153,6 +159,128 @@ function normalizeSummaryConfidence(value?: number | string | null): number | nu
   return null;
 }
 
+type DetailDraftValue = string;
+
+function getDetailEntries(detailJson: Record<string, unknown> | null | undefined): Array<{
+  key: string;
+  value: unknown;
+}> {
+  if (!detailJson || typeof detailJson !== "object" || Array.isArray(detailJson)) {
+    return [];
+  }
+  return Object.entries(detailJson)
+    .filter(([key]) => Boolean(String(key || "").trim()))
+    .map(([key, value]) => ({
+      key,
+      value,
+    }));
+}
+
+function getDetailDisplayLabel(key: string): string {
+  const safeKey = String(key || "").trim();
+  if (!safeKey) {
+    return "未命名字段";
+  }
+  return safeKey
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .replace(/^\w/, (char) => char.toUpperCase());
+}
+
+function getDetailFieldKind(value: unknown): "number" | "boolean" | "json" | "text" {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return "number";
+  }
+  if (typeof value === "boolean") {
+    return "boolean";
+  }
+  if (value && typeof value === "object") {
+    return "json";
+  }
+  return "text";
+}
+
+function stringifyDetailValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return "";
+    }
+  }
+  return String(value);
+}
+
+function buildInterviewDetailDraft(
+  detailJson: Record<string, unknown> | null | undefined,
+): Record<string, DetailDraftValue> {
+  const payload: Record<string, DetailDraftValue> = {};
+  const entries = getDetailEntries(detailJson);
+  for (const { key, value } of entries) {
+    payload[key] = stringifyDetailValue(value);
+  }
+  return payload;
+}
+
+function buildInterviewDetailPayload(
+  sourceDetail: Record<string, unknown> | null | undefined,
+  draft: Record<string, DetailDraftValue>,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const entries = getDetailEntries(sourceDetail);
+  for (const { key, value: originalValue } of entries) {
+    const rawValue = draft[key] ?? "";
+    const kind = getDetailFieldKind(originalValue);
+    if (kind === "number") {
+      if (!rawValue.trim()) {
+        continue;
+      }
+      const parsed = Number(rawValue);
+      if (Number.isFinite(parsed)) {
+        payload[key] = parsed;
+      }
+      continue;
+    }
+    if (kind === "boolean") {
+      const lower = rawValue.trim().toLowerCase();
+      if (!lower) {
+        continue;
+      }
+      payload[key] = lower === "true" || lower === "1" || lower === "yes" || lower === "是";
+      continue;
+    }
+    if (kind === "json") {
+      if (!rawValue.trim()) {
+        continue;
+      }
+      try {
+        payload[key] = JSON.parse(rawValue);
+      } catch {
+        payload[key] = rawValue;
+      }
+      continue;
+    }
+    const text = rawValue.trim();
+    if (text) {
+      payload[key] = text;
+    }
+  }
+  return payload;
+}
+
 function createEmptyFewshotDraft(intentId?: number): FewshotDraft {
   return {
     intent_id: intentId,
@@ -229,6 +357,8 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pendingSeekRef = useRef<{ seekMs: number; autoplay: boolean } | null>(null);
   const waveformLoadTokenRef = useRef(0);
+  const lastAutoScrolledSummaryIdRef = useRef<number | null>(null);
+  const followSummaryScrollRef = useRef(false);
 
   const [summary, setSummary] = useState<InterviewSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -250,6 +380,14 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const [waveformPeaks, setWaveformPeaks] = useState<number[]>(
     Array.from({ length: 96 }, () => 0.12),
   );
+  const [interviewDetail, setInterviewDetail] = useState<InterviewDetailResponse | null>(null);
+  const [interviewDetailLoading, setInterviewDetailLoading] = useState(false);
+  const [interviewDetailError, setInterviewDetailError] = useState<string | null>(null);
+  const [savedInterviewName, setSavedInterviewName] = useState("");
+  const [interviewNameDraft, setInterviewNameDraft] = useState("");
+  const [detailDraft, setDetailDraft] = useState<Record<string, DetailDraftValue>>({});
+  const [savingInterviewDetail, setSavingInterviewDetail] = useState(false);
+  const [savingInterviewName, setSavingInterviewName] = useState(false);
 
   const [notes, setNotes] = useState<InterviewNotesResponse | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -386,6 +524,30 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       setQuestionsError("无效的访谈 ID");
     }
   }, [interviewIdNum, questionsReloadToken]);
+
+  useEffect(() => {
+    const loadInterviewDetail = async () => {
+      try {
+        setInterviewDetailLoading(true);
+        setInterviewDetailError(null);
+        const detail = await getInterviewDetail(interviewIdNum);
+        setInterviewDetail(detail);
+        setSavedInterviewName(detail.name || "");
+        setInterviewNameDraft(detail.name || "");
+        setDetailDraft(buildInterviewDetailDraft(detail.detail_json || null));
+      } catch (e) {
+        setInterviewDetailError(e instanceof Error ? e.message : "加载访谈细节失败");
+      } finally {
+        setInterviewDetailLoading(false);
+      }
+    };
+
+    if (interviewIdNum > 0) {
+      void loadInterviewDetail();
+    } else {
+      setInterviewDetailError("无效的访谈 ID");
+    }
+  }, [interviewIdNum]);
 
   useEffect(() => {
     const loadFewshotSamples = async () => {
@@ -585,6 +747,23 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     return null;
   }, [audioCurrentTime, summaryAudioRanges]);
 
+  useEffect(() => {
+    if (activeSummaryId === null) {
+      return;
+    }
+    if (!audioIsPlaying && !followSummaryScrollRef.current) {
+      return;
+    }
+    if (lastAutoScrolledSummaryIdRef.current === activeSummaryId) {
+      return;
+    }
+    scrollToSummary(String(activeSummaryId));
+    lastAutoScrolledSummaryIdRef.current = activeSummaryId;
+    if (!audioIsPlaying) {
+      followSummaryScrollRef.current = false;
+    }
+  }, [activeSummaryId, audioIsPlaying]);
+
   const fewshotSamplesByQuestion = useMemo(() => {
     const map: Record<number, FewshotSampleItem[]> = {};
     for (const sample of fewshotSamples) {
@@ -596,6 +775,10 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     }
     return map;
   }, [fewshotSamples]);
+
+  const detailEntries = useMemo(() => {
+    return getDetailEntries(interviewDetail?.detail_json || null);
+  }, [interviewDetail]);
 
   const getSideLabel = (side: "left" | "right") => (side === "left" ? "1" : "2");
 
@@ -650,6 +833,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
     if (!audio || !Number.isFinite(seekMs) || seekMs < 0) {
       return;
     }
+    followSummaryScrollRef.current = true;
 
     const applySeek = async () => {
       const nextTime = seekMs / 1000;
@@ -742,6 +926,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
       return;
     }
     try {
+      followSummaryScrollRef.current = true;
       audio.currentTime = value;
       setAudioCurrentTime(value);
     } catch (e) {
@@ -797,6 +982,62 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   const handleSkipSeconds = async (deltaSeconds: number) => {
     const nextTime = Math.min(audioDuration || 0, Math.max(0, audioCurrentTime + deltaSeconds));
     await seekAudioToMs(nextTime * 1000, audioIsPlaying);
+  };
+
+  const handleInterviewDetailFieldChange = (
+    key: string,
+    value: string,
+  ) => {
+    setDetailDraft((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const saveInterviewDetail = async () => {
+    if (!interviewDetail) {
+      message.error("访谈信息尚未加载完成");
+      return;
+    }
+    if (detailEntries.length === 0) {
+      message.error("当前访谈没有可编辑的细节字段");
+      return;
+    }
+    const detailPayload = buildInterviewDetailPayload(interviewDetail.detail_json || null, detailDraft);
+    try {
+      setSavingInterviewDetail(true);
+      const updated = await updateInterviewDetail(interviewIdNum, {
+        detail_json: detailPayload,
+      });
+      setInterviewDetail(updated);
+      setSavedInterviewName(updated.name || "");
+      setInterviewNameDraft(updated.name || "");
+      setDetailDraft(buildInterviewDetailDraft(updated.detail_json || null));
+      message.success("访谈细节已保存，名称已同步更新");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "保存访谈细节失败");
+    } finally {
+      setSavingInterviewDetail(false);
+    }
+  };
+
+  const saveInterviewDisplayName = async () => {
+    const trimmed = interviewNameDraft.trim();
+    if (!trimmed) {
+      message.error("访谈名称不能为空");
+      return;
+    }
+    try {
+      setSavingInterviewName(true);
+      const updated = await updateInterviewName(interviewIdNum, trimmed);
+      setSavedInterviewName(updated.name || trimmed);
+      setInterviewNameDraft(updated.name || trimmed);
+      message.success("访谈名称已保存");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "保存访谈名称失败");
+    } finally {
+      setSavingInterviewName(false);
+    }
   };
 
   const isMuted = audioVolume <= 0.01;
@@ -1218,7 +1459,7 @@ export default function InterviewDetailClient({ interviewId }: Props) {
   return (
     <Layout className="min-h-screen">
       <BrandHero
-        title={`访谈详情 #${interviewIdNum > 0 ? interviewIdNum : "无效"}`}
+        title={`访谈详情 #${interviewIdNum > 0 ? interviewIdNum : "无效"}${savedInterviewName || interviewDetail?.name ? ` · ${savedInterviewName || interviewDetail?.name}` : ""}`}
         description="这里集中管理录音、Trans、Notes、KBQ 等信息。"
         backButton={
           <Button
@@ -1253,6 +1494,132 @@ export default function InterviewDetailClient({ interviewId }: Props) {
             padding: "24px 24px 40px",
           }}
         >
+          <Card
+            style={{
+              borderRadius: 24,
+              boxShadow: "0 16px 48px -30px rgba(15,23,42,0.28)",
+              marginBottom: 24,
+            }}
+            bodyStyle={{ padding: 20 }}
+          >
+            <Space
+              style={{ width: "100%", justifyContent: "space-between", marginBottom: 16 }}
+              align="start"
+            >
+              <div>
+                <Title level={4} style={{ marginBottom: 4 }}>
+                  访谈基础信息
+                </Title>
+                <Text type="secondary">
+                  支持手动修改访谈名称和细节字段，保存细节后会按当前规则自动重算名称。
+                </Text>
+              </div>
+              <Space>
+                <Button
+                  onClick={() => void saveInterviewDisplayName()}
+                  loading={savingInterviewName}
+                  disabled={interviewDetailLoading || !interviewDetail}
+                >
+                  保存名称
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={() => void saveInterviewDetail()}
+                  loading={savingInterviewDetail}
+                  disabled={interviewDetailLoading || !interviewDetail || detailEntries.length === 0}
+                >
+                  保存细节并重算名称
+                </Button>
+              </Space>
+            </Space>
+            {interviewDetailLoading ? (
+              <Spin />
+            ) : interviewDetailError ? (
+              <Alert type="error" message={interviewDetailError} />
+            ) : interviewDetail ? (
+              <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                <div>
+                  <Text strong style={{ display: "block", marginBottom: 8 }}>
+                    访谈名称
+                  </Text>
+                  <Input
+                    value={interviewNameDraft}
+                    onChange={(e) => setInterviewNameDraft(e.target.value)}
+                    placeholder="请输入访谈名称"
+                  />
+                </div>
+                <Divider style={{ margin: "4px 0" }} />
+                <div>
+                  <Text strong style={{ display: "block", marginBottom: 12 }}>
+                    访谈细节
+                  </Text>
+                  {detailEntries.length > 0 ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        gap: 16,
+                      }}
+                    >
+                      {detailEntries.map(({ key, value }) => {
+                        const fieldKind = getDetailFieldKind(value);
+                        const draftValue = detailDraft[key] ?? "";
+                        return (
+                          <div key={key}>
+                            <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                              {getDetailDisplayLabel(key)}
+                            </Text>
+                            <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
+                              {key}
+                            </Text>
+                            {fieldKind === "number" ? (
+                              <InputNumber
+                                style={{ width: "100%" }}
+                                value={draftValue === "" ? undefined : Number(draftValue)}
+                                placeholder={`请输入${getDetailDisplayLabel(key)}`}
+                                onChange={(nextValue) =>
+                                  handleInterviewDetailFieldChange(key, typeof nextValue === "number" ? String(nextValue) : "")
+                                }
+                              />
+                            ) : fieldKind === "boolean" ? (
+                              <Switch
+                                checked={draftValue.trim().toLowerCase() === "true"}
+                                checkedChildren="是"
+                                unCheckedChildren="否"
+                                onChange={(checked) =>
+                                  handleInterviewDetailFieldChange(key, checked ? "true" : "false")
+                                }
+                              />
+                            ) : fieldKind === "json" ? (
+                              <Input.TextArea
+                                value={draftValue}
+                                autoSize={{ minRows: 2, maxRows: 6 }}
+                                placeholder={`请输入${getDetailDisplayLabel(key)}的 JSON`}
+                                onChange={(e) => handleInterviewDetailFieldChange(key, e.target.value)}
+                              />
+                            ) : (
+                              <Input
+                                value={draftValue}
+                                placeholder={`请输入${getDetailDisplayLabel(key)}`}
+                                onChange={(e) => handleInterviewDetailFieldChange(key, e.target.value)}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="当前访谈没有可编辑的细节字段"
+                      description="如果 `detail_json` 为空，请先检查后端是否已为该访谈写入细节字段。"
+                    />
+                  )}
+                </div>
+              </Space>
+            ) : null}
+          </Card>
           <div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-[360px_minmax(0,1fr)]">
             <Card
               style={{

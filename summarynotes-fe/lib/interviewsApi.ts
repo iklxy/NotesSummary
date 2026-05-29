@@ -16,6 +16,9 @@ import {
   InterviewCardsResponse,
   InterviewQuestionsResponse,
   InterviewStatusResponse,
+  InterviewDetailResponse,
+  InterviewDetailUpdateRequest,
+  InterviewNameUpdateRequest,
   OverallNotesKbqUpdateResponse,
   OverallNotesMinutesUpdateResponse,
   OverallNotesSummaryUpdateResponse,
@@ -38,6 +41,30 @@ export function runInterview(interviewId: number): Promise<RunInterviewResponse>
 
 export function getInterviewStatus(interviewId: number): Promise<InterviewStatusResponse> {
   return request<InterviewStatusResponse>(`/api/interviews/${interviewId}/status`);
+}
+
+export function getInterviewDetail(interviewId: number): Promise<InterviewDetailResponse> {
+  return request<InterviewDetailResponse>(`/api/interviews/${interviewId}`);
+}
+
+export function updateInterviewDetail(
+  interviewId: number,
+  payload: InterviewDetailUpdateRequest,
+): Promise<InterviewDetailResponse> {
+  return request<InterviewDetailResponse>(`/api/interviews/${interviewId}/detail`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateInterviewName(
+  interviewId: number,
+  name: string,
+): Promise<InterviewDetailResponse> {
+  return request<InterviewDetailResponse>(`/api/interviews/${interviewId}/name`, {
+    method: "PATCH",
+    body: JSON.stringify({ name } as InterviewNameUpdateRequest),
+  });
 }
 
 export function deleteInterview(interviewId: number): Promise<DeleteInterviewResponse> {

@@ -57,6 +57,48 @@ export interface DeleteInterviewResponse {
   message?: string | null;
 }
 
+export interface InterviewDetailUpdateRequest {
+  detail_json?: Record<string, unknown> | null;
+  doctor_level?: string | null;
+  doctor_title?: string | null;
+  city?: string | null;
+  hospital?: string | null;
+  department?: string | null;
+  hospital_decile?: string | null;
+  hospital_city?: string | null;
+}
+
+export interface InterviewNameUpdateRequest {
+  name: string;
+}
+
+export interface InterviewDetailResponse {
+  id: number;
+  parse_project_id: number;
+  name: string;
+  interview_date?: string | null;
+  detail_json?: Record<string, unknown> | null;
+  city?: string | null;
+  hospital_city?: string | null;
+  hospital_decile?: number | null;
+  doctor_level?: string | null;
+  doctor_title?: string | null;
+  hospital?: string | null;
+  department?: string | null;
+  status?: number | null;
+  file_name?: string | null;
+  questionnaire_id?: number | null;
+  questionnaire_name?: string | null;
+  questionnaire_status?: string | null;
+  questionnaire_object_type?: string | null;
+  questionnaire_role_id?: number | null;
+  questionnaire_role_name?: string | null;
+  questionnaire_role_type?: string | null;
+  questionnaire_role_detail_schema_json?: InterviewDetailFieldDefinition[] | null;
+  key_bq_id?: number | null;
+  key_bq_name?: string | null;
+}
+
 export interface RefreshKbqNotesResponse {
   success: boolean;
   interview_id: number;

@@ -23,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import FileResponse, Response
 
 from api.auth import require_current_user_id
+from api.project_roles import normalize_detail_schema_fields
 from DbAccess import DbAccess
 from KBQNotesWorkflow import run_kbq_notes_generation_for_interview
 from db import (
@@ -53,8 +54,10 @@ from db import (
     update_interview_note_content,
     update_interview_summary_confidence,
     update_interview_summary_text_with_corrections,
+    update_interview_name,
     upsert_interview_minutes,
     upsert_interview_cards,
+    upsert_interview_detail,
     replace_key_bq_rows_for_interview,
 )
 from schemas.interviews import (
@@ -73,6 +76,8 @@ from schemas.interviews import (
     InterviewSummaryResponse,
     InterviewStatusResponse,
     RunInterviewResponse,
+    InterviewDetailUpdateRequest,
+    InterviewNameUpdateRequest,
     QuestionCreateRequest,
     QuestionCreateResponse,
     QuestionDeleteResponse,
@@ -85,6 +90,7 @@ from schemas.interviews import (
     SummaryUpdateRequest,
     SummaryUpdateResponse,
 )
+from interview_detail_fields import build_interview_display_name, normalize_interview_detail_payload
 from storage import delete_remote_object
 from docx_export import build_overall_notes_docx_bytes, build_transcript_docx_bytes, DOCX_MIME_TYPE
 from InterviewLogger import log_interview
@@ -411,6 +417,42 @@ def _get_owned_interview_or_404(interview_id: int, current_user_id: int) -> Dict
     if not interview:
         raise HTTPException(status_code=404, detail="interview not found")
     return interview
+
+
+def _build_interview_detail_response(interview: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    将访谈记录转换成前端可直接编辑的详情响应。
+    """
+    questionnaire_detail_fields = normalize_detail_schema_fields(
+        interview.get("questionnaire_role_detail_schema_json"),
+        interview.get("questionnaire_role_type") or interview.get("questionnaire_object_type"),
+    )
+    return {
+        "id": interview.get("id"),
+        "parse_project_id": interview.get("parse_project_id"),
+        "name": interview.get("name"),
+        "interview_date": interview.get("interview_date"),
+        "detail_json": normalize_interview_detail_payload(interview.get("detail_json")),
+        "city": interview.get("city"),
+        "hospital_city": interview.get("hospital_city"),
+        "hospital_decile": interview.get("hospital_decile"),
+        "doctor_level": interview.get("doctor_level"),
+        "doctor_title": interview.get("doctor_title"),
+        "hospital": interview.get("hospital"),
+        "department": interview.get("department"),
+        "status": interview.get("status"),
+        "file_name": interview.get("file_name"),
+        "questionnaire_id": interview.get("questionnaire_id"),
+        "questionnaire_name": interview.get("questionnaire_name"),
+        "questionnaire_status": interview.get("questionnaire_status"),
+        "questionnaire_object_type": interview.get("questionnaire_object_type"),
+        "questionnaire_role_id": interview.get("questionnaire_role_id"),
+        "questionnaire_role_name": interview.get("questionnaire_role_name"),
+        "questionnaire_role_type": interview.get("questionnaire_role_type"),
+        "questionnaire_role_detail_schema_json": questionnaire_detail_fields,
+        "key_bq_id": interview.get("key_bq_id"),
+        "key_bq_name": interview.get("key_bq_name"),
+    }
 
 
 def _get_internal_base() -> str:
@@ -1587,6 +1629,100 @@ def get_interview_status(
         interview_id=interview_id,
         status=row.get("status"),
     )
+
+
+@router.get("/{interview_id}", response_model=Dict[str, Any])
+def get_interview_detail(
+    interview_id: int,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    返回访谈基础信息与可编辑的细节字段。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    return _build_interview_detail_response(interview)
+
+
+@router.patch("/{interview_id}/detail", response_model=Dict[str, Any])
+def update_interview_detail(
+    interview_id: int,
+    payload: InterviewDetailUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    更新访谈细节字段，并按当前规则重算访谈名称。
+    """
+    interview = _get_owned_interview_or_404(interview_id, current_user_id)
+    project_id = int(interview.get("parse_project_id") or 0)
+    project_row = fetch_project_by_id(project_id, current_user_id)
+    if not project_row:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    legacy_values = {
+        "doctor_level": payload.doctor_level,
+        "doctor_title": payload.doctor_title,
+        "city": payload.city if payload.city and str(payload.city).strip() else payload.hospital_city,
+        "hospital": payload.hospital,
+        "department": payload.department,
+        "hospital_decile": payload.hospital_decile,
+        "hospital_city": payload.hospital_city if payload.hospital_city and str(payload.hospital_city).strip() else payload.city,
+    }
+    normalized_detail = normalize_interview_detail_payload(payload.detail_json, legacy_values)
+
+    try:
+        upsert_interview_detail(interview_id, normalized_detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update interview detail failed: {e}")
+
+    updated_row = fetch_interview_by_id(interview_id, current_user_id)
+    if not updated_row:
+        raise HTTPException(status_code=404, detail="interview not found")
+
+    project_name = str(project_row.get("name") or f"project_{project_id}").strip() or f"project_{project_id}"
+    questionnaire_detail_fields = normalize_detail_schema_fields(
+        updated_row.get("questionnaire_role_detail_schema_json"),
+        updated_row.get("questionnaire_role_type") or updated_row.get("questionnaire_object_type"),
+    )
+    final_name = build_interview_display_name(
+        project_name,
+        normalized_detail,
+        interview_id,
+        questionnaire_detail_fields,
+    )
+    try:
+        update_interview_name(interview_id, final_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update interview name failed: {e}")
+
+    refreshed_row = fetch_interview_by_id(interview_id, current_user_id)
+    if not refreshed_row:
+        raise HTTPException(status_code=404, detail="interview not found")
+    return _build_interview_detail_response(refreshed_row)
+
+
+@router.patch("/{interview_id}/name", response_model=Dict[str, Any])
+def update_interview_display_name(
+    interview_id: int,
+    payload: InterviewNameUpdateRequest,
+    current_user_id: int = Depends(require_current_user_id),
+) -> Dict[str, Any]:
+    """
+    手动更新访谈名称。
+    """
+    _get_owned_interview_or_404(interview_id, current_user_id)
+    new_name = (payload.name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    try:
+        update_interview_name(interview_id, new_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update interview name failed: {e}")
+
+    refreshed_row = fetch_interview_by_id(interview_id, current_user_id)
+    if not refreshed_row:
+        raise HTTPException(status_code=404, detail="interview not found")
+    return _build_interview_detail_response(refreshed_row)
 
 
 @router.get("/{interview_id}/audio")
