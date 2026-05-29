@@ -100,10 +100,6 @@ def _build_answer_rich_text(answer_text: str, raw_runs: Any) -> Any:
         rich_text.append(TextBlock(InlineFont(**font_kwargs), text))
     if len(rich_text) == 0:
         return None
-    rendered_text = "".join(str(run.get("text") or "") for run in runs).strip()
-    if rendered_text and rendered_text != _clean_text(answer_text).strip():
-        # 兜底：避免 runs 和 answer 不一致时写出错误富文本。
-        return None
     return rich_text
 
 
