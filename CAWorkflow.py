@@ -402,7 +402,13 @@ def _build_ca_framework(
         for row in rows:
             interview_id = str(row["interview_id"])
             cells.setdefault(interview_id, {})
-            cells[interview_id][column_id] = {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            cells[interview_id][column_id] = {
+                "value": "",
+                "evidence": [],
+                "answer_runs": [],
+                "locked": False,
+                "source": "framework",
+            }
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
@@ -788,6 +794,7 @@ def _build_ca_framework_from_notes(
                 cells[interview_key][question_uid] = {
                     "value": "",
                     "evidence": [],
+                    "answer_runs": [],
                     "locked": False,
                     "source": "framework",
                     "numeric_value": None,
@@ -828,7 +835,13 @@ def _build_ca_framework_from_notes(
         "columns": columns,
         "cells": cells,
         "diff_row": {
-            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            str(item["interview_id"]): {
+                "value": "",
+                "evidence": [],
+                "answer_runs": [],
+                "locked": False,
+                "source": "framework",
+            }
             for item in interview_sources
             if int(item.get("interview_id") or 0) > 0
         },
@@ -1030,7 +1043,13 @@ def generate_ca_table_for_project(
         framework_payload["final_json"] = existing_final_json
         framework_payload["selected_interview_ids"] = [row["interview_id"] for row in framework_payload.get("rows", [])]
         framework_payload["diff_row"] = {
-            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            str(item["interview_id"]): {
+                "value": "",
+                "evidence": [],
+                "answer_runs": [],
+                "locked": False,
+                "source": "framework",
+            }
             for item in interview_sources
             if int(item.get("interview_id") or 0) > 0
         }
@@ -1136,7 +1155,13 @@ def generate_ca_table_for_project(
         framework_payload["final_json"] = existing_final_json
         framework_payload["selected_interview_ids"] = [row["interview_id"] for row in framework_payload.get("rows", [])]
         framework_payload["diff_row"] = {
-            str(item["interview_id"]): {"value": "", "evidence": [], "locked": False, "source": "framework"}
+            str(item["interview_id"]): {
+                "value": "",
+                "evidence": [],
+                "answer_runs": [],
+                "locked": False,
+                "source": "framework",
+            }
             for item in interview_sources
             if int(item.get("interview_id") or 0) > 0
         }
@@ -1375,14 +1400,17 @@ def generate_ca_table_for_project(
                             for item in (raw_value.get("evidence") or raw_value.get("sources") or raw_value.get("quotes") or [])
                             if str(item or "").strip()
                         ]
+                        next_answer_runs = raw_value.get("answer_runs") or raw_value.get("answerRuns") or []
                     else:
                         next_value = str(raw_value or "").strip()
                         next_evidence = []
+                        next_answer_runs = []
                     if not next_value:
                         next_value = "/"
                     cells[interview_key][column_id] = {
                         "value": next_value,
                         "evidence": next_evidence[:3] or current_evidence,
+                        "answer_runs": next_answer_runs if isinstance(next_answer_runs, list) else [],
                         "locked": bool(current_locked),
                         "source": "llm",
                     }

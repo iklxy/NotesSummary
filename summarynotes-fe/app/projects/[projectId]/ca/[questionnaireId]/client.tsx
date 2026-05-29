@@ -39,6 +39,7 @@ import {
 import type {
   Interview,
   InterviewDetailFieldDefinition,
+  ProjectCaAnswerRun,
   ProjectCaCell,
   ProjectCaColumn,
   ProjectCaInterviewItem,
@@ -86,6 +87,7 @@ type MatrixRow =
       summaryText: string;
       values: Record<string, string>;
       evidence: Record<string, string[]>;
+      answerRuns: Record<string, ProjectCaAnswerRun[]>;
       order: number;
       hidden: boolean;
       column: ProjectCaColumn;
@@ -98,6 +100,7 @@ type MatrixRow =
       label: string;
       values: Record<string, string>;
       evidence: Record<string, string[]>;
+      answerRuns: Record<string, ProjectCaAnswerRun[]>;
     };
 
 function cloneJson<T>(value: T): T {
@@ -156,11 +159,52 @@ function parseNumericValue(value: unknown): number | null {
   return null;
 }
 
+function toBoolish(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    return ["1", "true", "yes", "y", "on", "highlight"].includes(text);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value !== 0;
+  }
+  return false;
+}
+
+function normalizeAnswerRuns(value: unknown): ProjectCaAnswerRun[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        const text = item.trim();
+        return text ? { text, highlight: false } : null;
+      }
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const raw = item as Record<string, unknown>;
+      const text = String(raw.text ?? raw.value ?? raw.answer ?? "").trim();
+      if (!text) {
+        return null;
+      }
+      return {
+        text,
+        highlight: toBoolish(raw.highlight ?? raw.emphasis),
+      };
+    })
+    .filter(Boolean) as ProjectCaAnswerRun[];
+}
+
 function normalizeCellPayload(value: ProjectCaCell | string | null | undefined): ProjectCaCell {
   if (typeof value === "string") {
     return {
       value: value.trim() || "/",
       evidence: [],
+      answer_runs: [],
       locked: false,
       source: "framework",
       numeric_value: null,
@@ -170,6 +214,7 @@ function normalizeCellPayload(value: ProjectCaCell | string | null | undefined):
     return {
       value: "/",
       evidence: [],
+      answer_runs: [],
       locked: false,
       source: "framework",
       numeric_value: null,
@@ -181,9 +226,12 @@ function normalizeCellPayload(value: ProjectCaCell | string | null | undefined):
     Array.isArray(rawEvidence)
       ? rawEvidence.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 3)
       : [];
+  const answerRuns = normalizeAnswerRuns(rawValue.answer_runs ?? rawValue.answerRuns);
+  const answer = String(rawValue.value ?? rawValue.answer ?? rawValue.text ?? "").trim() || "/";
   return {
-    value: String(rawValue.value ?? rawValue.answer ?? rawValue.text ?? "").trim() || "/",
+    value: answerRuns.length > 0 && answer === "/" ? answerRuns.map((item) => item.text).join("").trim() || "/" : answer,
     evidence,
+    answer_runs: answerRuns,
     locked: Boolean(rawValue.locked),
     source: String(rawValue.source ?? "framework"),
     numeric_value: parseNumericValue(rawValue.numeric_value ?? rawValue.numericValue),
@@ -252,6 +300,14 @@ function getCellEvidence(
   return getCellPayload(cells, interviewId, questionUid).evidence ?? [];
 }
 
+function getCellAnswerRuns(
+  cells: ProjectCaJson["cells"],
+  interviewId: number,
+  questionUid: string,
+): ProjectCaAnswerRun[] {
+  return getCellPayload(cells, interviewId, questionUid).answer_runs ?? [];
+}
+
 function getDiffValue(
   diffRow: ProjectCaJson["diff_row"],
   interviewId: number,
@@ -268,6 +324,15 @@ function getDiffEvidence(
   const cell = diffRow?.[String(interviewId)];
   const payload = normalizeCellPayload(cell);
   return payload.evidence ?? [];
+}
+
+function getDiffAnswerRuns(
+  diffRow: ProjectCaJson["diff_row"],
+  interviewId: number,
+): ProjectCaAnswerRun[] {
+  const cell = diffRow?.[String(interviewId)];
+  const payload = normalizeCellPayload(cell);
+  return payload.answer_runs ?? [];
 }
 
 function getCellNumericValue(
@@ -861,6 +926,9 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
           evidence: Object.fromEntries(
             visibleInterviews.map((item) => [String(item.interview_id), getCellEvidence(activeSnapshot.cells, item.interview_id, questionUid)]),
           ),
+          answerRuns: Object.fromEntries(
+            visibleInterviews.map((item) => [String(item.interview_id), getCellAnswerRuns(activeSnapshot.cells, item.interview_id, questionUid)]),
+          ),
         });
       });
     });
@@ -874,6 +942,9 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       ),
       evidence: Object.fromEntries(
         visibleInterviews.map((item) => [String(item.interview_id), getDiffEvidence(activeSnapshot.diff_row, item.interview_id)]),
+      ),
+      answerRuns: Object.fromEntries(
+        visibleInterviews.map((item) => [String(item.interview_id), getDiffAnswerRuns(activeSnapshot.diff_row, item.interview_id)]),
       ),
     });
 
@@ -910,6 +981,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       rowCells[questionUid] = {
         value,
         evidence: [],
+        answer_runs: [],
         locked: true,
         source: "manual",
         numeric_value: null,
@@ -926,6 +998,7 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       diffRow[rowKey] = {
         value,
         evidence: [],
+        answer_runs: [],
         locked: true,
         source: "manual",
         numeric_value: null,
@@ -1512,17 +1585,33 @@ export default function CaQuestionnaireClient({ projectId, questionnaireId }: Pr
       }
       const value = row.values[String(interviewId)] || "/";
       const placeholder = row.kind === "diff" ? "自由补充问卷未提及的内容" : "填写该问题在此访谈下的回答";
+      const answerRuns = row.answerRuns[String(interviewId)] || [];
+      const showRuns = value && value !== "/" && answerRuns.length > 0;
       return (
-        <Input.TextArea
-          value={value}
-          onChange={(event) =>
-            row.kind === "diff"
-              ? updateDiffCell(interviewId, event.target.value)
-              : updateCell(row.questionUid, interviewId, event.target.value)
-          }
-          autoSize={{ minRows: row.kind === "diff" ? 2 : 3, maxRows: row.kind === "diff" ? 6 : 8 }}
-          placeholder={placeholder}
-        />
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          {showRuns ? (
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2 text-sm leading-6 text-slate-700">
+              {answerRuns.map((run, index) => (
+                <span
+                  key={`${row.key}-${interviewId}-run-${index}`}
+                  className={run.highlight ? "rounded bg-emerald-200/80 px-0.5 font-semibold text-emerald-900" : ""}
+                >
+                  {run.text}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <Input.TextArea
+            value={value}
+            onChange={(event) =>
+              row.kind === "diff"
+                ? updateDiffCell(interviewId, event.target.value)
+                : updateCell(row.questionUid, interviewId, event.target.value)
+            }
+            autoSize={{ minRows: row.kind === "diff" ? 2 : 3, maxRows: row.kind === "diff" ? 6 : 8 }}
+            placeholder={placeholder}
+          />
+        </Space>
       );
     };
 

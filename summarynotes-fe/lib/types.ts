@@ -635,10 +635,16 @@ export interface ProjectCaColumn {
 export interface ProjectCaCell {
   value: string;
   answer?: string | null;
+  answer_runs?: ProjectCaAnswerRun[] | null;
   evidence?: string[] | null;
   locked?: boolean | null;
   source?: string | null;
   numeric_value?: number | null;
+}
+
+export interface ProjectCaAnswerRun {
+  text: string;
+  highlight?: boolean | null;
 }
 
 export interface ProjectCaRow {

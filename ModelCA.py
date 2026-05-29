@@ -142,6 +142,44 @@ def _normalize_ca_evidence(raw_evidence: Any) -> List[str]:
     return evidence[:3]
 
 
+def _to_boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        return text in {"1", "true", "yes", "y", "on", "highlight"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _normalize_ca_answer_runs(raw_runs: Any) -> List[Dict[str, Any]]:
+    """
+    归一化答案高亮片段。
+    """
+    if not isinstance(raw_runs, list):
+        return []
+    runs: List[Dict[str, Any]] = []
+    for item in raw_runs:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                runs.append({"text": text, "highlight": False})
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("value") or item.get("answer") or "").strip()
+        if not text:
+            continue
+        runs.append(
+            {
+                "text": text,
+                "highlight": _to_boolish(item.get("highlight") if item.get("highlight") is not None else item.get("emphasis")),
+            }
+        )
+    return runs
+
+
 def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
     """
     归一化单个 CA 单元格。
@@ -149,6 +187,9 @@ def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
     if isinstance(raw_cell, dict):
         answer = str(raw_cell.get("answer") or raw_cell.get("value") or raw_cell.get("text") or "").strip()
         evidence = _normalize_ca_evidence(raw_cell.get("evidence") or raw_cell.get("sources") or raw_cell.get("quotes"))
+        answer_runs = _normalize_ca_answer_runs(raw_cell.get("answer_runs") or raw_cell.get("answerRuns"))
+        if not answer and answer_runs:
+            answer = "".join(str(item.get("text") or "") for item in answer_runs).strip()
         locked = bool(raw_cell.get("locked"))
         source = str(raw_cell.get("source") or "framework")
         numeric_value_raw = raw_cell.get("numeric_value")
@@ -167,6 +208,7 @@ def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
         return {
             "value": answer or "/",
             "evidence": evidence,
+            "answer_runs": answer_runs,
             "locked": locked,
             "source": source,
             "numeric_value": numeric_value,
@@ -175,6 +217,7 @@ def _normalize_ca_cell(raw_cell: Any) -> Dict[str, Any]:
     return {
         "value": text or "/",
         "evidence": [],
+        "answer_runs": [],
         "locked": False,
         "source": "framework",
         "numeric_value": None,
@@ -399,12 +442,11 @@ def generate_ca_dimensions(
         f"{notes_block}\n\n"
         "要求：\n"
         "1. 维度必须稳定、可跨访谈比较，不要依赖某一位医生的个体化表述。\n"
-        "2. 维度数量控制在 3 到 6 个，每个维度下设置 2 到 4 个小点。\n"
-        "3. 维度标题要短、明确、可直接作为表格行标题。\n"
-        "4. 小点标题要具体，能体现比较维度。\n"
-        "5. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
-        "6. 所有 summary 字段必须是自然语言正文，不要输出 JSON 对象或字段名。\n"
-        "7. 如果某个维度不适合用于跨访谈对比，不要输出。\n"
+        "2. 维度标题要短、明确、可直接作为表格行标题。\n"
+        "3. 小点标题要具体，能体现比较维度。\n"
+        "4. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "5. 所有 summary 字段必须是自然语言正文，不要输出 JSON 对象或字段名。\n"
+        "6. 如果某个维度不适合用于跨访谈对比，不要输出。\n"
         "JSON 结构参考如下：\n"
         "{\n"
         '  "dimensions": [\n'
@@ -599,6 +641,7 @@ def generate_ca_cells_for_question(
         "要求：\n"
         "1. 只基于对应访谈的片段总结，不要跨访谈串用信息。\n"
         "2. 答案要尽量简短，直击关键点，优先 1 句，必要时 2 句，避免冗长解释。\n"
+        "   - 如果可以自然拆成几个短语，请优先用短语级别的 bullet 或分段，不要合成很长的复合句。\n"
         "3. 如果问题类型是 quantitative，答案必须极简，只输出数字结论，不要写解释性完整句。\n"
         "   - 优先保留百分比、人数、例数、均值、中位数、范围等明确数值。\n"
         "   - answer 使用 bullet points 风格的短句；每个 bullet 只表达一个核心数据。\n"
@@ -618,6 +661,11 @@ def generate_ca_cells_for_question(
         "     问题：初治CLL BTKi单药治疗占比\n"
         "     错误输出：\"1L CLL BTKi单药使用率为40%，其中非共价BTKi使用率为0%\"\n"
         "     正确输出：\"- 40%（其中非共价 0%）\"\n"
+        "   - 如果原文中包含可高亮的高频共享词或核心概念，请额外返回 answer_runs。\n"
+        "   - answer_runs 是数组，每一项是 {\"text\": \"片段文本\", \"highlight\": true/false}。\n"
+        "   - answer_runs 拼接后的文本必须与 answer 完全一致；不要改写 answer 中的字句顺序。\n"
+        "   - highlight=true 用于标记需要高亮的核心词组或高频共用词，其余片段标记为 false。\n"
+        "   - 如果没有合适的高亮片段，可以返回空数组或不返回 answer_runs。\n"
         "4. 如果问题类型是 qualitative，答案必须精简概括，避免冗长分析。\n"
         "   - 优先用一句话概括核心结论；如果一句话可以清楚表达，就不要拆分 bullet。\n"
         "   - 整体风格要求精简、只留核心、能够快速浏览、极简、无冗余。\n"
@@ -639,8 +687,9 @@ def generate_ca_cells_for_question(
         "5. 每个访谈必须额外给出 2 到 3 条原文引用，引用内容尽量直接摘自下方文本，不要自行改写。\n"
         "6. 不要输出任何定位信息，例如段落号、summary_id、页码等；只展示引用文本本身。\n"
         "7. 如果该访谈没有相关内容，引用数组写空数组，numeric_value 设为 null。\n"
-        "8. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
-        "9. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"evidence\": [\"...\", \"...\"], \"numeric_value\": 12.5}}} 这种映射。\n"
+        "8. 如果返回 answer_runs，则必须保持为数组结构，不要输出字符串。\n"
+        "9. 只输出 JSON，不要输出解释、不要输出 markdown。\n"
+        "10. 输出结构必须是 {\"cells\": {\"35\": {\"answer\": \"...\", \"answer_runs\": [{\"text\": \"...\", \"highlight\": true}], \"evidence\": [\"...\", \"...\"], \"numeric_value\": 12.5}}} 这种映射。\n"
     )
     raw_output = generate_fn(system_prompt, user_prompt)
     payload = parse_ca_column_cells_response(raw_output, interview_ids)

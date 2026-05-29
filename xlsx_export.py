@@ -18,6 +18,14 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
+try:
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+except Exception:  # pragma: no cover - optional runtime support
+    CellRichText = None  # type: ignore[assignment]
+    TextBlock = None  # type: ignore[assignment]
+    InlineFont = None  # type: ignore[assignment]
+
 from interview_detail_fields import INTERVIEW_DETAIL_FIELD_LABELS
 
 
@@ -33,6 +41,81 @@ def _clean_text(value: Any) -> str:
     if isinstance(value, str):
         return value.replace("\r\n", "\n").replace("\r", "\n")
     return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _to_boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        return text in {"1", "true", "yes", "y", "on", "highlight"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _normalize_answer_runs(raw_runs: Any) -> List[Dict[str, Any]]:
+    """
+    归一化答案高亮片段。
+    """
+    if not isinstance(raw_runs, list):
+        return []
+    runs: List[Dict[str, Any]] = []
+    for item in raw_runs:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                runs.append({"text": text, "highlight": False})
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("value") or item.get("answer") or "").strip()
+        if not text:
+            continue
+        runs.append(
+            {
+                "text": text,
+                "highlight": _to_boolish(item.get("highlight") if item.get("highlight") is not None else item.get("emphasis")),
+            }
+        )
+    return runs
+
+
+def _build_answer_rich_text(answer_text: str, raw_runs: Any) -> Any:
+    """
+    根据 answer_runs 构造 openpyxl 富文本对象。
+    """
+    runs = _normalize_answer_runs(raw_runs)
+    if not runs or CellRichText is None or TextBlock is None or InlineFont is None:
+        return None
+    rich_text = CellRichText()
+    for run in runs:
+        text = str(run.get("text") or "")
+        if not text:
+            continue
+        highlight = bool(run.get("highlight"))
+        font_kwargs: Dict[str, Any] = {"color": "FF111827"}
+        if highlight:
+            font_kwargs.update({"b": True, "color": "FF047857"})
+        rich_text.append(TextBlock(InlineFont(**font_kwargs), text))
+    if len(rich_text) == 0:
+        return None
+    rendered_text = "".join(str(run.get("text") or "") for run in runs).strip()
+    if rendered_text and rendered_text != _clean_text(answer_text).strip():
+        # 兜底：避免 runs 和 answer 不一致时写出错误富文本。
+        return None
+    return rich_text
+
+
+def _make_answer_cell_spec(answer_text: str, raw_runs: Any) -> Dict[str, Any]:
+    """
+    构造答案单元格，必要时附加富文本渲染对象。
+    """
+    cell_spec: Dict[str, Any] = {"value": answer_text, "style": 1}
+    rich_text = _build_answer_rich_text(answer_text, raw_runs)
+    if rich_text is not None:
+        cell_spec["rich_text"] = rich_text
+    return cell_spec
 
 
 def _normalize_ca_cell(value: Any) -> Dict[str, Any]:
@@ -52,6 +135,9 @@ def _normalize_ca_cell(value: Any) -> Dict[str, Any]:
             answer = value.get("answer")
         if answer is None:
             answer = value.get("text")
+        answer_runs = _normalize_answer_runs(value.get("answer_runs") or value.get("answerRuns"))
+        if (answer is None or str(answer).strip() == "") and answer_runs:
+            answer = "".join(str(item.get("text") or "") for item in answer_runs)
         numeric_value_raw = value.get("numeric_value")
         if numeric_value_raw is None:
             numeric_value_raw = value.get("numericValue")
@@ -68,9 +154,10 @@ def _normalize_ca_cell(value: Any) -> Dict[str, Any]:
         return {
             "value": _clean_text(answer).strip() or "/",
             "evidence": evidence[:3],
+            "answer_runs": answer_runs,
             "numeric_value": numeric_value,
         }
-    return {"value": _clean_text(value).strip() or "/", "evidence": [], "numeric_value": None}
+    return {"value": _clean_text(value).strip() or "/", "evidence": [], "answer_runs": [], "numeric_value": None}
 
 
 def _build_ca_sheet_rows_v1(ca_payload: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
@@ -329,13 +416,15 @@ def _build_ca_sheet_rows_v2(
             interview_id = str(interview.get("interview_id") or "").strip()
             answer_text = "/"
             evidence_text = ""
+            answer_runs = []
             if interview_id and question_uid and isinstance(cells, dict):
                 row_cells_by_interview = cells.get(interview_id)
                 if isinstance(row_cells_by_interview, dict):
                     payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
                     answer_text = payload["value"]
                     evidence_text = "\n".join(payload.get("evidence") or [])
-            row_cells.append({"value": answer_text, "style": 1})
+                    answer_runs = payload.get("answer_runs") or []
+            row_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
             if include_evidence_columns:
                 row_cells.append({"value": evidence_text, "style": 1})
         rows.append(row_cells)
@@ -346,11 +435,13 @@ def _build_ca_sheet_rows_v2(
         interview_id = str(interview.get("interview_id") or "").strip()
         answer_text = "/"
         evidence_text = ""
+        answer_runs = []
         if interview_id and isinstance(diff_row, dict):
             payload = _normalize_ca_cell(diff_row.get(interview_id))
             answer_text = payload["value"]
             evidence_text = "\n".join(payload.get("evidence") or [])
-        diff_cells.append({"value": answer_text, "style": 1})
+            answer_runs = payload.get("answer_runs") or []
+        diff_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
         if include_evidence_columns:
             diff_cells.append({"value": evidence_text, "style": 1})
     rows.append(diff_cells)
@@ -601,12 +692,14 @@ def _build_ca_sheet_rows_v3(
             interview_id = str(interview.get("interview_id") or "").strip()
             answer_text = "/"
             evidence_text = ""
+            answer_runs = []
             if interview_id and question_uid and isinstance(ca_payload.get("cells"), dict):
                 row_cells_by_interview = ca_payload.get("cells").get(interview_id)
                 if isinstance(row_cells_by_interview, dict):
                     payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
                     answer_text = payload["value"]
                     evidence_text = "\n".join(payload.get("evidence") or [])
+                    answer_runs = payload.get("answer_runs") or []
                     value_text = str(payload.get("value") or "").strip()
                     if value_text and value_text != "/":
                         valid_count += 1
@@ -617,7 +710,7 @@ def _build_ca_sheet_rows_v3(
                             parsed = _normalize_ca_cell({"value": value_text}).get("numeric_value")
                             if isinstance(parsed, (int, float)):
                                 numeric_values.append(float(parsed))
-                row_cells.append({"value": answer_text, "style": 1})
+                row_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
                 if include_evidence_columns:
                     row_cells.append({"value": evidence_text, "style": 1})
             if question_type == "quantitative" and numeric_values:
@@ -640,16 +733,18 @@ def _build_ca_sheet_rows_v3(
         interview_id = str(interview.get("interview_id") or "").strip()
         answer_text = "/"
         evidence_text = ""
+        answer_runs = []
         if interview_id and isinstance(diff_row, dict):
             payload = _normalize_ca_cell(diff_row.get(interview_id))
             answer_text = payload["value"]
             evidence_text = "\n".join(payload.get("evidence") or [])
+            answer_runs = payload.get("answer_runs") or []
             if answer_text and answer_text != "/":
                 diff_valid_count += 1
             numeric_value = payload.get("numeric_value")
             if isinstance(numeric_value, (int, float)):
                 diff_numeric_values.append(float(numeric_value))
-        diff_cells.append({"value": answer_text, "style": 1})
+        diff_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
         if include_evidence_columns:
             diff_cells.append({"value": evidence_text, "style": 1})
     if diff_numeric_values:
@@ -823,23 +918,25 @@ def _build_ca_sheet_rows_v4(
                 interview_id = str(interview.get("interview_id") or "").strip()
                 answer_text = "/"
                 evidence_text = ""
+                answer_runs = []
                 if interview_id and question_uid and isinstance(ca_payload.get("cells"), dict):
                     row_cells_by_interview = ca_payload.get("cells").get(interview_id)
                     if isinstance(row_cells_by_interview, dict):
                         payload = _normalize_ca_cell(row_cells_by_interview.get(question_uid))
                         answer_text = payload["value"]
                         evidence_text = "\n".join(payload.get("evidence") or [])
+                        answer_runs = payload.get("answer_runs") or []
                         value_text = str(payload.get("value") or "").strip()
                         if value_text and value_text != "/":
                             valid_count += 1
-                        numeric_value = payload.get("numeric_value")
-                        if isinstance(numeric_value, (int, float)):
-                            numeric_values.append(float(numeric_value))
-                        else:
-                            parsed = _normalize_ca_cell({"value": value_text}).get("numeric_value")
-                            if isinstance(parsed, (int, float)):
-                                numeric_values.append(float(parsed))
-                row_cells.append({"value": answer_text, "style": 1})
+                            numeric_value = payload.get("numeric_value")
+                            if isinstance(numeric_value, (int, float)):
+                                numeric_values.append(float(numeric_value))
+                            else:
+                                parsed = _normalize_ca_cell({"value": value_text}).get("numeric_value")
+                                if isinstance(parsed, (int, float)):
+                                    numeric_values.append(float(parsed))
+                row_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
                 if include_evidence_columns:
                     row_cells.append({"value": evidence_text, "style": 1})
             if question_type == "quantitative" and numeric_values:
@@ -864,16 +961,18 @@ def _build_ca_sheet_rows_v4(
         interview_id = str(interview.get("interview_id") or "").strip()
         answer_text = "/"
         evidence_text = ""
+        answer_runs = []
         if interview_id and isinstance(diff_row, dict):
             payload = _normalize_ca_cell(diff_row.get(interview_id))
             answer_text = payload["value"]
             evidence_text = "\n".join(payload.get("evidence") or [])
+            answer_runs = payload.get("answer_runs") or []
             if answer_text and answer_text != "/":
                 diff_valid_count += 1
             numeric_value = payload.get("numeric_value")
             if isinstance(numeric_value, (int, float)):
                 diff_numeric_values.append(float(numeric_value))
-        diff_cells.append({"value": answer_text, "style": 1})
+        diff_cells.append(_make_answer_cell_spec(answer_text, answer_runs))
         if include_evidence_columns:
             diff_cells.append({"value": evidence_text, "style": 1})
     if diff_numeric_values:
@@ -977,12 +1076,18 @@ def build_ca_table_xlsx_bytes(ca_payload: Dict[str, Any], include_evidence_colum
         for col_index in range(1, total_cols + 1):
             if col_index <= len(row):
                 cell_spec = row[col_index - 1]
-                value = cell_spec.get("value")
+                value = cell_spec.get("rich_text") if cell_spec.get("rich_text") is not None else cell_spec.get("value")
                 style = int(cell_spec.get("style") or 1)
             else:
                 value = ""
                 style = 1
-            cell = sheet.cell(row=row_index, column=col_index, value=_clean_text(value))
+            cell = sheet.cell(row=row_index, column=col_index)
+            if value is None:
+                cell.value = ""
+            elif isinstance(value, str):
+                cell.value = _clean_text(value)
+            else:
+                cell.value = value
             cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
             cell.border = border
             if style == 3:
