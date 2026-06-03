@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-- 后端引擎：Python 3.11、FastAPI、PyMySQL、Requests、python-dotenv
+- 后端引擎：Python 3.13、FastAPI、PyMySQL、Requests、python-dotenv
 - ASR：火山/豆包录音识别接口
 - 大模型：OpenAI 兼容接口、Anthropic 兼容接口
 - 向量检索：Ollama + Qdrant
