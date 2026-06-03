@@ -1,19 +1,19 @@
 # NotesSummary
 
-一个面向访谈音频处理的端到端项目。系统会完成音频上传、ASR 转录、纠错清洗、summary 落库、向量检索、Notes/Minutes/KBQ/Cards/CA 生成，以及前端展示、编辑与导出。
+一个面向访谈音频处理的端到端项目。系统会完成音频上传、ASR 转录、纠错清洗、trans 落库、向量检索、Notes/Minutes/KBQ/Cards/CA 生成，以及前端展示、编辑与导出。
 
 ## 文档入口
 
-- 交接说明：[项目交接文档.md](/home/lixinyang/NotesSummary/项目交接文档.md)
-- 部署说明：[项目部署文档.md](/home/lixinyang/NotesSummary/项目部署文档.md)
-- 数据库结构：[schema.sql](/home/lixinyang/NotesSummary/schema.sql)
-- 统一启动脚本：[start_all.sh](/home/lixinyang/NotesSummary/start_all.sh)
+- 交接说明：[项目交接文档.md](/项目交接文档.md)
+- 部署说明：[项目部署文档.md](/项目部署文档.md)
+- 数据库结构：[schema.sql](/schema.sql)
+- 统一启动脚本：[start_all.sh](/start_all.sh)
 
 ## 系统结构
 
 项目由三部分组成：
 
-1. Engine：根目录 Python FastAPI 服务，负责 ASR、纠错清洗、summary、RAG、Notes、Minutes、KBQ、Cards、CA 等核心工作流。
+1. Engine：根目录 Python FastAPI 服务，负责 ASR、纠错清洗、trans、RAG、Notes、Minutes、KBQ、Cards、CA 等核心工作流。
 2. BFF：`summarynotes-be/` 下的 FastAPI 服务，负责对前端提供业务 API、文件上传、权限和导出。
 3. FE：`summarynotes-fe/` 下的 Next.js 前端，负责项目、问卷、访谈、纪要、卡片、CA 的页面展示和编辑。
 
