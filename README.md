@@ -1,39 +1,102 @@
 # NotesSummary
 
-一个面向访谈音频的端到端处理项目。系统会完成音频上传、ASR 转录、纠错与再纠错、summary 落库、RAG 检索、Notes 生成，以及前端展示与编辑。
+一个面向访谈音频处理的端到端项目。系统会完成音频上传、ASR 转录、纠错清洗、summary 落库、向量检索、Notes/Minutes/KBQ/Cards/CA 生成，以及前端展示、编辑与导出。
+
+## 文档入口
+
+- 交接说明：[项目交接文档.md](/home/lixinyang/NotesSummary/项目交接文档.md)
+- 部署说明：[项目部署文档.md](/home/lixinyang/NotesSummary/项目部署文档.md)
+- 数据库结构：[schema.sql](/home/lixinyang/NotesSummary/schema.sql)
+- 统一启动脚本：[start_all.sh](/home/lixinyang/NotesSummary/start_all.sh)
+
+## 系统结构
+
+项目由三部分组成：
+
+1. Engine：根目录 Python FastAPI 服务，负责 ASR、纠错清洗、summary、RAG、Notes、Minutes、KBQ、Cards、CA 等核心工作流。
+2. BFF：`summarynotes-be/` 下的 FastAPI 服务，负责对前端提供业务 API、文件上传、权限和导出。
+3. FE：`summarynotes-fe/` 下的 Next.js 前端，负责项目、问卷、访谈、纪要、卡片、CA 的页面展示和编辑。
+
+默认端口：
+
+- Engine：`8000`
+- BFF：`9000`
+- FE：`3000`
 
 ## 技术栈
 
-- 后端引擎：Python 3.13、FastAPI、PyMySQL、Requests、python-dotenv
-- ASR：火山/豆包录音识别接口
-- 大模型：OpenAI 兼容接口、Anthropic 兼容接口
-- 向量检索：Ollama + Qdrant
+- 后端：Python 3.13、FastAPI、Uvicorn、PyMySQL
+- 前端：Next.js 16、React 19、TypeScript、Ant Design、React Query
 - 数据库：MySQL
-- 音频存储：字节系 TOS
-- 前端：Next.js、React、TypeScript、Ant Design
-- 环境管理：Conda
+- 向量库：Qdrant
+- Embedding：Ollama
+- ASR：火山/豆包录音识别
+- 对象存储：字节 TOS
+- 大模型：OpenAI 兼容接口、Anthropic 兼容接口
+- 环境管理：Conda + npm
 
-## 1. Conda 环境配置
+## 外部依赖
 
-项目根目录已经提供 `environment.yml`，可以直接创建运行环境。
+启动前需要先准备：
+
+- MySQL
+- Qdrant
+- Ollama，并拉起 embedding 模型
+- 可访问的 LLM API
+- 火山 ASR 账号与密钥
+- TOS 账号、Bucket 与密钥
+- Node.js + npm
+- Conda
+
+## 目录说明
+
+- `summarynotes-be/`：对外业务 API 服务
+- `summarynotes-fe/`：前端页面
+- 根目录 Python 文件：Engine 层，负责 ASR、纠错、summary、Notes、Minutes、KBQ、Cards、CA 等核心流程
+- `data/`：问卷、访谈备份、热词、导出中间文件等数据目录
+- `audio/`：本地音频备份目录
+- `runtime/`：日志、PID、运行时数据目录
+
+## 环境配置
+
+### Conda 环境
+
+项目当前环境名固定为 `vol`，定义文件为 [environment.yml](/home/lixinyang/NotesSummary/environment.yml)。
+
+创建环境：
 
 ```bash
 conda env create -f environment.yml
 conda activate vol
 ```
 
-如果环境已经存在，只想同步依赖，可以使用：
+同步已有环境：
 
 ```bash
 conda env update -n vol -f environment.yml --prune
 ```
 
-## 2. 环境变量设置
+### 前端依赖
 
-项目根目录下的 `.env` 文件用于配置运行时参数。  
-后端 engine 会从 `.env` 中读取配置，修改后需要重启对应服务或重新加载环境变量。
+建议使用 `nvm` 管理 Node.js，统一使用 Node 22 LTS。
 
-建议按照下面格式填写：
+```bash
+nvm install 22
+nvm use 22
+```
+
+安装前端依赖：
+
+```bash
+cd summarynotes-fe
+npm ci
+```
+
+## `.env` 配置
+
+Engine 和 BFF 都依赖项目根目录 `.env`。配置读取入口在 [config.py](/home/lixinyang/NotesSummary/config.py)。
+
+最少需要配置：
 
 ```env
 # 数据库
@@ -41,20 +104,29 @@ DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_password
-DB_NAME=notes_summary
+DB_NAME=summarynotes
 
-# 大模型
+# 通用大模型
 LLM_PROVIDER=openai
 LLM_API_KEY=your_llm_api_key
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL_NAME=deepseek-chat
+LLM_BASE_URL=https://your-llm-endpoint
+LLM_MODEL_NAME=your_model_name
 
-# Embedding / Ollama
+# Transcript / 转录纠错模型
+TRANSCRIPT_LLM_PROVIDER=openai
+TRANSCRIPT_LLM_API_KEY=your_transcript_llm_api_key
+TRANSCRIPT_LLM_BASE_URL=https://your-transcript-llm-endpoint
+TRANSCRIPT_LLM_MODEL_NAME=your_transcript_model
+
+# Notes / Minutes / KBQ / CA 模型
+NOTES_LLM_PROVIDER=openai
+NOTES_LLM_API_KEY=your_notes_llm_api_key
+NOTES_LLM_BASE_URL=https://your-notes-llm-endpoint
+NOTES_LLM_MODEL_NAME=your_notes_model
+
+# Ollama
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL_NAME=bge-m3:latest
-
-# 热词兜底文件
-TERM_HINTS_FILE=data/keywords.txt
 
 # ASR
 ASR_APP_KEY=your_asr_app_key
@@ -79,56 +151,167 @@ QDRANT_COLLECTION_SUMMARY=interview_summary
 
 # 内部服务
 INTERNAL_SERVICE_BASE=http://127.0.0.1:8000
+
+# 可选：统一启动脚本使用的 conda 环境名
+APP_CONDA_ENV=vol
 ```
 
 说明：
 
-- `OLLAMA_HOST` 需要填写完整地址，格式必须是 `http://IP:PORT`。
-- `TERM_HINTS_FILE` 是可选的全局兜底热词文件。
-- `INTERNAL_SERVICE_BASE` 是前端 BFF 调用内部 engine 的地址。
-- 如果你修改了 `.env`，需要重新启动相关进程才能生效。
+- `DB_NAME` 请使用 `summarynotes`；这与 [schema.sql](/home/lixinyang/NotesSummary/schema.sql) 保持一致。
+- `OLLAMA_HOST` 必须填写完整地址，例如 `http://127.0.0.1:11434`。
+- `APP_CONDA_ENV=vol` 能让统一启动脚本自动用 Conda 环境启动 Engine 和 BFF。
 
-## 3. 项目总述
+## 快速部署
 
-这个项目的核心目标，是把访谈音频处理成可以检索、可以编辑、可以生成 Notes 的结构化数据。
+完整部署流程请看 [项目部署文档.md](/home/lixinyang/NotesSummary/项目部署文档.md)。最短路径如下。
 
-整体流程如下：
+### 1. 数据库迁移
 
-1. 上传访谈音频
-2. 调用 ASR 得到转录结果
-3. 对 ASR 文本做主纠错
-4. 做再纠错兜底
-5. 将再纠错后的文本写入 summary 表
-6. 基于 summary 构建向量索引
-7. 按问题检索相关片段
-8. 生成 Notes
-9. 前端展示原文、summary、Notes，并支持编辑与导出
+```bash
+mysql -uroot -p < schema.sql
+```
 
-当前项目里，summary 表展示的是原始 ASR 经过纠错和再纠错后的最终文本，不再直接展示原文。
+或：
 
-## 4. 目录说明
+```bash
+mysql -uroot -p summarynotes < schema.sql
+```
 
-- `summarynotes-be/`：对外业务 API 服务
-- `summarynotes-fe/`：前端页面
-- 根目录 Python 文件：engine 层，负责 ASR、纠错、summary、Notes、RAG 等核心流程
-- `data/`：热词文件、兜底纠错文件等配置资源
-- `test/`：测试脚本与导出结果
+### 2. Docker 启动 Qdrant
 
-## 5. 启动说明
+```bash
+docker run -d \
+  --name qdrant \
+  -p 6333:6333 \
+  -p 6334:6334 \
+  -v $(pwd)/runtime/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
+```
 
-本仓库的启动方式由你当前的脚本和部署方式决定。通常需要：
+### 3. 本地部署 Ollama
 
-1. 启动 MySQL、Qdrant、Ollama
-2. 配置好根目录 `.env`
-3. 激活 Conda 环境
-4. 脚本启动
+安装并启动：
 
-脚本支持参数 start stop restart
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama serve
+```
 
-## 6.端口说明
+拉取模型：
 
-1.转录引擎服务默认 8000
-2.后端服务 9000
-3.前端服务 3000
+```bash
+ollama pull bge-m3:latest
+```
 
-如有端口占用情况，进入bash脚本进行改写
+## 启动方式
+
+### 推荐方式：统一脚本
+
+```bash
+conda activate vol
+bash start_all.sh start
+```
+
+脚本支持：
+
+```bash
+bash start_all.sh start
+bash start_all.sh stop
+bash start_all.sh restart
+bash start_all.sh status
+```
+
+### 手动启动
+
+Engine：
+
+```bash
+cd /home/lixinyang/NotesSummary
+uvicorn Api:app --host 0.0.0.0 --port 8000
+```
+
+BFF：
+
+```bash
+cd /home/lixinyang/NotesSummary/summarynotes-be
+uvicorn main:app --host 0.0.0.0 --port 9000
+```
+
+FE：
+
+```bash
+cd /home/lixinyang/NotesSummary/summarynotes-fe
+npm run build
+npm run start -- --hostname 0.0.0.0 --port 3000
+```
+
+## 工作流概览
+
+### 项目级工作流
+
+1. 创建项目
+2. 上传项目指南文件
+3. BFF 后台触发项目指南学习
+4. 提取文本/OCR 兜底
+5. LLM 总结指南，回写项目背景与 guide 表
+6. 创建项目角色、问卷、Key BQ
+
+### 访谈级工作流
+
+1. 在项目下创建访谈并上传音频
+2. BFF 保存音频到本地 `audio/` 和 `data/` 备份目录
+3. BFF 调用 Engine 内部接口触发转录工作流
+4. Engine 上传音频到 TOS 或复用已有对象
+5. Engine 调火山 ASR，支持异步轮询与断点恢复
+6. Engine 对 ASR 结果清洗和纠错
+7. 将清洗后的段落写入 `bh_project_interview_summary`
+8. 基于 summary 建立向量索引
+9. 按需生成 Notes
+10. 基于 summary 全文生成 Minutes
+11. 基于 Minutes 生成 Cards
+12. 基于 Key BQ + Minutes 生成 KBQ Notes
+13. 前端查看、编辑、导出 transcript / overall notes / cards / CA
+
+## 当前已完成能力
+
+- 用户登录、Cookie 登录态维护
+- 项目创建、编辑、删除、查询
+- 项目指南上传与自动学习总结
+- 问卷上传、docx 转 md/json、热词审核
+- 项目级 Key BQ 管理
+- 项目下创建访谈并上传音频
+- 转录工作流后台异步执行与断点恢复
+- summary 查询、逐条编辑、纠错学习记录
+- 问题管理与按题生成 Notes
+- Minutes 生成与手工保存
+- KBQ Notes 刷新
+- 全文 Cards 生成、增删改、审核保存
+- Few-shot 样本管理
+- Transcript / Overall Notes / CA 导出 Word、XLSX
+- CA 表生成、框架保存、结果导出
+
+## 重要注意事项
+
+1. `schema.sql` 的实际数据库名是 `summarynotes`，不要使用旧文档里的 `notes_summary`。
+2. 当前主工作流里，RAG 没有完全废弃，但主要服务于 Notes 子流程；Minutes、Cards、KBQ、CA 主要基于 summary/minutes 直接生成。
+3. 如果修改前端端口，需要同步检查 CORS 放行配置：
+   文件在 [summarynotes-be/middleware/cors.py](/home/lixinyang/NotesSummary/summarynotes-be/middleware/cors.py)
+4. 当前认证接口使用简单 Cookie 登录态，密码校验不是标准哈希校验；如果要上生产，需要补安全改造。
+5. `summarynotes-be/api/health.py` 虽然存在健康检查路由定义，但当前 `summarynotes-be/main.py` 没有注册该 router。
+
+## 日志与排障
+
+日志目录：
+
+- 系统日志：`runtime/logs/system.log`
+- 服务日志：`runtime/logs/engine.log` `runtime/logs/bff.log` `runtime/logs/fe.log`
+- 访谈日志：`runtime/logs/interviews/interview_{id}.log`
+- 项目日志：`runtime/logs/projects/project_{id}.log`
+
+启动失败时优先检查这些日志。
+
+## 进一步阅读
+
+- 交接说明：[项目交接文档.md](/home/lixinyang/NotesSummary/项目交接文档.md)
+- 部署说明：[项目部署文档.md](/home/lixinyang/NotesSummary/项目部署文档.md)
